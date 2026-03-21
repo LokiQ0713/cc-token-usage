@@ -30,19 +30,44 @@ cc-token-usage is not installed yet. Install with:
 
   npm install -g cc-token-usage
 
-Pre-built binaries are included for macOS (arm64/x64) and Linux (x64/arm64).
-No Rust toolchain required.
+Pre-built binaries for macOS (arm64/x64) and Linux (x64/arm64). No Rust required.
 ```
 
-If npm is unavailable or the user is on an unsupported platform, fall back to:
+If npm is unavailable, fall back to `cargo install cc-token-usage` (requires Rust toolchain).
 
+If the user is on an unsupported platform (e.g., Windows), they can compile from source:
+
+```bash
+git clone https://github.com/LokiQ0713/cc-token-usage.git
+cd cc-token-usage && cargo build --release
 ```
-cargo install cc-token-usage    # requires Rust toolchain
-```
+
+The CI/CD pipeline supports cross-compilation — contributors can add new platform targets to `.github/workflows/release.yml` by adding a matrix entry.
 
 Do not proceed until the tool is available.
 
-## Step 2: Match Query to Command
+## Step 2: Detect Claude Data Directory
+
+The tool defaults to `~/.claude/` but supports a `--claude-home` flag for any directory:
+
+```bash
+cc-token-usage --claude-home /path/to/.claude
+```
+
+**If the default path doesn't work** (no data found, non-standard install, or unfamiliar OS), probe the environment to find the right path:
+
+```bash
+# Check default location
+ls ~/.claude/projects/ 2>/dev/null | head -3
+
+# If empty, try common alternatives
+ls "$HOME/.claude/projects/" 2>/dev/null | head -3
+ls "$USERPROFILE/.claude/projects/" 2>/dev/null | head -3  # Windows-style
+```
+
+The tool expects a directory containing a `projects/` subdirectory with JSONL session files. Once you find it, pass it via `--claude-home`. The tool handles the rest — path parsing, project naming, and data loading are all platform-agnostic.
+
+## Step 3: Match Query to Command
 
 | User Intent | Command |
 |---|---|
@@ -61,7 +86,7 @@ When the user asks a vague question like "show my stats", default to `cc-token-u
 
 When the user wants comprehensive analysis, suggest `cc-token-usage --format html` which opens an interactive dashboard in the browser.
 
-## Step 3: Interpret Results
+## Step 4: Interpret Results
 
 After running the command, help the user understand the output:
 
@@ -95,10 +120,12 @@ The `--format html` output generates a self-contained HTML file with:
 **No session data found:**
 - Check if `~/.claude/projects/` exists and contains JSONL files
 - The user may need to run Claude Code at least once first
+- Try `--claude-home` with detected path if default doesn't work
 
 **Stale pricing warning:**
 - Built-in pricing is from 2026-03-21. If >90 days old, tool warns automatically
 - User can override prices via `~/.config/cc-token-usage/config.toml`
 
-**Custom Claude home:**
-- If Claude data is in a non-standard location: `cc-token-usage --claude-home /path/to/claude`
+**Custom data location:**
+- Non-standard Claude install: `cc-token-usage --claude-home /path/to/.claude`
+- The tool only needs the `.claude` directory — it will find `projects/` inside it automatically
