@@ -46,6 +46,16 @@ cd cc-token-usage
 cargo install --path .
 ```
 
+### 作为 Claude Code Skill 安装
+
+安装为 Skill 后，跟 Claude 说"我用了多少 token"它就会自动帮你分析：
+
+```bash
+npx skills add LokiQ0713/cc-token-usage -g -y
+```
+
+安装后直接问 Claude 关于 token 用量的问题即可，无需手动执行命令。
+
 ## 使用
 
 直接跑 —— 终端输出汇总，自动生成 HTML 仪表盘并打开浏览器：

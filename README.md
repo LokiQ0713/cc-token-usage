@@ -46,6 +46,16 @@ cd cc-token-usage
 cargo install --path .
 ```
 
+### As a Claude Code Skill
+
+Install as a skill so Claude can run it for you when you ask "how much have I spent?":
+
+```bash
+npx skills add LokiQ0713/cc-token-usage -g -y
+```
+
+After installing, just ask Claude about your token usage — it will invoke the skill automatically.
+
 ## Usage
 
 Just run it — prints summary to terminal, generates HTML dashboard, opens in browser:
