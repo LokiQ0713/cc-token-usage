@@ -26,10 +26,18 @@ which cc-token-usage 2>/dev/null && cc-token-usage --version || echo "NOT_INSTAL
 If `NOT_INSTALLED`, guide the user to install:
 
 ```
-cc-token-usage is not installed yet. Install with one of:
+cc-token-usage is not installed yet. Install with:
 
-  npm install -g cc-token-usage    # recommended
-  cargo install cc-token-usage     # alternative
+  npm install -g cc-token-usage
+
+Pre-built binaries are included for macOS (arm64/x64) and Linux (x64/arm64).
+No Rust toolchain required.
+```
+
+If npm is unavailable or the user is on an unsupported platform, fall back to:
+
+```
+cargo install cc-token-usage    # requires Rust toolchain
 ```
 
 Do not proceed until the tool is available.
