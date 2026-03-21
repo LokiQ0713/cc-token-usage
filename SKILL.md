@@ -1,87 +1,96 @@
 ---
 name: cc-token-usage
-description: Analyze Claude Code token usage, costs, and cache efficiency. Use when user asks about token spending, usage stats, how much they've used, cost analysis, cache performance, or wants a usage dashboard. Triggers on keywords like "token usage", "how much have I spent", "cost analysis", "cache hit rate", "usage report", "token stats".
+description: |
+  Analyze Claude Code token usage, costs, and cache efficiency from local session data.
+  Use when user asks about token spending, usage stats, how much they've used, cost analysis,
+  cache performance, subscription value, or wants a usage dashboard.
+  Trigger: "token usage", "how much have I spent", "cost analysis", "cache hit rate",
+  "usage report", "token stats", "show my usage", "how many tokens", "spending",
+  "subscription worth it", "cache savings", "which project costs most", "/cc-token-usage"
+user-invocable: true
+allowed-tools:
+  - Bash
+  - Read
 ---
 
 # Claude Code Token Usage Analyzer
 
-Analyze your Claude Code session token usage, costs, cache efficiency, and generate interactive HTML dashboards.
+Analyze Claude Code session token usage, costs, cache efficiency from local JSONL session files. Generates terminal summaries and interactive HTML dashboards.
 
-## Prerequisites
-
-The tool must be installed first. Check if it's available:
+## Step 1: Check Installation
 
 ```bash
-which cc-token-usage || echo "not installed"
+which cc-token-usage 2>/dev/null && cc-token-usage --version || echo "NOT_INSTALLED"
 ```
 
-If not installed, install via one of:
+If `NOT_INSTALLED`, guide the user to install:
 
-```bash
-# Via npm (recommended, includes auto-open browser)
-npm install -g cc-token-usage
+```
+cc-token-usage is not installed yet. Install with one of:
 
-# Via cargo
-cargo install cc-token-usage
+  npm install -g cc-token-usage    # recommended
+  cargo install cc-token-usage     # alternative
 ```
 
-## Commands
+Do not proceed until the tool is available.
 
-```bash
-# Overview summary (default) - shows total tokens, costs, cache savings, model breakdown
-cc-token-usage
+## Step 2: Match Query to Command
 
-# Interactive HTML dashboard (opens in browser)
-cc-token-usage --format html
+| User Intent | Command |
+|---|---|
+| General usage / "how much have I used?" | `cc-token-usage` |
+| Cost breakdown / "how much am I spending?" | `cc-token-usage` |
+| Visual dashboard / "show me a dashboard" | `cc-token-usage --format html` |
+| Project comparison / "which project uses most?" | `cc-token-usage project --top 10` |
+| Monthly trend / "show monthly breakdown" | `cc-token-usage trend --group-by month` |
+| Daily trend / "last 30 days" | `cc-token-usage trend --days 30` |
+| Latest session / "what happened last session?" | `cc-token-usage session --latest` |
+| Specific session | `cc-token-usage session <id>` |
+| All history trend | `cc-token-usage trend --days 0` |
+| Cache performance / "cache hit rate?" | `cc-token-usage` (cache savings in overview) |
 
-# Per-project breakdown
-cc-token-usage project --top 10
+When the user asks a vague question like "show my stats", default to `cc-token-usage` (overview mode).
 
-# Latest session details
-cc-token-usage session --latest
+When the user wants comprehensive analysis, suggest `cc-token-usage --format html` which opens an interactive dashboard in the browser.
 
-# Specific session by ID
-cc-token-usage session <session-id>
+## Step 3: Interpret Results
 
-# Monthly trend
-cc-token-usage trend --group-by month
+After running the command, help the user understand the output:
 
-# Daily trend (last 30 days)
-cc-token-usage trend --days 30
+**Key metrics to highlight:**
+- **Total token value**: API-equivalent cost at official Anthropic rates (not what user actually paid)
+- **Cache savings**: How much prompt caching saved vs. no-cache baseline. Higher is better — 90%+ cache read rate means excellent efficiency
+- **Cost by model**: Opus is 5-8x more expensive than Sonnet/Haiku per token
+- **Output vs context ratio**: High output ratio = Claude is writing a lot; high context ratio = large conversations or many files read
+- **Compaction events**: Context window resets — indicates conversations hitting the limit
 
-# All history trend
-cc-token-usage trend --days 0
-```
+**Cache TTL breakdown:**
+- **5-minute cache**: Short-lived, cheaper writes (1.25x base input)
+- **1-hour cache**: Longer-lived, more expensive writes (2x base input)
+- **Cache reads**: Very cheap (0.1x base input) — this is where savings come from
 
-## When to Use
+**Activity patterns:**
+- Heatmap shows when the user is most active (weekday x hour)
+- Can reveal work patterns, late-night coding sessions, etc.
 
-- **General usage questions**: "how much have I used?" / "show my token stats" → run `cc-token-usage`
-- **Cost analysis**: "how much am I spending?" / "what's the API equivalent cost?" → run `cc-token-usage`
-- **Visual dashboard**: "show me a dashboard" / "visualize my usage" → run `cc-token-usage --format html`
-- **Project comparison**: "which project uses the most tokens?" → run `cc-token-usage project`
-- **Trend analysis**: "show usage over time" / "monthly breakdown" → run `cc-token-usage trend --group-by month`
-- **Cache performance**: "how's my cache hit rate?" → run `cc-token-usage` (cache savings shown in overview)
-- **Session deep-dive**: "what happened in my last session?" → run `cc-token-usage session --latest`
-
-## Output
-
-The tool reads local JSONL session files from `~/.claude/projects/` and calculates:
-
-- **Token consumption** by model (input, output, cache read, cache write 5m/1h)
-- **API-equivalent costs** based on official Anthropic pricing
-- **Cache savings** (how much you saved via prompt caching)
-- **Activity heatmap** (weekday x hour usage patterns)
-- **Per-project and per-session breakdowns** with three-level drill-down
-- **Compaction detection** (context window resets)
-- **Monthly/daily trends**
-
-## HTML Dashboard Features
+## HTML Dashboard
 
 The `--format html` output generates a self-contained HTML file with:
 
-- Interactive Chart.js visualizations
-- Three tabs: Overview, Monthly Trends, Projects
-- Three-level drill-down: Project → Session → Turn (with user/assistant messages)
-- Sortable columns, cache hit rate progress bars
-- Chinese/English language toggle
-- Activity heatmap (canvas-rendered)
+- **Overview tab**: Total stats, model breakdown, cost pie chart, activity heatmap, cache savings
+- **Monthly tab**: Trend charts with month-over-month comparison
+- **Projects tab**: Three-level drill-down (Project → Session → Turn with user/assistant messages)
+- Sortable columns, cache hit rate progress bars, Chinese/English toggle
+
+## Error Handling
+
+**No session data found:**
+- Check if `~/.claude/projects/` exists and contains JSONL files
+- The user may need to run Claude Code at least once first
+
+**Stale pricing warning:**
+- Built-in pricing is from 2026-03-21. If >90 days old, tool warns automatically
+- User can override prices via `~/.config/cc-token-usage/config.toml`
+
+**Custom Claude home:**
+- If Claude data is in a non-standard location: `cc-token-usage --claude-home /path/to/claude`
