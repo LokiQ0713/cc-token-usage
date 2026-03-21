@@ -118,13 +118,15 @@ Claude Code Token Report
 
 ## 配置
 
-可选。创建 `~/.config/cc-token-usage/config.toml`：
+可选。创建 `~/.config/cc-token-usage/config.toml` 覆盖模型定价：
 
 ```toml
-[[subscription]]
-start_date = "2026-01-01"
-monthly_price_usd = 200.0
-plan = "max_20x"
+[pricing_override.claude-opus-4-6]
+base_input = 5.0
+cache_write_5m = 6.25
+cache_write_1h = 10.0
+cache_read = 0.50
+output = 25.0
 ```
 
 ## 技术栈

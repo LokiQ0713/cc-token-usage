@@ -118,13 +118,15 @@ Reads `~/.claude/projects/` directly. Parses every JSONL session file, including
 
 ## Configuration
 
-Optional. Create `~/.config/cc-token-usage/config.toml`:
+Optional. Create `~/.config/cc-token-usage/config.toml` to override model pricing:
 
 ```toml
-[[subscription]]
-start_date = "2026-01-01"
-monthly_price_usd = 200.0
-plan = "max_20x"
+[pricing_override.claude-opus-4-6]
+base_input = 5.0
+cache_write_5m = 6.25
+cache_write_1h = 10.0
+cache_read = 0.50
+output = 25.0
 ```
 
 ## Tech Stack
