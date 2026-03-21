@@ -1,65 +1,61 @@
 # cc-token-usage
 
-Analyze Claude Code session token usage, costs, and efficiency from local JSONL data.
+**Ever wonder how many tokens Claude has been munching through?** This tool digs into your local Claude Code session data and tells you exactly where every token went — no API calls, no cloud, just your local `.jsonl` files.
+
+**想知道 Claude 到底吃掉了你多少 token？** 这个工具直接分析本地 Claude Code 的 session 数据，告诉你每一个 token 的去向 —— 不调 API，不联网，纯本地分析。
 
 ![Overview Dashboard](assets/preview1.png)
 
-## Features
+## What You Get / 你能看到什么
 
-- **Multi-dimension analysis** — overview, by project, by session, by day/month
-- **Three-level drill-down** — Project → Session → Turn (with user/assistant message preview)
-- **Token metrics** — output tokens, context size, cache hit rate, cache savings
-- **Cost calculation** — official Anthropic API rates, 5m/1h cache TTL split
-- **HTML dashboard** — Chart.js visualizations, sortable tables, activity heatmap
-- **Chinese/English toggle** — built into the HTML report
-- **Compaction detection** — identifies context window resets
-- **Orphan agent attribution** — handles both old-style and new-style subagent files
+- **The big picture** — sessions, turns, tokens read/written, cache savings, API-equivalent cost
+  **全局概览** — 会话数、轮次、读写 token、缓存节省、API 等效费用
+- **Project drill-down** — which project is burning the most tokens? Click to see sessions, click again to see every single turn
+  **项目钻取** — 哪个项目最烧 token？点开看会话，再点开看每一轮对话
+- **Monthly trends** — daily cost chart, month-over-month comparison
+  **月度趋势** — 每日费用柱状图、按月汇总对比
+- **Cache analysis** — 90% of your "reads" are free thanks to caching. We'll show you exactly how much that saved
+  **缓存分析** — 90% 的"读取"因为缓存而免费。我们会告诉你这省了多少钱
+- **Message preview** — see what you asked and what Claude replied, turn by turn
+  **消息预览** — 逐轮查看你问了什么、Claude 回了什么
 
-## Screenshots
-
-### Monthly Trends
+### Monthly Trends / 月度趋势
 ![Monthly](assets/preview2.png)
 
-### Project Drill-Down
+### Project Drill-Down / 项目钻取
 ![Projects](assets/preview3.png)
 
-## Install
-
-### Via cargo (Rust)
+## Install / 安装
 
 ```bash
+# One-liner, no Rust needed / 一行搞定，不需要 Rust
+npx cc-token-usage
+
+# Or install the Rust binary / 或者安装 Rust 二进制
 cargo install --path .
 ```
 
-### Via npx (Node.js)
+## Usage / 使用
 
 ```bash
-npx cc-token-usage
-```
-
-## Usage
-
-```bash
-# Default: print summary + generate HTML report
+# Just run it. Summary + HTML dashboard, opens in browser
+# 直接跑。终端汇总 + HTML 仪表盘，自动打开浏览器
 cc-token-usage
 
-# Generate HTML dashboard and open in browser
+# HTML dashboard only / 只生成 HTML 仪表盘
 cc-token-usage --format html
 
-# By project
+# All projects ranked by cost / 按费用排名所有项目
 cc-token-usage project --top 0
 
-# Latest session details
+# What did the latest session look like? / 最近一次会话长什么样？
 cc-token-usage session --latest
 
-# Monthly trend
+# Monthly breakdown / 按月汇总
 cc-token-usage trend --group-by month
-
-# Daily trend (last 30 days)
-cc-token-usage trend --days 30
 ```
 
-### Example output
+### Example Output / 示例输出
 
 ```
 Claude Code Token Report
@@ -85,40 +81,32 @@ Claude Code Token Report
   ~/Desktop/claude/statusline/config           2    5603   $439.16
 ```
 
-## How it works
+## How It Works / 工作原理
 
-Reads `~/.claude/projects/` JSONL session files directly. No API calls, no network access — pure local data analysis.
+Reads `~/.claude/projects/` directly. Parses every JSONL session file, including subagent files (both old flat-style and new nested-style). Validates data, deduplicates, attributes orphan agents, detects context compactions.
 
-**Data sources:**
-- Main sessions: `<project>/<uuid>.jsonl`
-- Old-style agents: `<project>/agent-<id>.jsonl` (linked via `sessionId`)
-- New-style agents: `<project>/<uuid>/subagents/agent-<id>.jsonl`
+直接读取 `~/.claude/projects/`。解析所有 JSONL session 文件，包括子 agent 文件（新旧两种格式）。校验数据、去重、归属孤立 agent、检测上下文压缩。
 
-**Pricing data:** Anthropic official rates from [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+**Pricing:** Uses official Anthropic rates from [platform.claude.com](https://platform.claude.com/docs/en/about-claude/pricing). Distinguishes 5-minute vs 1-hour cache TTL for accurate cost calculation.
 
-## Configuration
+**定价：** 使用 [Anthropic 官方费率](https://platform.claude.com/docs/en/about-claude/pricing)。区分 5 分钟和 1 小时缓存 TTL，精确计算费用。
 
-Optional config file at `~/.config/cc-token-usage/config.toml`:
+## Configuration / 配置
+
+Optional. Create `~/.config/cc-token-usage/config.toml`:
+
+可选。创建 `~/.config/cc-token-usage/config.toml`：
 
 ```toml
-# Subscription price history
 [[subscription]]
 start_date = "2026-01-01"
 monthly_price_usd = 200.0
 plan = "max_20x"
-
-# Override model pricing (optional)
-# [pricing_override.claude-opus-4-6]
-# base_input = 5.0
-# cache_write_5m = 6.25
-# cache_write_1h = 10.0
-# cache_read = 0.50
-# output = 25.0
 ```
 
 ## Tech Stack
 
-Rust + serde + clap + chrono + comfy-table + Chart.js
+Rust (serde, clap, chrono, comfy-table) + Chart.js
 
 ## License
 

@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            npm-pkg: cc-token-usage-darwin-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            npm-pkg: cc-token-usage-darwin-x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            npm-pkg: cc-token-usage-linux-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/cc-token-usage dist/
+          chmod +x dist/cc-token-usage
+          tar czf cc-token-usage-${{ matrix.target }}.tar.gz -C dist cc-token-usage
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm-pkg }}
+          path: dist/cc-token-usage
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cc-token-usage-${{ matrix.target }}.tar.gz
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+
+          for pkg_dir in artifacts/cc-token-usage-*; do
+            PKG_NAME=$(basename "$pkg_dir")
+            echo "Publishing $PKG_NAME@$VERSION"
+
+            mkdir -p "/tmp/$PKG_NAME"
+            cp "$pkg_dir/cc-token-usage" "/tmp/$PKG_NAME/"
+            chmod +x "/tmp/$PKG_NAME/cc-token-usage"
+
+            cat > "/tmp/$PKG_NAME/package.json" << PKGJSON
+          {
+            "name": "$PKG_NAME",
+            "version": "$VERSION",
+            "description": "Platform binary for cc-token-usage ($PKG_NAME)",
+            "os": ["$(echo $PKG_NAME | grep -q darwin && echo darwin || echo linux)"],
+            "cpu": ["$(echo $PKG_NAME | grep -q arm64 && echo arm64 || echo x64)"],
+            "files": ["cc-token-usage"],
+            "license": "MIT"
+          }
+          PKGJSON
+
+            cd "/tmp/$PKG_NAME"
+            npm publish --access public || true
+            cd -
+          done
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          cd npm-package
+
+          # Update version
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$VERSION';
+            pkg.optionalDependencies = {
+              'cc-token-usage-darwin-arm64': '$VERSION',
+              'cc-token-usage-darwin-x64': '$VERSION',
+              'cc-token-usage-linux-x64': '$VERSION'
+            };
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
+
+          npm publish --access public
