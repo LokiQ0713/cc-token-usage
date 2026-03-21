@@ -7,6 +7,7 @@ use std::path::PathBuf;
 /// Top-level tagged union for each line in the JSONL session file.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum JournalEntry {
     #[serde(rename = "user")]
     User(UserMessage),

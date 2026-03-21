@@ -169,6 +169,12 @@ pub struct PricingCalculator {
     overrides: HashMap<String, ModelPrice>,
 }
 
+impl Default for PricingCalculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PricingCalculator {
     /// Create a new calculator initialised with built-in prices.
     pub fn new() -> Self {

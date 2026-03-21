@@ -55,9 +55,11 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
     let (main_files, agent_files): (Vec<_>, Vec<_>) =
         files.into_iter().partition(|f| !f.is_agent);
 
-    let mut global_quality = GlobalDataQuality::default();
-    global_quality.total_session_files = main_files.len();
-    global_quality.total_agent_files = agent_files.len();
+    let mut global_quality = GlobalDataQuality {
+        total_session_files: main_files.len(),
+        total_agent_files: agent_files.len(),
+        ..Default::default()
+    };
 
     // Step 3a: Process all main sessions
     let mut sessions: HashMap<String, SessionData> = HashMap::new();
@@ -210,9 +212,11 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
     let (main_files, agent_files): (Vec<_>, Vec<_>) =
         files.into_iter().partition(|f| !f.is_agent);
 
-    let mut global_quality = GlobalDataQuality::default();
-    global_quality.total_session_files = main_files.len();
-    global_quality.total_agent_files = agent_files.len();
+    let mut global_quality = GlobalDataQuality {
+        total_session_files: main_files.len(),
+        total_agent_files: agent_files.len(),
+        ..Default::default()
+    };
 
     // Step 3a: Process all main sessions
     let mut sessions: HashMap<String, SessionData> = HashMap::new();

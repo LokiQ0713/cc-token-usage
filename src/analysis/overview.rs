@@ -159,6 +159,7 @@ pub fn analyze_overview(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_turn(
     turn: &ValidatedTurn,
     calc: &PricingCalculator,
