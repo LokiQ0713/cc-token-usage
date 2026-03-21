@@ -1,5 +1,9 @@
 # cc-token-usage
 
+[![Release](https://github.com/LokiQ0713/cc-token-usage/actions/workflows/release.yml/badge.svg)](https://github.com/LokiQ0713/cc-token-usage/actions/workflows/release.yml)
+[![npm](https://img.shields.io/npm/v/cc-token-usage)](https://www.npmjs.com/package/cc-token-usage)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **想知道 Claude 到底吃掉了你多少 token？** 这个工具直接分析本地 Claude Code 的 session 数据，告诉你每一个 token 的去向 —— 不调 API，不联网，纯本地分析。
 
 [English](README.md)

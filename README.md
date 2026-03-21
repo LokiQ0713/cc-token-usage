@@ -1,5 +1,9 @@
 # cc-token-usage
 
+[![Release](https://github.com/LokiQ0713/cc-token-usage/actions/workflows/release.yml/badge.svg)](https://github.com/LokiQ0713/cc-token-usage/actions/workflows/release.yml)
+[![npm](https://img.shields.io/npm/v/cc-token-usage)](https://www.npmjs.com/package/cc-token-usage)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Ever wonder how many tokens Claude has been munching through?** This tool digs into your local Claude Code session data and tells you exactly where every token went — no API calls, no cloud, just your local `.jsonl` files.
 
 [中文文档](README_ZH.md)
