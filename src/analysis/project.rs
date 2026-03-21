@@ -73,24 +73,15 @@ pub fn analyze_projects(
 
 /// Convert internal project path to a human-readable display name.
 ///
-/// macOS/Linux: `-Users-testuser-cc-web3` -> `~/cc/web3`
-/// Windows:     `C--Users-JohnDoe-dev-myapp` -> `~/dev/myapp`
+/// `-Users-testuser-cc-web3` -> `~/cc/web3`
 pub fn project_display_name(name: &str) -> String {
-    // Windows pattern: `C--Users-<username>-<rest>` (drive letter prefix)
-    // Match: single letter followed by `--Users-`
-    if name.len() > 3 && name.as_bytes()[1] == b'-' && name[2..].starts_with("-Users-") {
-        let rest = &name[9..]; // skip "X--Users-"
-        if let Some(after_user) = rest.find('-') {
-            let path_part = &rest[after_user..];
-            let display = path_part.replace('-', "/");
-            return format!("~{display}");
-        }
-    }
-
-    // macOS/Linux pattern: `-Users-<username>-<rest>`
+    // Pattern: -Users-<username>-<rest>
+    // Try to find the "-Users-" prefix and convert
     if let Some(rest) = name.strip_prefix("-Users-") {
+        // Skip the username segment (everything up to the next '-')
         if let Some(after_user) = rest.find('-') {
             let path_part = &rest[after_user..];
+            // Replace '-' with '/'
             let display = path_part.replace('-', "/");
             return format!("~{display}");
         }
@@ -114,7 +105,6 @@ mod tests {
 
     #[test]
     fn test_project_display_name() {
-        // macOS/Linux paths
         assert_eq!(
             project_display_name("-Users-testuser-cc-web3"),
             "~/cc/web3"
@@ -125,19 +115,5 @@ mod tests {
         );
         assert_eq!(project_display_name("simple-project"), "simple-project");
         assert_eq!(project_display_name("-Users-bob"), "-Users-bob");
-
-        // Windows paths (drive letter prefix)
-        assert_eq!(
-            project_display_name("C--Users-JohnDoe-dev-myapp"),
-            "~/dev/myapp"
-        );
-        assert_eq!(
-            project_display_name("D--Users-Alice-Documents-projects-web"),
-            "~/Documents/projects/web"
-        );
-        assert_eq!(
-            project_display_name("C--Users-Bob"),
-            "C--Users-Bob" // no path after username
-        );
     }
 }

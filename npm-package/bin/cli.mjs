@@ -11,29 +11,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // ─── Find binary ─────────────────────────────────────────────────────────────
 
 function findBinary() {
-  const isWin = platform() === "win32";
-  const binName = isWin ? "cc-token-usage.exe" : "cc-token-usage";
-
   // 1. Check bundled binary
-  const bundled = join(__dirname, binName);
+  const bundled = join(__dirname, "cc-token-usage");
   if (existsSync(bundled)) return bundled;
 
   // 2. Check PATH
   try {
-    const which = isWin ? "where" : "which";
-    const target = isWin ? "cc-token-usage.exe" : "cc-token-usage";
-    const result = execSync(`${which} ${target}`, {
+    const which = platform() === "win32" ? "where" : "which";
+    const result = execSync(`${which} cc-token-usage`, {
       encoding: "utf-8",
     }).trim();
-    if (result) return result.split("\n")[0]; // `where` on Windows may return multiple
+    if (result) return result;
   } catch {}
 
   // 3. Check cargo bin
-  const cargoBin = join(homedir(), ".cargo", "bin", binName);
+  const cargoBin = join(homedir(), ".cargo", "bin", "cc-token-usage");
   if (existsSync(cargoBin)) return cargoBin;
 
   console.error("Error: cc-token-usage binary not found.");
-  console.error("Install it with: cargo install cc-token-usage");
+  console.error("Install it with: cargo install --path /path/to/cc-token-usage");
   process.exit(1);
 }
 

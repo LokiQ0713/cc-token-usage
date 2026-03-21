@@ -30,7 +30,7 @@ cc-token-usage is not installed yet. Install with:
 
   npm install -g cc-token-usage
 
-Pre-built binaries for macOS (arm64/x64), Linux (x64/arm64), and Windows (x64).
+Pre-built binaries are included for macOS (arm64/x64) and Linux (x64/arm64).
 No Rust toolchain required.
 ```
 
