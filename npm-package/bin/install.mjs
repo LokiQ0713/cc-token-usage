@@ -9,7 +9,9 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const binaryDest = join(__dirname, "cc-token-usage");
+const isWindows = process.platform === "win32";
+const binaryName = isWindows ? "cc-token-usage.exe" : "cc-token-usage";
+const binaryDest = join(__dirname, binaryName);
 
 // Already have it
 if (existsSync(binaryDest)) {
@@ -23,6 +25,8 @@ const pkgMap = {
   "darwin-arm64": "cc-token-usage-darwin-arm64",
   "darwin-x64": "cc-token-usage-darwin-x64",
   "linux-x64": "cc-token-usage-linux-x64",
+  "linux-arm64": "cc-token-usage-linux-arm64",
+  "win32-x64": "cc-token-usage-windows-x64",
 };
 const pkgName = pkgMap[`${platform}-${arch}`];
 
@@ -30,10 +34,12 @@ if (pkgName) {
   try {
     const require = createRequire(import.meta.url);
     const pkgDir = dirname(require.resolve(`${pkgName}/package.json`));
-    const src = join(pkgDir, "cc-token-usage");
+    const src = join(pkgDir, binaryName);
     if (existsSync(src)) {
       copyFileSync(src, binaryDest);
-      chmodSync(binaryDest, 0o755);
+      if (!isWindows) {
+        chmodSync(binaryDest, 0o755);
+      }
       console.log(`cc-token-usage: installed binary from ${pkgName}`);
       process.exit(0);
     }
