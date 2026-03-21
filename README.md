@@ -26,24 +26,20 @@
 
 ## Install
 
-Via npx (zero install):
+Recommended — just run it, no install needed, no permissions required:
 
 ```bash
 npx cc-token-usage
 ```
 
-Via cargo:
+Or install globally:
+
+```bash
+npm install -g cc-token-usage
+```
 
 ```bash
 cargo install cc-token-usage
-```
-
-From source:
-
-```bash
-git clone https://github.com/LokiQ0713/cc-token-usage.git
-cd cc-token-usage
-cargo install --path .
 ```
 
 ### As a Claude Code Skill

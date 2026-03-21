@@ -23,17 +23,13 @@ Analyze Claude Code session token usage, costs, cache efficiency from local JSON
 which cc-token-usage 2>/dev/null && cc-token-usage --version || echo "NOT_INSTALLED"
 ```
 
-If `NOT_INSTALLED`, guide the user to install:
+If `NOT_INSTALLED`, run it directly via npx (no install, no permissions needed):
 
-```
-cc-token-usage is not installed yet. Install with:
-
-  npm install -g cc-token-usage
-
-Pre-built binaries for macOS (arm64/x64) and Linux (x64/arm64). No Rust required.
+```bash
+npx cc-token-usage
 ```
 
-If npm is unavailable, fall back to `cargo install cc-token-usage` (requires Rust toolchain).
+If the user prefers a permanent install: `npm install -g cc-token-usage` or `cargo install cc-token-usage`.
 
 If the user is on an unsupported platform (e.g., Windows), they can compile from source:
 

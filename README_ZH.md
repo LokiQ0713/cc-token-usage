@@ -26,24 +26,20 @@
 
 ## 安装
 
-npx 一行搞定（不需要 Rust）：
+推荐 —— 直接跑，不用装，不要权限：
 
 ```bash
 npx cc-token-usage
 ```
 
-通过 cargo 安装：
+全局安装：
+
+```bash
+npm install -g cc-token-usage
+```
 
 ```bash
 cargo install cc-token-usage
-```
-
-从源码编译：
-
-```bash
-git clone https://github.com/LokiQ0713/cc-token-usage.git
-cd cc-token-usage
-cargo install --path .
 ```
 
 ### 作为 Claude Code Skill 安装
