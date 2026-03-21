@@ -1,0 +1,5 @@
+target/
+npm-package/node_modules/
+*.swp
+*.swo
+.DS_Store

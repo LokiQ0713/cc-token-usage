@@ -1,0 +1,23 @@
+# Claude Code Token Analyzer 配置文件
+# 复制到 ~/.config/cc-token-analyzer/config.toml
+
+# 订阅价格历史（支持多个时间段）
+# Pro: $20/月, Max 5x: $100/月, Max 20x: $200/月
+[[subscription]]
+start_date = "2026-01-01"
+monthly_price_usd = 100.0
+plan = "max_5x"
+
+[[subscription]]
+start_date = "2026-03-01"
+monthly_price_usd = 200.0
+plan = "max_20x"
+
+# 价格覆盖（可选，优先级高于内置价格）
+# 内置价格来源：platform.claude.com/docs/en/about-claude/pricing (2026-03-21)
+# [pricing_override.claude-opus-4-6]
+# base_input = 5.0
+# cache_write_5m = 6.25
+# cache_write_1h = 10.0
+# cache_read = 0.50
+# output = 25.0

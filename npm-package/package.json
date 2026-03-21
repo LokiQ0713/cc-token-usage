@@ -1,0 +1,27 @@
+{
+  "name": "cc-token-usage",
+  "version": "0.1.0",
+  "description": "Analyze Claude Code session token usage, costs, and efficiency",
+  "bin": {
+    "cc-token-usage": "./bin/cli.mjs"
+  },
+  "scripts": {
+    "postinstall": "node ./bin/install.mjs"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "token",
+    "analyzer",
+    "usage",
+    "cost"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
