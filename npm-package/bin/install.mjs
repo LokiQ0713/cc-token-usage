@@ -23,6 +23,7 @@ const pkgMap = {
   "darwin-arm64": "cc-token-usage-darwin-arm64",
   "darwin-x64": "cc-token-usage-darwin-x64",
   "linux-x64": "cc-token-usage-linux-x64",
+  "linux-arm64": "cc-token-usage-linux-arm64",
 };
 const pkgName = pkgMap[`${platform}-${arch}`];
 

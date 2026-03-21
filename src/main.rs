@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 
@@ -74,7 +72,7 @@ fn main() -> Result<()> {
 
                     let output_path = cli
                         .output
-                        .unwrap_or_else(|| PathBuf::from("/tmp/cc-token-report.html"));
+                        .unwrap_or_else(|| std::env::temp_dir().join("cc-token-report.html"));
                     std::fs::write(&output_path, &html)
                         .with_context(|| format!("failed to write {}", output_path.display()))?;
                     println!("Report written to {}", output_path.display());
@@ -97,7 +95,7 @@ fn main() -> Result<()> {
                     let html = render_full_report_html(&overview, &projects, &trend, &calc);
                     let output_path = cli
                         .output
-                        .unwrap_or_else(|| PathBuf::from("/tmp/cc-token-report.html"));
+                        .unwrap_or_else(|| std::env::temp_dir().join("cc-token-report.html"));
                     std::fs::write(&output_path, &html)
                         .with_context(|| format!("failed to write {}", output_path.display()))?;
                     println!("Report written to {}", output_path.display());
@@ -143,7 +141,7 @@ fn main() -> Result<()> {
                     let html = render_session_html(&result);
                     let output_path = cli
                         .output
-                        .unwrap_or_else(|| PathBuf::from("/tmp/cc-session-report.html"));
+                        .unwrap_or_else(|| std::env::temp_dir().join("cc-session-report.html"));
                     std::fs::write(&output_path, &html)
                         .with_context(|| format!("failed to write {}", output_path.display()))?;
                     println!("Report written to {}", output_path.display());
@@ -167,7 +165,7 @@ fn main() -> Result<()> {
                     let html = render_full_report_html(&overview, &projects, &trend, &calc);
                     let output_path = cli
                         .output
-                        .unwrap_or_else(|| PathBuf::from("/tmp/cc-token-report.html"));
+                        .unwrap_or_else(|| std::env::temp_dir().join("cc-token-report.html"));
                     std::fs::write(&output_path, &html)
                         .with_context(|| format!("failed to write {}", output_path.display()))?;
                     println!("Report written to {}", output_path.display());
