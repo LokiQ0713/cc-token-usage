@@ -173,11 +173,12 @@ gh run list --workflow=ci.yml --limit 1
   - **minor** (x.Y.0): new features, backwards compatible
   - **major** (X.0.0): breaking changes
 - Edit both `Cargo.toml` and `npm-package/package.json`
-- Run `cargo check` locally to validate Cargo.toml
+- Run `cargo check` locally to validate Cargo.toml (this also updates Cargo.lock)
 
 ### Step 3: Commit & Tag
+IMPORTANT: Always include Cargo.lock — it gets updated when Cargo.toml version changes.
 ```bash
-git add Cargo.toml npm-package/package.json
+git add Cargo.toml Cargo.lock npm-package/package.json
 git commit -m "release: vX.Y.Z"
 git tag vX.Y.Z
 ```
