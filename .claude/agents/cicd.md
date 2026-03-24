@@ -245,7 +245,7 @@ Duration: 8m 30s
 | musl link error | Missing musl-tools | No — CI config | Check musl-tools install, rerun |
 | macOS build failure | Xcode/runner issue | No — transient | `gh run rerun <id> --failed` |
 | Artifact upload error | Name collision | No — config | Check matrix.npm-pkg names |
-| Rust compile error | Code bug | Yes — fix code | Fix → commit → push, then re-tag |
+| Rust compile error | Code bug | Yes — fix code | Fix → commit → push, bump version → new tag |
 
 ### Publish Failures
 | Symptom | Root Cause | Auto-fix? | Recovery |
@@ -264,52 +264,59 @@ Duration: 8m 30s
 
 ## Recovery Playbooks
 
-### Playbook: Version Conflict (npm or crates.io)
-```bash
-# 1. Bump to next patch
-# Edit Cargo.toml and npm-package/package.json
-# 2. Delete old tag
-git tag -d vX.Y.Z
-git push origin :refs/tags/vX.Y.Z
-gh release delete vX.Y.Z -y 2>/dev/null || true
-# 3. New release
-git add Cargo.toml npm-package/package.json
-git commit -m "release: vX.Y.Z+1"
-git tag vX.Y.(Z+1)
-git push && git push --tags
-# 4. Resume tracking
-```
+### CARDINAL RULE: Never delete tags. Always use a new version number.
+Tags are immutable release records. If a release fails, fix the issue and release the next patch version.
 
 ### Playbook: Partial Release (some publish jobs failed)
 ```bash
-# Only rerun the failed jobs, not the entire pipeline
+# First try: rerun only failed jobs (works if the fix is in CI environment, not code)
 gh run rerun <run-id> --failed
 # Resume tracking from Phase 2
+```
+If rerun still fails (e.g. tag points to old code without the fix):
+```bash
+# Bump to next patch version
+# Edit Cargo.toml, npm-package/package.json
+# cargo check (updates Cargo.lock)
+git add Cargo.toml Cargo.lock npm-package/package.json
+git commit -m "release: vX.Y.Z+1"
+git tag vX.Y.(Z+1)
+git push && git push --tags
+# Track the new release pipeline
 ```
 
 ### Playbook: Build Failed, Code Fix Needed
 ```bash
 # 1. Fix the code locally
 # 2. Run local validation: cargo check && cargo test && cargo clippy -- -D warnings
-# 3. Delete failed tag
-git tag -d vX.Y.Z
-git push origin :refs/tags/vX.Y.Z
-gh release delete vX.Y.Z -y 2>/dev/null || true
-# 4. Commit fix, re-tag, push
-git add <fixed-files>
+# 3. Bump to next patch version (do NOT re-tag the failed version)
+# 4. Commit fix + version bump
+git add <fixed-files> Cargo.toml Cargo.lock npm-package/package.json
 git commit -m "fix: <description>"
-git tag vX.Y.Z
+git commit -m "release: vX.Y.Z+1"  # or squash into one commit
+git tag vX.Y.(Z+1)
 git push && git push --tags
-# 5. Resume tracking
+# 5. Track the new release pipeline
+```
+
+### Playbook: Version Conflict (npm or crates.io "already exists")
+```bash
+# Simply bump to next patch and release
+# Edit Cargo.toml, npm-package/package.json
+# cargo check
+git add Cargo.toml Cargo.lock npm-package/package.json
+git commit -m "release: vX.Y.Z+1"
+git tag vX.Y.(Z+1)
+git push && git push --tags
 ```
 
 ## Safety Rules
 
 1. NEVER force-push to master
-2. NEVER delete tags with successful releases unless explicitly asked
+2. NEVER delete tags — always bump to a new version number instead
 3. ALWAYS verify version sync between Cargo.toml and package.json before tagging
 4. ALWAYS check if tag already exists before creating one
-5. ALWAYS run local validation (cargo check + test + clippy) before release
-6. Ask user for confirmation before: pushing tags, deleting tags/releases, version bumps
-7. When a fix requires re-tagging, explain what happened and get approval
+5. ALWAYS include Cargo.lock when committing version bumps
+6. ALWAYS run local validation (cargo check + test + clippy) before release
+7. Ask user for confirmation before: pushing tags, version bumps
 8. NEVER leave a pipeline unmonitored — track to completion or explicit user dismissal
