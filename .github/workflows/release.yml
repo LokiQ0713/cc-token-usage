@@ -14,16 +14,16 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
-            npm-pkg: cc-token-usage-darwin-arm64
+            npm-dir: darwin-arm64
           - target: x86_64-apple-darwin
             os: macos-latest
-            npm-pkg: cc-token-usage-darwin-x64
+            npm-dir: darwin-x64
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            npm-pkg: cc-token-usage-linux-x64
+            npm-dir: linux-x64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            npm-pkg: cc-token-usage-linux-arm64
+            npm-dir: linux-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -52,21 +52,35 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package for GitHub Release
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/cc-token-usage dist/
-          chmod +x dist/cc-token-usage
-          tar czf cc-token-usage-${{ matrix.target }}.tar.gz -C dist cc-token-usage
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../cc-token-usage-${{ matrix.target }}.tar.gz cc-token-usage
+
+      - name: Prepare npm platform package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p npm/${{ matrix.npm-dir }}/bin
+          cp target/${{ matrix.target }}/release/cc-token-usage npm/${{ matrix.npm-dir }}/bin/
+          chmod 755 npm/${{ matrix.npm-dir }}/bin/cc-token-usage
+          node -e "
+            const pkg = require('./npm/${{ matrix.npm-dir }}/package.json');
+            pkg.version = '${VERSION}';
+            require('fs').writeFileSync(
+              './npm/${{ matrix.npm-dir }}/package.json',
+              JSON.stringify(pkg, null, 2) + '\n'
+            );
+          "
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.npm-pkg }}
-          path: dist/cc-token-usage
+          name: binary-${{ matrix.target }}
+          path: cc-token-usage-${{ matrix.target }}.tar.gz
 
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
         with:
-          files: cc-token-usage-${{ matrix.target }}.tar.gz
+          name: npm-${{ matrix.npm-dir }}
+          path: npm/${{ matrix.npm-dir }}/
 
   release:
     needs: build
@@ -75,7 +89,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: cc-token-usage-*
+          pattern: binary-*
           merge-multiple: true
 
       - name: Create GitHub Release
@@ -110,65 +124,54 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: npm-darwin-arm64
+          path: npm/darwin-arm64/
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-darwin-x64
+          path: npm/darwin-x64/
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-linux-x64
+          path: npm/linux-x64/
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-linux-arm64
+          path: npm/linux-arm64/
+
+      - name: Fix binary permissions
+        run: chmod +x npm/*/bin/cc-token-usage
 
       - name: Publish platform packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-
-          for pkg_dir in artifacts/cc-token-usage-*; do
-            PKG_NAME=$(basename "$pkg_dir")
-            echo "Publishing $PKG_NAME@$VERSION"
-
-            mkdir -p "/tmp/$PKG_NAME"
-            cp "$pkg_dir/cc-token-usage" "/tmp/$PKG_NAME/"
-            chmod +x "/tmp/$PKG_NAME/cc-token-usage"
-
-            # Determine os and cpu from package name
-            OS=$(echo $PKG_NAME | grep -q darwin && echo darwin || echo linux)
-            CPU=$(echo $PKG_NAME | grep -q arm64 && echo arm64 || echo x64)
-
-            cat > "/tmp/$PKG_NAME/package.json" << PKGJSON
-          {
-            "name": "$PKG_NAME",
-            "version": "$VERSION",
-            "description": "Platform binary for cc-token-usage ($PKG_NAME)",
-            "os": ["$OS"],
-            "cpu": ["$CPU"],
-            "files": ["cc-token-usage"],
-            "license": "MIT"
-          }
-          PKGJSON
-
-            cd "/tmp/$PKG_NAME"
+          for dir in npm/darwin-arm64 npm/darwin-x64 npm/linux-x64 npm/linux-arm64; do
+            echo "Publishing $(node -p "require('./$dir/package.json').name")..."
+            cd "$dir"
             npm publish --access public || true
-            cd -
+            cd "$GITHUB_WORKSPACE"
           done
 
       - name: Publish main package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${GITHUB_REF_NAME#v}
           cd npm-package
-
           node -e "
             const pkg = require('./package.json');
-            pkg.version = '$VERSION';
+            pkg.version = '${VERSION}';
             pkg.optionalDependencies = {
-              'cc-token-usage-darwin-arm64': '$VERSION',
-              'cc-token-usage-darwin-x64': '$VERSION',
-              'cc-token-usage-linux-x64': '$VERSION',
-              'cc-token-usage-linux-arm64': '$VERSION'
+              'cc-token-usage-darwin-arm64': '${VERSION}',
+              'cc-token-usage-darwin-x64': '${VERSION}',
+              'cc-token-usage-linux-x64': '${VERSION}',
+              'cc-token-usage-linux-arm64': '${VERSION}'
             };
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           "
-
           npm publish --access public
 
   publish-crate:

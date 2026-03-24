@@ -1,0 +1,16 @@
+{
+  "name": "cc-token-usage-linux-arm64",
+  "version": "0.0.0",
+  "description": "cc-token-usage binary for Linux ARM64",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "bin": {
+    "cc-token-usage": "bin/cc-token-usage"
+  },
+  "files": ["bin/"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LokiQ0713/cc-token-usage.git"
+  }
+}

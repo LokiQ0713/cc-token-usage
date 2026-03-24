@@ -1,0 +1,16 @@
+{
+  "name": "cc-token-usage-darwin-x64",
+  "version": "0.0.0",
+  "description": "cc-token-usage binary for macOS x64",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "bin": {
+    "cc-token-usage": "bin/cc-token-usage"
+  },
+  "files": ["bin/"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LokiQ0713/cc-token-usage.git"
+  }
+}

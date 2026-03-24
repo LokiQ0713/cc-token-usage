@@ -1,35 +1,59 @@
 #!/usr/bin/env node
 
-import { execSync, spawnSync } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { execFileSync, spawnSync } from "child_process";
+import { existsSync, mkdirSync, accessSync, chmodSync, constants } from "fs";
 import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-import { tmpdir, homedir, platform } from "os";
+import { createRequire } from "module";
+import { tmpdir, platform, arch, homedir } from "os";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
-// ─── Find binary ─────────────────────────────────────────────────────────────
+// ─── Resolve platform binary (Biome bin pattern) ────────────────────────────
+
+const PLATFORMS = {
+  "darwin-arm64": "cc-token-usage-darwin-arm64",
+  "darwin-x64": "cc-token-usage-darwin-x64",
+  "linux-x64": "cc-token-usage-linux-x64",
+  "linux-arm64": "cc-token-usage-linux-arm64",
+};
 
 function findBinary() {
-  // 1. Check bundled binary
-  const bundled = join(__dirname, "cc-token-usage");
-  if (existsSync(bundled)) return bundled;
+  const key = `${platform()}-${arch()}`;
+  const pkg = PLATFORMS[key];
 
-  // 2. Check PATH
+  // 1. Resolve from platform-specific optionalDependency
+  if (pkg) {
+    try {
+      const pkgDir = dirname(require.resolve(`${pkg}/package.json`));
+      const bin = join(pkgDir, "bin", "cc-token-usage");
+      if (existsSync(bin)) {
+        // Self-healing: ensure binary is executable
+        try {
+          accessSync(bin, constants.X_OK);
+        } catch {
+          try { chmodSync(bin, 0o755); } catch {}
+        }
+        return bin;
+      }
+    } catch {}
+  }
+
+  // 2. Fallback: check PATH
   try {
     const which = platform() === "win32" ? "where" : "which";
-    const result = execSync(`${which} cc-token-usage`, {
+    const result = execFileSync(which, ["cc-token-usage"], {
       encoding: "utf-8",
     }).trim();
     if (result) return result;
   } catch {}
 
-  // 3. Check cargo bin
+  // 3. Fallback: check cargo bin
   const cargoBin = join(homedir(), ".cargo", "bin", "cc-token-usage");
   if (existsSync(cargoBin)) return cargoBin;
 
   console.error("Error: cc-token-usage binary not found.");
-  console.error("Install it with: cargo install --path /path/to/cc-token-usage");
+  console.error(`Unsupported platform: ${platform()}-${arch()}`);
+  console.error("Install via cargo: cargo install cc-token-usage");
   process.exit(1);
 }
 
@@ -88,7 +112,7 @@ if (htmlResult.status === 0) {
         : "xdg-open";
 
   try {
-    execSync(`${openCmd} "${htmlFile}"`, { stdio: "ignore" });
+    execFileSync(openCmd, [htmlFile], { stdio: "ignore" });
   } catch {
     // Silent fail — user can open manually
   }
