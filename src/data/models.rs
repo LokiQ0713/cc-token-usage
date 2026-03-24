@@ -155,6 +155,7 @@ pub struct DataQuality {
     pub total_lines: usize,
     pub valid_turns: usize,
     pub skipped_synthetic: usize,
+    pub skipped_sidechain: usize,
     pub skipped_invalid: usize,
     pub skipped_parse_error: usize,
     pub duplicate_turns: usize,

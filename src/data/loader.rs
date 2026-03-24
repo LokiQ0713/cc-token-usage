@@ -74,7 +74,7 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
 
         global_quality.total_valid_turns += quality.valid_turns;
         global_quality.total_skipped +=
-            quality.skipped_synthetic + quality.skipped_invalid + quality.skipped_parse_error;
+            quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
         let session = SessionData {
             session_id: sf.session_id.clone(),
@@ -97,7 +97,7 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
 
         global_quality.total_valid_turns += quality.valid_turns;
         global_quality.total_skipped +=
-            quality.skipped_synthetic + quality.skipped_invalid + quality.skipped_parse_error;
+            quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
         match &sf.parent_session_id {
             Some(parent_id) => {
@@ -124,6 +124,7 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
                 parent.quality.total_lines += quality.total_lines;
                 parent.quality.valid_turns += quality.valid_turns;
                 parent.quality.skipped_synthetic += quality.skipped_synthetic;
+                parent.quality.skipped_sidechain += quality.skipped_sidechain;
                 parent.quality.skipped_invalid += quality.skipped_invalid;
                 parent.quality.skipped_parse_error += quality.skipped_parse_error;
                 parent.quality.duplicate_turns += quality.duplicate_turns;
@@ -150,6 +151,7 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
                 parent.quality.total_lines += quality.total_lines;
                 parent.quality.valid_turns += quality.valid_turns;
                 parent.quality.skipped_synthetic += quality.skipped_synthetic;
+                parent.quality.skipped_sidechain += quality.skipped_sidechain;
                 parent.quality.skipped_invalid += quality.skipped_invalid;
                 parent.quality.skipped_parse_error += quality.skipped_parse_error;
                 parent.quality.duplicate_turns += quality.duplicate_turns;
@@ -230,7 +232,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
 
         global_quality.total_valid_turns += quality.valid_turns;
         global_quality.total_skipped +=
-            quality.skipped_synthetic + quality.skipped_invalid + quality.skipped_parse_error;
+            quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
         let session = SessionData {
             session_id: sf.session_id.clone(),
@@ -253,7 +255,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
 
         global_quality.total_valid_turns += quality.valid_turns;
         global_quality.total_skipped +=
-            quality.skipped_synthetic + quality.skipped_invalid + quality.skipped_parse_error;
+            quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
         match &sf.parent_session_id {
             Some(parent_id) => {
@@ -278,6 +280,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
                 parent.quality.total_lines += quality.total_lines;
                 parent.quality.valid_turns += quality.valid_turns;
                 parent.quality.skipped_synthetic += quality.skipped_synthetic;
+                parent.quality.skipped_sidechain += quality.skipped_sidechain;
                 parent.quality.skipped_invalid += quality.skipped_invalid;
                 parent.quality.skipped_parse_error += quality.skipped_parse_error;
                 parent.quality.duplicate_turns += quality.duplicate_turns;
@@ -303,6 +306,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
                 parent.quality.total_lines += quality.total_lines;
                 parent.quality.valid_turns += quality.valid_turns;
                 parent.quality.skipped_synthetic += quality.skipped_synthetic;
+                parent.quality.skipped_sidechain += quality.skipped_sidechain;
                 parent.quality.skipped_invalid += quality.skipped_invalid;
                 parent.quality.skipped_parse_error += quality.skipped_parse_error;
                 parent.quality.duplicate_turns += quality.duplicate_turns;

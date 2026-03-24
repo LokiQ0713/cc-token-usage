@@ -85,13 +85,19 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             }
         };
 
-        // 3. Synthetic filter
+        // 3. Sidechain filter — skip abandoned conversation branches (e.g. retried turns)
+        if msg.is_sidechain == Some(true) {
+            quality.skipped_sidechain += 1;
+            continue;
+        }
+
+        // 4. Synthetic filter
         if api.model.as_deref() == Some("<synthetic>") {
             quality.skipped_synthetic += 1;
             continue;
         }
 
-        // 4. Model existence
+        // 5. Model existence
         let model = match api.model {
             Some(m) => m,
             None => {
@@ -100,7 +106,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             }
         };
 
-        // 5. Usage existence
+        // 6. Usage existence
         let usage = match api.usage {
             Some(u) => u,
             None => {
@@ -109,7 +115,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             }
         };
 
-        // 6. Non-zero usage validation
+        // 7. Non-zero usage validation
         let total_tokens = usage.input_tokens.unwrap_or(0)
             + usage.output_tokens.unwrap_or(0)
             + usage.cache_creation_input_tokens.unwrap_or(0)
@@ -119,7 +125,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             continue;
         }
 
-        // 7. Timestamp parsing
+        // 8. Timestamp parsing
         let timestamp_str = match &msg.timestamp {
             Some(ts) if !ts.is_empty() => ts.as_str(),
             _ => {
@@ -135,7 +141,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             }
         };
 
-        // 8. Deduplication by uuid:requestId composite key
+        // 9. Deduplication by uuid:requestId composite key
         let uuid = msg.uuid.unwrap_or_default();
         let dedup_key = format!("{}:{}", uuid, msg.request_id.as_deref().unwrap_or(""));
         if !seen_keys.insert(dedup_key) {
@@ -143,7 +149,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             continue;
         }
 
-        // 9. Extract content types, assistant text, and tool names
+        // 10. Extract content types, assistant text, and tool names
         let mut content_types = Vec::new();
         let mut assistant_text_parts = Vec::new();
         let mut tool_names = Vec::new();
@@ -182,7 +188,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             })
         };
 
-        // 10. Construct ValidatedTurn — attach user text from previous message
+        // 11. Construct ValidatedTurn — attach user text from previous message
         turns.push(ValidatedTurn {
             uuid,
             request_id: msg.request_id,
@@ -270,5 +276,16 @@ mod tests {
 
         assert_eq!(turns.len(), 1);
         assert_eq!(quality.skipped_parse_error, 1);
+    }
+
+    #[test]
+    fn filters_sidechain_turns() {
+        let sidechain = r#"{"type":"assistant","uuid":"u2","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"text","text":"abandoned"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r2"}"#;
+        let f = write_jsonl(&[sidechain, VALID_ASSISTANT]);
+        let (turns, quality) = parse_session_file(f.path(), false).unwrap();
+
+        assert_eq!(turns.len(), 1, "sidechain turn should be filtered out");
+        assert_eq!(quality.skipped_sidechain, 1);
+        assert_eq!(turns[0].uuid, "u1", "only main-chain turn should remain");
     }
 }
