@@ -86,7 +86,9 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
         };
 
         // 3. Sidechain filter — skip abandoned conversation branches (e.g. retried turns)
-        if msg.is_sidechain == Some(true) {
+        //    Agent files always have isSidechain=true for all entries, so skip this
+        //    filter when parsing agent files.
+        if !is_agent && msg.is_sidechain == Some(true) {
             quality.skipped_sidechain += 1;
             continue;
         }
