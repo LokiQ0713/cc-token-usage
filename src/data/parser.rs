@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -18,7 +18,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
 
     let mut quality = DataQuality::default();
     let mut turns = Vec::new();
-    let mut seen_keys = HashSet::new();
+    let mut request_id_index: HashMap<String, usize> = HashMap::new();
     let now = Utc::now();
     let mut last_user_text: Option<String> = None;
 
@@ -143,13 +143,12 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             }
         };
 
-        // 9. Deduplication by uuid:requestId composite key
+        // 9. Deduplication by requestId — streaming responses produce multiple
+        //    entries per API call with the same requestId but different uuids.
+        //    The last entry for each requestId contains the complete response,
+        //    so we overwrite earlier entries.
         let uuid = msg.uuid.unwrap_or_default();
-        let dedup_key = format!("{}:{}", uuid, msg.request_id.as_deref().unwrap_or(""));
-        if !seen_keys.insert(dedup_key) {
-            quality.duplicate_turns += 1;
-            continue;
-        }
+        let request_id_key = msg.request_id.clone().unwrap_or_default();
 
         // 10. Extract content types, assistant text, and tool names
         let mut content_types = Vec::new();
@@ -191,7 +190,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
         };
 
         // 11. Construct ValidatedTurn — attach user text from previous message
-        turns.push(ValidatedTurn {
+        let turn = ValidatedTurn {
             uuid,
             request_id: msg.request_id,
             timestamp,
@@ -204,7 +203,18 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             user_text: last_user_text.take(),
             assistant_text,
             tool_names,
-        });
+        };
+
+        // Overwrite earlier entry for the same requestId (streaming duplicates)
+        if !request_id_key.is_empty() {
+            if let Some(&idx) = request_id_index.get(&request_id_key) {
+                turns[idx] = turn;
+                quality.duplicate_turns += 1;
+                continue;
+            }
+            request_id_index.insert(request_id_key, turns.len());
+        }
+        turns.push(turn);
     }
 
     quality.valid_turns = turns.len();
