@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -34,6 +34,46 @@ where
         max = Some(max.map_or(*ts, |m: DateTime<Utc>| m.max(*ts)));
     }
     (min, max)
+}
+
+/// Build a set of requestIds from the main session turns for cross-file dedup.
+fn request_id_set(turns: &[super::models::ValidatedTurn]) -> HashSet<String> {
+    turns
+        .iter()
+        .filter_map(|t| t.request_id.as_ref())
+        .cloned()
+        .collect()
+}
+
+/// Merge agent turns into a parent session, deduplicating by requestId.
+///
+/// Claude Code writes agent responses to both the main session file and the
+/// agent file. We keep the main session's copy and skip duplicates from agents.
+fn merge_agent_turns(parent: &mut SessionData, agent_turns: Vec<super::models::ValidatedTurn>, quality: &DataQuality) {
+    let existing_rids = request_id_set(&parent.turns);
+    let before = parent.agent_turns.len();
+
+    for turn in agent_turns {
+        let dominated = turn
+            .request_id
+            .as_ref()
+            .is_some_and(|rid| existing_rids.contains(rid));
+        if !dominated {
+            parent.agent_turns.push(turn);
+        }
+    }
+
+    let added = parent.agent_turns.len() - before;
+    let deduped = quality.valid_turns.saturating_sub(added);
+
+    // Accumulate agent quality into parent's quality
+    parent.quality.total_lines += quality.total_lines;
+    parent.quality.valid_turns += added;
+    parent.quality.skipped_synthetic += quality.skipped_synthetic;
+    parent.quality.skipped_sidechain += quality.skipped_sidechain;
+    parent.quality.skipped_invalid += quality.skipped_invalid;
+    parent.quality.skipped_parse_error += quality.skipped_parse_error;
+    parent.quality.duplicate_turns += quality.duplicate_turns + deduped;
 }
 
 /// Load all session data from a Claude home directory.
@@ -99,9 +139,8 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
         global_quality.total_skipped +=
             quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
-        match &sf.parent_session_id {
+        let target_id = match &sf.parent_session_id {
             Some(parent_id) => {
-                // If parent session doesn't exist, create a virtual one
                 if !sessions.contains_key(parent_id) {
                     let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
                     sessions.insert(parent_id.clone(), SessionData {
@@ -116,24 +155,12 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
                     });
                     global_quality.orphan_agents += 1;
                 }
-
-                let parent = sessions.get_mut(parent_id).unwrap();
-                parent.agent_turns.extend(agent_turns);
-
-                // Accumulate agent quality into parent's quality
-                parent.quality.total_lines += quality.total_lines;
-                parent.quality.valid_turns += quality.valid_turns;
-                parent.quality.skipped_synthetic += quality.skipped_synthetic;
-                parent.quality.skipped_sidechain += quality.skipped_sidechain;
-                parent.quality.skipped_invalid += quality.skipped_invalid;
-                parent.quality.skipped_parse_error += quality.skipped_parse_error;
-                parent.quality.duplicate_turns += quality.duplicate_turns;
+                parent_id.clone()
             }
             None => {
-                // Agent has no parent_session_id at all — create virtual session using agent's own session_id
                 let virtual_id = sf.session_id.clone();
-                let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
                 if !sessions.contains_key(&virtual_id) {
+                    let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
                     sessions.insert(virtual_id.clone(), SessionData {
                         session_id: virtual_id.clone(),
                         project,
@@ -144,21 +171,14 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
                         version: None,
                         quality: DataQuality::default(),
                     });
+                    global_quality.orphan_agents += 1;
                 }
-                let parent = sessions.get_mut(&virtual_id).unwrap();
-                parent.agent_turns.extend(agent_turns);
-
-                parent.quality.total_lines += quality.total_lines;
-                parent.quality.valid_turns += quality.valid_turns;
-                parent.quality.skipped_synthetic += quality.skipped_synthetic;
-                parent.quality.skipped_sidechain += quality.skipped_sidechain;
-                parent.quality.skipped_invalid += quality.skipped_invalid;
-                parent.quality.skipped_parse_error += quality.skipped_parse_error;
-                parent.quality.duplicate_turns += quality.duplicate_turns;
-
-                global_quality.orphan_agents += 1;
+                virtual_id
             }
-        }
+        };
+
+        let parent = sessions.get_mut(&target_id).unwrap();
+        merge_agent_turns(parent, agent_turns, &quality);
     }
 
     // Step 4: Recompute time ranges to include agent turns, and collect results
@@ -257,7 +277,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
         global_quality.total_skipped +=
             quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
-        match &sf.parent_session_id {
+        let target_id = match &sf.parent_session_id {
             Some(parent_id) => {
                 if !sessions.contains_key(parent_id) {
                     let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
@@ -273,22 +293,12 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
                     });
                     global_quality.orphan_agents += 1;
                 }
-
-                let parent = sessions.get_mut(parent_id).unwrap();
-                parent.agent_turns.extend(agent_turns);
-
-                parent.quality.total_lines += quality.total_lines;
-                parent.quality.valid_turns += quality.valid_turns;
-                parent.quality.skipped_synthetic += quality.skipped_synthetic;
-                parent.quality.skipped_sidechain += quality.skipped_sidechain;
-                parent.quality.skipped_invalid += quality.skipped_invalid;
-                parent.quality.skipped_parse_error += quality.skipped_parse_error;
-                parent.quality.duplicate_turns += quality.duplicate_turns;
+                parent_id.clone()
             }
             None => {
                 let virtual_id = sf.session_id.clone();
-                let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
                 if !sessions.contains_key(&virtual_id) {
+                    let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
                     sessions.insert(virtual_id.clone(), SessionData {
                         session_id: virtual_id.clone(),
                         project,
@@ -299,21 +309,14 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
                         version: None,
                         quality: DataQuality::default(),
                     });
+                    global_quality.orphan_agents += 1;
                 }
-                let parent = sessions.get_mut(&virtual_id).unwrap();
-                parent.agent_turns.extend(agent_turns);
-
-                parent.quality.total_lines += quality.total_lines;
-                parent.quality.valid_turns += quality.valid_turns;
-                parent.quality.skipped_synthetic += quality.skipped_synthetic;
-                parent.quality.skipped_sidechain += quality.skipped_sidechain;
-                parent.quality.skipped_invalid += quality.skipped_invalid;
-                parent.quality.skipped_parse_error += quality.skipped_parse_error;
-                parent.quality.duplicate_turns += quality.duplicate_turns;
-
-                global_quality.orphan_agents += 1;
+                virtual_id
             }
-        }
+        };
+
+        let parent = sessions.get_mut(&target_id).unwrap();
+        merge_agent_turns(parent, agent_turns, &quality);
     }
 
     // Step 4: Recompute time ranges to include agent turns, and collect results
