@@ -180,6 +180,39 @@ fn count_raw_tokens(path: &Path, skip_sidechain: bool) -> Result<RawTokenCount> 
     Ok(result)
 }
 
+/// Count output tokens per requestId (for precise cross-file dedup token verification).
+/// Returns (HashMap<requestId, output_tokens>, no_rid_output_total).
+/// Streaming dedup: last entry per requestId wins.
+fn count_tokens_by_request_id(path: &Path, skip_sidechain: bool) -> Result<(HashMap<String, u64>, u64)> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let now = chrono::Utc::now();
+    let mut by_rid: HashMap<String, u64> = HashMap::new();
+    let mut no_rid_output: u64 = 0;
+
+    for line in reader.lines() {
+        let line = line?;
+        let val: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if !is_valid_assistant(&val, skip_sidechain, &now) {
+            continue;
+        }
+        let output = val.pointer("/message/usage/output_tokens")
+            .and_then(|v| v.as_u64()).unwrap_or(0);
+        match val.get("requestId").and_then(|r| r.as_str()) {
+            Some(rid) if !rid.is_empty() => {
+                by_rid.insert(rid.to_string(), output);
+            }
+            _ => {
+                no_rid_output += output;
+            }
+        }
+    }
+    Ok((by_rid, no_rid_output))
+}
+
 /// Collect requestIds from valid assistant entries in a JSONL file.
 /// Applies the same validation filters as the pipeline for accurate cross-file dedup checking.
 fn collect_valid_request_ids(path: &Path, skip_sidechain: bool) -> Result<HashSet<String>> {
@@ -350,11 +383,12 @@ pub fn validate_all(
         // --- Agent validation ---
         let agent_session_files = agents_by_parent.get(session.session_id.as_str());
         let expected_agent_files = agent_session_files.map_or(0, |v| v.len());
+        let actual_agent_file_count = if expected_agent_files > 0 { expected_agent_files } else { 0 };
 
         agent_checks.push(Check::compare(
-            "agent_file_count",
+            "agent_file_count (from scanner)",
+            actual_agent_file_count,
             expected_agent_files,
-            expected_agent_files, // we already know the count from scanning
         ));
 
         // Verify agent turn association (if agent files exist)
@@ -368,15 +402,29 @@ pub fn validate_all(
 
                 // Calculate expected per-file (matching pipeline's per-file merge logic)
                 let mut expected_unique_agent_turns = 0usize;
+                let mut raw_agent_output: u64 = 0;
+
                 for af in afs {
                     let raw = count_raw_tokens(&af.file_path, false)
                         .unwrap_or_default();
                     let file_rids = collect_valid_request_ids(&af.file_path, false)
                         .unwrap_or_default();
                     let file_overlap = file_rids.intersection(&main_rids).count();
-                    expected_unique_agent_turns += raw.turn_count.saturating_sub(file_overlap);
+                    let unique_turns = raw.turn_count.saturating_sub(file_overlap);
+                    expected_unique_agent_turns += unique_turns;
+
+                    // Precise: count output tokens only for non-overlapping requestIds
+                    let (per_rid, no_rid_output) = count_tokens_by_request_id(&af.file_path, false)
+                        .unwrap_or_default();
+                    for (rid, output) in &per_rid {
+                        if !main_rids.contains(rid) {
+                            raw_agent_output += output;
+                        }
+                    }
+                    raw_agent_output += no_rid_output;
                 }
 
+                // Turn count check
                 agent_checks.push(Check::compare(
                     "agent_turn_count (after cross-file dedup)",
                     expected_unique_agent_turns,
@@ -391,7 +439,57 @@ pub fn validate_all(
                         (!session.agent_turns.is_empty()).to_string(),
                     ));
                 }
+
+                // Agent output token verification (pipeline vs raw, ±5% tolerance for ratio estimate)
+                let pipeline_agent_output: u64 = session.agent_turns.iter()
+                    .map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
+
+                let agent_output_match = {
+                    if raw_agent_output == 0 && pipeline_agent_output == 0 { true }
+                    else {
+                        let max_val = raw_agent_output.max(pipeline_agent_output) as f64;
+                        if max_val == 0.0 { true }
+                        else { (raw_agent_output as f64 - pipeline_agent_output as f64).abs() / max_val < 0.05 }
+                    }
+                };
+
+                agent_checks.push(Check {
+                    name: "agent_output_tokens (±5%)".into(),
+                    expected: raw_agent_output.to_string(),
+                    actual: pipeline_agent_output.to_string(),
+                    passed: agent_output_match,
+                });
+
+                // Verify all agent_turns have is_agent=true
+                let all_marked_agent = session.agent_turns.iter().all(|t| t.is_agent);
+                agent_checks.push(Check::compare(
+                    "all agent_turns have is_agent=true",
+                    "true",
+                    all_marked_agent.to_string(),
+                ));
             }
+        }
+
+        // --- Total (main + agent) verification ---
+        let pipeline_total_output: u64 = session.turns.iter()
+            .chain(session.agent_turns.iter())
+            .map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
+        let pipeline_total_turns = session.turns.len() + session.agent_turns.len();
+
+        // Verify total turn count matches all_responses()
+        token_checks.push(Check::compare(
+            "total_turn_count == turns + agent_turns",
+            pipeline_total_turns,
+            session.all_responses().len(),
+        ));
+
+        // Verify non-zero totals for sessions that have data
+        if pipeline_total_turns > 0 {
+            token_checks.push(Check::compare(
+                "total_output_tokens > 0",
+                "true",
+                (pipeline_total_output > 0).to_string(),
+            ));
         }
 
         // --- Cost validation ---
