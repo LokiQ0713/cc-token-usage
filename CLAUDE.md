@@ -23,9 +23,9 @@ src/
 ├── data/
 │   ├── mod.rs
 │   ├── scanner.rs       # Discover JSONL session files
-│   ├── parser.rs        # Parse JSONL entries
-│   ├── models.rs        # Data types (Session, Turn, TokenUsage)
-│   └── loader.rs        # Orchestrate scanning + parsing
+│   ├── parser.rs        # 5-stage pipeline: parse → filter → validate → extract → dedup
+│   ├── models.rs        # Data types (JournalEntry, ValidatedTurn, SessionData, TokenUsage)
+│   └── loader.rs        # Load sessions + merge agent turns (cross-file dedup)
 ├── pricing/
 │   ├── mod.rs
 │   └── calculator.rs    # Token cost calculation with cache tiers
@@ -34,7 +34,8 @@ src/
 │   ├── overview.rs      # Aggregate statistics
 │   ├── project.rs       # Per-project breakdown
 │   ├── session.rs       # Per-session breakdown
-│   └── trend.rs         # Daily/monthly trend analysis
+│   ├── trend.rs         # Daily/monthly trend analysis
+│   └── validate.rs      # Independent token verification (dual-path cross-validation)
 └── output/
     ├── mod.rs
     ├── text.rs           # Terminal table output
@@ -56,6 +57,8 @@ cargo run -- --format html
 cargo run -- project --top 5
 cargo run -- session --latest
 cargo run -- trend --days 30
+cargo run -- validate              # Verify token accuracy (3890+ checks)
+cargo run -- validate --failures-only
 
 # Test
 cargo test
