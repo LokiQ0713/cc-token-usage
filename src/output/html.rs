@@ -109,23 +109,27 @@ body {
   max-width: 1400px; margin: 0 auto; padding: 20px;
 }
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
-.kpi-value { font-size: 1.8em; font-weight: 700; color: #58a6ff; }
+.card > h2:first-child { margin-top: 0; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }
+.kpi-value { font-size: 1.8em; font-weight: 700; color: #58a6ff; line-height: 1.3; }
 .kpi-label { font-size: 0.85em; color: #8b949e; margin-top: 4px; }
 nav { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
 nav button {
   padding: 8px 20px; border: 1px solid #30363d; border-radius: 6px;
   background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 14px;
+  transition: background 0.15s, border-color 0.15s;
 }
+nav button:hover { border-color: #58a6ff; }
 nav button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 h1 { color: #58a6ff; font-size: 1.5em; margin-bottom: 16px; }
-h2 { color: #c9d1d9; font-size: 1.2em; margin: 20px 0 12px; }
+h2 { color: #c9d1d9; font-size: 1.2em; margin: 16px 0 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
   padding: 8px 10px; text-align: left; border-bottom: 2px solid #30363d;
   color: #8b949e; cursor: pointer; user-select: none; white-space: nowrap;
+  position: sticky; top: 0; background: #161b22; z-index: 1;
 }
 th:hover { color: #58a6ff; }
 td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #21262d; }
@@ -142,8 +146,9 @@ tr:hover { background: #1c2128; }
 .chart-container { position: relative; height: 350px; margin: 16px 0; }
 .grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
 .footer { color: #484f58; font-size: 12px; margin-top: 30px; padding-top: 16px; border-top: 1px solid #21262d; }
-.header-row { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; }
+.header-row { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 .subtitle { color: #8b949e; font-size: 0.85em; }
 .expand-btn { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 14px; padding: 2px 6px; }
 .expand-btn:hover { color: #58a6ff; }
@@ -156,10 +161,12 @@ tr:hover { background: #1c2128; }
 .progress-text { display: inline-block; width: 45px; text-align: right; margin-left: 4px; font-size: 12px; }
 .stale-warning { color: #ff6b6b; margin-bottom: 8px; }
 .top-nav { display: flex; gap: 8px; margin-bottom: 12px; }
-.top-nav button { padding: 10px 24px; border: 2px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 15px; font-weight: 600; }
+.top-nav button { padding: 10px 24px; border: 2px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 15px; font-weight: 600; transition: background 0.15s, border-color 0.15s; }
+.top-nav button:hover { border-color: #58a6ff; }
 .top-nav button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
 .sub-nav { display: flex; gap: 8px; margin-bottom: 16px; }
-.sub-nav button { padding: 6px 16px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 13px; }
+.sub-nav button { padding: 6px 16px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 13px; transition: background 0.15s, border-color 0.15s; }
+.sub-nav button:hover { border-color: #238636; }
 .sub-nav button.active { background: #238636; border-color: #238636; color: #fff; }
 .source-content { display: none; }
 .source-content.active { display: block; }
@@ -175,11 +182,29 @@ tr:hover { background: #1c2128; }
 .model-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .model-legend-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #8b949e; }
 .model-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.data-table th { cursor: default; }
+.data-table th:hover { color: #8b949e; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.glossary { color: #8b949e; font-size: 12px; margin-bottom: 16px; line-height: 1.7; padding: 12px 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+.heatmap-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.heatmap-wrap canvas { display: block; }
+@media (max-width: 1100px) {
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 900px) {
   .grid-2x2 { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
   .grid-1-2 { grid-template-columns: 1fr; }
-  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+}
+@media (max-width: 600px) {
+  body { padding: 12px; }
+  .grid-4 { grid-template-columns: 1fr; }
+  .kpi-grid { grid-template-columns: 1fr 1fr; }
+  .kpi-value { font-size: 1.4em; }
+  .header-row { flex-direction: column; gap: 8px; }
+  .header-row button { margin-left: 0 !important; }
 }
 "#
 }
@@ -476,7 +501,7 @@ pub fn render_full_report_html(
     writeln!(out, "</div>").unwrap();
 
     // ── Glossary ──────────────────────────────────────────────────────────────
-    writeln!(out, r#"<div style="color:#8b949e;font-size:12px;margin-bottom:12px;line-height:1.6;" data-en="Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost)." data-zh="术语说明：Turn = 一次 Claude 响应（每次你发消息或 Claude 调用工具，都算一个 turn）。Session = 一次完整对话（从开始到结束）。Token = Claude 处理文本的单位（约 4 个英文字符 = 1 token）。Context = 每次请求 Claude 看到的全部内容（你的消息 + 历史记录 + 缓存内容）。Cache Hit = 复用之前处理过的上下文（节省费用）。">Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost).</div>"#).unwrap();
+    writeln!(out, r#"<div class="glossary" data-en="Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost)." data-zh="术语说明：Turn = 一次 Claude 响应（每次你发消息或 Claude 调用工具，都算一个 turn）。Session = 一次完整对话（从开始到结束）。Token = Claude 处理文本的单位（约 4 个英文字符 = 1 token）。Context = 每次请求 Claude 看到的全部内容（你的消息 + 历史记录 + 缓存内容）。Cache Hit = 复用之前处理过的上下文（节省费用）。">Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost).</div>"#).unwrap();
 
     // ── Single source: use sub-nav directly (no top-nav) ─────────────────────
     let pfx = "s1";
@@ -545,7 +570,7 @@ pub fn render_dual_report_html(
     writeln!(out, "</div>").unwrap();
 
     // ── Glossary ──────────────────────────────────────────────────────────────
-    writeln!(out, r#"<div style="color:#8b949e;font-size:12px;margin-bottom:12px;line-height:1.6;" data-en="Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost)." data-zh="术语说明：Turn = 一次 Claude 响应（每次你发消息或 Claude 调用工具，都算一个 turn）。Session = 一次完整对话（从开始到结束）。Token = Claude 处理文本的单位（约 4 个英文字符 = 1 token）。Context = 每次请求 Claude 看到的全部内容（你的消息 + 历史记录 + 缓存内容）。Cache Hit = 复用之前处理过的上下文（节省费用）。">Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost).</div>"#).unwrap();
+    writeln!(out, r#"<div class="glossary" data-en="Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost)." data-zh="术语说明：Turn = 一次 Claude 响应（每次你发消息或 Claude 调用工具，都算一个 turn）。Session = 一次完整对话（从开始到结束）。Token = Claude 处理文本的单位（约 4 个英文字符 = 1 token）。Context = 每次请求 Claude 看到的全部内容（你的消息 + 历史记录 + 缓存内容）。Cache Hit = 复用之前处理过的上下文（节省费用）。">Glossary: Turn = one Claude response (each time you send a message or Claude calls a tool, it produces one turn). Session = one conversation from start to finish. Token = the unit Claude uses to process text (~4 chars = 1 token). Context = all tokens Claude sees per request (your message + history + cached content). Cache Hit = reusing previously processed context (saves cost).</div>"#).unwrap();
 
     // ── Top-level source switcher ────────────────────────────────────────────
     let s1_sessions = source1.overview.total_sessions;
@@ -595,102 +620,77 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     }
     writeln!(out, "</div>").unwrap();
 
-    // Row 1: Tool Usage Ranking + Session Cost Distribution
-    writeln!(out, r#"<div class="grid-2">"#).unwrap();
+    // Row 1: Usage Insights KPI cards
+    {
+        let summaries = &overview.session_summaries;
 
-    // Chart 1: Tool Usage Ranking (Horizontal Bar)
-    if !overview.tool_counts.is_empty() {
-        let chart_id = format!("{}-toolRankChart", pfx);
-        let top_tools: Vec<&(String, usize)> = overview.tool_counts.iter().take(15).collect();
-        writeln!(out, r#"<div class="card">"#).unwrap();
-        writeln!(out, r#"<h2 data-en="Tool Usage Ranking" data-zh="工具使用排行">Tool Usage Ranking</h2>"#).unwrap();
-        writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
+        // Daily avg cost
+        let daily_avg = overview.quality.time_range.map(|(s, e)| {
+            let days = (e - s).num_days().max(1) as f64;
+            (overview.total_cost / days, days as u64)
+        });
 
-        let labels: Vec<String> = top_tools.iter().map(|(name, _)| format!("\"{}\"", escape_html(name))).collect();
-        let data: Vec<String> = top_tools.iter().map(|(_, count)| count.to_string()).collect();
-        let colors_list: Vec<String> = (0..top_tools.len()).map(|i| format!("\"{}\"", color(i))).collect();
+        // Compaction stats
+        let total_compactions: usize = summaries.iter().map(|s| s.compaction_count).sum();
 
-        writeln!(out, r#"<script>
-new Chart(document.getElementById('{chart_id}'), {{
-  type: 'bar',
-  data: {{
-    labels: [{labels}],
-    datasets: [{{ label: 'Count', data: [{data}], backgroundColor: [{colors}], borderWidth: 0, borderRadius: 4 }}]
-  }},
-  options: {{
-    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{
-      x: {{ ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ ticks: {{ color: '#c9d1d9', font: {{ size: 11 }} }}, grid: {{ color: '#21262d' }} }}
-    }}
-  }}
-}});
-</script>"#, chart_id = chart_id, labels = labels.join(","), data = data.join(","), colors = colors_list.join(",")).unwrap();
+        // Max context
+        let max_ctx = summaries.iter().map(|s| s.max_context).max().unwrap_or(0);
+
+        // Average session duration
+        let durations: Vec<f64> = summaries.iter()
+            .map(|s| s.duration_minutes).filter(|d| *d > 0.0).collect();
+        let avg_dur = if !durations.is_empty() { durations.iter().sum::<f64>() / durations.len() as f64 } else { 0.0 };
+
+        writeln!(out, r#"<div class="grid-4">"#).unwrap();
+        if let Some((avg, days)) = daily_avg {
+            write_kpi_i18n(out,
+                &format!("{}/day", format_cost(avg)),
+                &format!("Daily Avg ({} days)", days),
+                &format!("日均费用（{} 天）", days));
+        }
+        write_kpi_i18n(out,
+            &format_number(max_ctx),
+            "Peak Context",
+            "峰值上下文");
+        write_kpi_i18n(out,
+            &total_compactions.to_string(),
+            "Compactions",
+            "上下文压缩次数");
+        write_kpi_i18n(out,
+            &format_duration(avg_dur),
+            "Avg Session",
+            "平均会话时长");
         writeln!(out, "</div>").unwrap();
+
+        // Top 3 most expensive sessions
+        let mut by_cost: Vec<&crate::analysis::SessionSummary> = summaries.iter().collect();
+        by_cost.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+        let top3 = &by_cost[..by_cost.len().min(3)];
+        if !top3.is_empty() {
+            writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
+            writeln!(out, r#"<h2 data-en="Most Expensive Sessions" data-zh="最贵会话 Top 3">Most Expensive Sessions</h2>"#).unwrap();
+            writeln!(out, r#"<div class="table-wrap">"#).unwrap();
+            writeln!(out, r#"<table class="data-table"><thead><tr>
+                <th data-en="Session" data-zh="会话">Session</th>
+                <th data-en="Project" data-zh="项目">Project</th>
+                <th data-en="Turns" data-zh="Turns">Turns</th>
+                <th data-en="Duration" data-zh="时长">Duration</th>
+                <th data-en="Cost" data-zh="费用">Cost</th>
+            </tr></thead><tbody>"#).unwrap();
+            for s in top3 {
+                writeln!(out, "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    escape_html(&s.session_id[..s.session_id.len().min(8)]),
+                    escape_html(&s.project_display_name),
+                    s.turn_count,
+                    format_duration(s.duration_minutes),
+                    format_cost(s.cost),
+                ).unwrap();
+            }
+            writeln!(out, "</tbody></table></div></div>").unwrap();
+        }
     }
 
-    // Chart 2: Session Cost Distribution (Histogram)
-    if !overview.session_summaries.is_empty() {
-        let chart_id = format!("{}-costDistChart", pfx);
-        writeln!(out, r#"<div class="card">"#).unwrap();
-        writeln!(out, r#"<h2 data-en="Session Cost Distribution" data-zh="会话费用分布">Session Cost Distribution</h2>"#).unwrap();
-        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Number of sessions in each cost range. Helps identify your typical session cost and expensive outliers." data-zh="每个费用区间的会话数量。帮助识别典型会话费用和昂贵的异常值。">Number of sessions in each cost range. Helps identify your typical session cost and expensive outliers.</p>"#).unwrap();
-        writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
-
-        // Build histogram buckets
-        let costs: Vec<f64> = overview.session_summaries.iter().map(|s| s.cost).collect();
-        let max_cost = costs.iter().cloned().fold(0.0f64, f64::max);
-        let bucket_count = 12usize;
-        let bucket_size = if max_cost > 0.0 { (max_cost / bucket_count as f64).max(0.01) } else { 0.1 };
-        let mut buckets = vec![0usize; bucket_count + 1];
-        for c in &costs {
-            let idx = (c / bucket_size).floor() as usize;
-            let idx = idx.min(bucket_count);
-            buckets[idx] += 1;
-        }
-        // Trim trailing empty buckets
-        while buckets.len() > 1 && *buckets.last().unwrap() == 0 {
-            buckets.pop();
-        }
-
-        let labels: Vec<String> = (0..buckets.len()).map(|i| {
-            let lo = i as f64 * bucket_size;
-            let hi = lo + bucket_size;
-            format!("\"${:.2}-${:.2}\"", lo, hi)
-        }).collect();
-        let data: Vec<String> = buckets.iter().map(|c| c.to_string()).collect();
-
-        writeln!(out, r#"<script>
-new Chart(document.getElementById('{chart_id}'), {{
-  type: 'bar',
-  data: {{
-    labels: [{labels}],
-    datasets: [{{
-      label: 'Sessions',
-      data: [{data}],
-      backgroundColor: 'rgba(107,203,119,0.6)',
-      borderColor: '#6bcb77',
-      borderWidth: 1,
-      borderRadius: 4
-    }}]
-  }},
-  options: {{
-    responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ display: false }} }},
-    scales: {{
-      x: {{ ticks: {{ color: '#8b949e', maxRotation: 45 }}, grid: {{ color: '#21262d' }} }},
-      y: {{ ticks: {{ color: '#8b949e', stepSize: 1 }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Sessions', color: '#8b949e' }} }}
-    }}
-  }}
-}});
-</script>"#, chart_id = chart_id, labels = labels.join(","), data = data.join(",")).unwrap();
-        writeln!(out, "</div>").unwrap();
-    }
-
-    writeln!(out, "</div>").unwrap(); // close grid-2
-
-    // Row 2: Heatmap + Session Efficiency (wide layout)
+    // Row 2: Heatmap
     writeln!(out, r#"<div class="grid-2" style="margin-top:16px;">"#).unwrap();
 
     // Chart 3: Heatmap (Weekday x Hour) - now with local timezone
@@ -699,7 +699,7 @@ new Chart(document.getElementById('{chart_id}'), {{
         writeln!(out, r#"<div class="card">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Activity Heatmap (Local Time)" data-zh="活跃热力图（本地时间）">Activity Heatmap (Local Time)</h2>"#).unwrap();
         writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each cell = number of turns in that hour slot (local timezone). Rows = weekdays, columns = hours (00-23). Darker = more active." data-zh="每个格子 = 该时段的 turn 数量（本地时区）。行 = 星期几，列 = 小时（00-23）。颜色越深 = 越活跃。">Each cell = number of turns in that hour slot (local timezone). Rows = weekdays, columns = hours (00-23). Darker = more active.</p>"#).unwrap();
-        writeln!(out, r#"<canvas id="{}"></canvas>"#, canvas_id).unwrap();
+        writeln!(out, r#"<div class="heatmap-wrap"><canvas id="{}"></canvas></div>"#, canvas_id).unwrap();
 
         let mut matrix_js = String::from("[");
         for d in 0..7 {
@@ -967,7 +967,7 @@ new Chart(document.getElementById('{chart_id}'), {{
             let tbl_id = format!("{}-tbl-monthly", pfx);
             writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
             writeln!(out, r#"<h2 data-en="Monthly Summary" data-zh="月度汇总">Monthly Summary</h2>"#).unwrap();
-            writeln!(out, r#"<div style="overflow-x:auto;">"#).unwrap();
+            writeln!(out, r#"<div class="table-wrap">"#).unwrap();
             writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
             writeln!(out, "<thead><tr>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Month\" data-zh=\"月份\">Month</th>\
@@ -1005,24 +1005,30 @@ new Chart(document.getElementById('{chart_id}'), {{
     // Table: Daily detail with cost/turn
     {
         let tbl_id = format!("{}-tbl-daily", pfx);
+        let group_zh = match trend.group_label.as_str() {
+            "Day" => "每日",
+            "Week" => "每周",
+            "Month" => "每月",
+            other => other,
+        };
         writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
         writeln!(out, r#"<h2 data-en="{} Breakdown" data-zh="{}明细">{} Breakdown</h2>"#,
-            escape_html(&trend.group_label), escape_html(&trend.group_label), escape_html(&trend.group_label)).unwrap();
-        writeln!(out, r#"<div style="overflow-x:auto;">"#).unwrap();
+            escape_html(&trend.group_label), escape_html(group_zh), escape_html(&trend.group_label)).unwrap();
+        writeln!(out, r#"<div class="table-wrap">"#).unwrap();
         writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
         writeln!(out, "<thead><tr>\
             <th onclick=\"sortTableSimple(this,'{id}')\">{}</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\">Turns</th>\
+            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Input Tokens\" data-zh=\"输入 Token\">Input Tokens</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output Tokens\" data-zh=\"输出 Token\">Output Tokens</th>\
-            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost/Turn\" data-zh=\"每 Turn 费用\">Cost/Turn</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
             <th data-en=\"Models\" data-zh=\"模型\">Models</th>\
         </tr></thead>", escape_html(&trend.group_label), id = tbl_id).unwrap();
         writeln!(out, "<tbody>").unwrap();
 
         for entry in &trend.entries {
-            let cpt = if entry.turn_count > 0 { entry.cost / entry.turn_count as f64 } else { 0.0 };
+            let input_tokens = entry.tokens.input_tokens + entry.tokens.cache_creation_tokens + entry.tokens.cache_read_tokens;
             // Model summary for this day
             let mut model_list: Vec<(&String, &u64)> = entry.models.iter().collect();
             model_list.sort_by(|a, b| b.1.cmp(a.1));
@@ -1036,15 +1042,15 @@ new Chart(document.getElementById('{chart_id}'), {{
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
-                <td data-value=\"{:.6}\">${:.4}</td>\
+                <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{:.4}\">{}</td>\
                 <td>{}</td>\
             </tr>",
                 escape_html(&entry.label), escape_html(&entry.label),
                 entry.session_count, format_number(entry.session_count as u64),
                 entry.turn_count, format_number(entry.turn_count as u64),
+                input_tokens, format_compact(input_tokens),
                 entry.tokens.output_tokens, format_compact(entry.tokens.output_tokens),
-                cpt, cpt,
                 entry.cost, format_cost(entry.cost),
                 models_html,
             ).unwrap();
@@ -1095,7 +1101,7 @@ new Chart(document.getElementById('{chart_id}'), {{
     let tbl_id = format!("{}-tbl-projects-drill", pfx);
     writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
     writeln!(out, r#"<h2 data-en="Project Drill-Down" data-zh="项目钻取">Project Drill-Down</h2>"#).unwrap();
-    writeln!(out, r#"<div style="overflow-x:auto;">"#).unwrap();
+    writeln!(out, r#"<div class="table-wrap">"#).unwrap();
     writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
     writeln!(out, "<thead><tr>\
         <th></th>\
@@ -1409,7 +1415,7 @@ new Chart(document.getElementById('cacheChart'), {{
 
     // ── Stop Reason Doughnut ─────────────────────────────────────────────────
     if !result.stop_reason_counts.is_empty() {
-        writeln!(out, r#"<div class="card">"#).unwrap();
+        writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
         writeln!(out, "<h2>Stop Reason Distribution</h2>").unwrap();
         writeln!(out, r#"<div class="chart-container" style="max-width:400px;margin:0 auto;"><canvas id="stopReasonChart"></canvas></div>"#).unwrap();
 
@@ -1440,7 +1446,7 @@ new Chart(document.getElementById('stopReasonChart'), {{
     // ── Turn Detail Table ────────────────────────────────────────────────────
     writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
     writeln!(out, "<h2>Turn Details</h2>").unwrap();
-    writeln!(out, r#"<div style="overflow-x:auto;">"#).unwrap();
+    writeln!(out, r#"<div class="table-wrap">"#).unwrap();
     render_turn_table_impl(&mut out, &result.turn_details, "tbl-session-turns");
     writeln!(out, "</div></div>").unwrap();
 
