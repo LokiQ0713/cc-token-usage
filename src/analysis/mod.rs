@@ -116,6 +116,7 @@ pub struct ProjectSummary {
     pub agent_turns: usize,
     pub tokens: AggregatedTokens,
     pub cost: f64,
+    pub primary_model: String,
 }
 
 // ─── Session ─────────────────────────────────────────────────────────────────

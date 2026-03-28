@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, Local, NaiveDate};
 
 use crate::data::models::SessionData;
 use crate::pricing::calculator::PricingCalculator;
@@ -17,7 +17,7 @@ pub fn analyze_trend(
     let cutoff = if days == 0 {
         chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap()
     } else {
-        Utc::now().date_naive() - chrono::Duration::days(days as i64)
+        Local::now().date_naive() - chrono::Duration::days(days as i64)
     };
 
     let mut accumulators: HashMap<String, Accumulator> = HashMap::new();
@@ -26,7 +26,7 @@ pub fn analyze_trend(
     for session in sessions {
         // Count session by its first_timestamp
         if let Some(first_ts) = session.first_timestamp {
-            let date = first_ts.date_naive();
+            let date = first_ts.with_timezone(&Local).date_naive();
             if date >= cutoff {
                 let label = make_label(date, group_by_month);
                 *session_labels.entry(label).or_insert(0) += 1;
@@ -35,7 +35,7 @@ pub fn analyze_trend(
 
         // Process all turns
         for turn in session.all_responses() {
-            let date = turn.timestamp.date_naive();
+            let date = turn.timestamp.with_timezone(&Local).date_naive();
             if date < cutoff {
                 continue;
             }

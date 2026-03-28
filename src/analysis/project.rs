@@ -27,6 +27,7 @@ pub fn analyze_projects(
                 agent_turns: 0,
                 tokens: AggregatedTokens::default(),
                 cost: 0.0,
+                model_counts: HashMap::new(),
             });
 
         acc.session_count += 1;
@@ -35,6 +36,7 @@ pub fn analyze_projects(
             acc.tokens.add_usage(&turn.usage);
             acc.total_turns += 1;
             if turn.is_agent { acc.agent_turns += 1; }
+            *acc.model_counts.entry(turn.model.clone()).or_insert(0) += 1;
             let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
             acc.cost += cost.total;
         }
@@ -42,14 +44,21 @@ pub fn analyze_projects(
 
     let mut projects: Vec<ProjectSummary> = project_map
         .into_values()
-        .map(|acc| ProjectSummary {
-            display_name: project_display_name(&acc.name),
-            name: acc.name,
-            session_count: acc.session_count,
-            total_turns: acc.total_turns,
-            agent_turns: acc.agent_turns,
-            tokens: acc.tokens,
-            cost: acc.cost,
+        .map(|acc| {
+            let primary_model = acc.model_counts.into_iter()
+                .max_by_key(|(_, c)| *c)
+                .map(|(m, _)| m)
+                .unwrap_or_default();
+            ProjectSummary {
+                display_name: project_display_name(&acc.name),
+                name: acc.name,
+                session_count: acc.session_count,
+                total_turns: acc.total_turns,
+                agent_turns: acc.agent_turns,
+                tokens: acc.tokens,
+                cost: acc.cost,
+                primary_model,
+            }
         })
         .collect();
 
@@ -90,6 +99,7 @@ struct ProjectAccumulator {
     agent_turns: usize,
     tokens: AggregatedTokens,
     cost: f64,
+    model_counts: HashMap<String, usize>,
 }
 
 #[cfg(test)]

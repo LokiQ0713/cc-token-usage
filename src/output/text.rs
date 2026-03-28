@@ -46,7 +46,11 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     let _ = calc;
 
     let range = result.quality.time_range
-        .map(|(s, e)| format!("{} ~ {}", s.format("%Y-%m-%d"), e.format("%Y-%m-%d")))
+        .map(|(s, e)| {
+            let ls = s.with_timezone(&chrono::Local);
+            let le = e.with_timezone(&chrono::Local);
+            format!("{} ~ {}", ls.format("%Y-%m-%d"), le.format("%Y-%m-%d"))
+        })
         .unwrap_or_default();
 
     writeln!(out, "Claude Code Token Report").unwrap();
@@ -56,6 +60,11 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     writeln!(out, "  {} conversations, {} rounds of back-and-forth",
         format_number(result.total_sessions as u64),
         format_number(result.total_turns as u64)).unwrap();
+    if result.total_agent_turns > 0 {
+        writeln!(out, "  ({} agent turns, {:.0}% of total)",
+            format_number(result.total_agent_turns as u64),
+            result.total_agent_turns as f64 / result.total_turns.max(1) as f64 * 100.0).unwrap();
+    }
     writeln!(out).unwrap();
 
     writeln!(out, "  Claude read  {} tokens",
@@ -69,6 +78,12 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         result.cache_savings.savings_pct).unwrap();
     writeln!(out, "  All that would cost {} at API rates",
         format_cost(result.total_cost)).unwrap();
+
+    // Subscription value
+    if let Some(ref sub) = result.subscription_value {
+        writeln!(out, "  Subscription: {}/mo -> {:.1}x value multiplier",
+            format_cost(sub.monthly_price), sub.value_multiplier).unwrap();
+    }
 
     // Model breakdown
     writeln!(out).unwrap();
@@ -92,13 +107,33 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
             format_cost(*cost)).unwrap();
     }
 
+    // Cost by category
+    writeln!(out).unwrap();
+    let cat = &result.cost_by_category;
+    let total = result.total_cost.max(0.001);
+    writeln!(out, "  Cost Breakdown").unwrap();
+    writeln!(out, "    Output:      {:>9}  ({:.0}%)", format_cost(cat.output_cost), cat.output_cost / total * 100.0).unwrap();
+    writeln!(out, "    Cache Write: {:>9}  ({:.0}%)", format_cost(cat.cache_write_5m_cost + cat.cache_write_1h_cost),
+        (cat.cache_write_5m_cost + cat.cache_write_1h_cost) / total * 100.0).unwrap();
+    writeln!(out, "    Input:       {:>9}  ({:.0}%)", format_cost(cat.input_cost), cat.input_cost / total * 100.0).unwrap();
+    writeln!(out, "    Cache Read:  {:>9}  ({:.0}%)", format_cost(cat.cache_read_cost), cat.cache_read_cost / total * 100.0).unwrap();
+
+    // Tool usage top 10
+    if !result.tool_counts.is_empty() {
+        writeln!(out).unwrap();
+        writeln!(out, "  Top Tools").unwrap();
+        for (name, count) in result.tool_counts.iter().take(10) {
+            let bar_len = (*count as f64 / result.tool_counts[0].1.max(1) as f64 * 20.0).round() as usize;
+            writeln!(out, "    {:<18} {:>6}  {}", name, format_number(*count as u64), "█".repeat(bar_len)).unwrap();
+        }
+    }
+
     // Top 5 projects
     if !result.session_summaries.is_empty() {
         writeln!(out).unwrap();
         writeln!(out, "  Top Projects                              Sessions   Turns    Cost").unwrap();
         writeln!(out, "  -------------------------------------------------------------------").unwrap();
 
-        // Group by project
         let mut project_map: std::collections::HashMap<&str, (usize, usize, f64)> = std::collections::HashMap::new();
         for s in &result.session_summaries {
             let e = project_map.entry(&s.project_display_name).or_default();
@@ -115,7 +150,14 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         }
     }
 
-    // Monthly trend
+    // Data quality summary
+    writeln!(out).unwrap();
+    writeln!(out, "  Data: {} session files, {} agent files",
+        result.quality.total_session_files, result.quality.total_agent_files).unwrap();
+    if result.quality.orphan_agents > 0 {
+        writeln!(out, "  ({} orphan agents without parent session)", result.quality.orphan_agents).unwrap();
+    }
+
     writeln!(out).unwrap();
 
     out
@@ -141,18 +183,33 @@ pub fn render_projects(result: &ProjectResult) -> String {
 
     writeln!(out, "Projects by Cost").unwrap();
     writeln!(out).unwrap();
+    writeln!(out, "  #   Project                          Sessions  Turns  Agent  $/Sess  Model          Cost").unwrap();
+    writeln!(out, "  ─────────────────────────────────────────────────────────────────────────────────────────").unwrap();
 
     for (i, proj) in result.projects.iter().enumerate() {
-        writeln!(out, "  {:>2}. {:<35} {:>5} sess  {:>6} turns  {}",
-            i + 1, proj.display_name,
-            proj.session_count, proj.total_turns,
-            format_cost(proj.cost)).unwrap();
+        let avg_cost = if proj.session_count > 0 { proj.cost / proj.session_count as f64 } else { 0.0 };
+        let model_short = short_model(&proj.primary_model);
+        writeln!(out, "  {:>2}. {:<30} {:>5}  {:>6}  {:>5}  {:>6}  {:<12}  {:>9}",
+            i + 1,
+            truncate_str(&proj.display_name, 30),
+            proj.session_count,
+            proj.total_turns,
+            proj.agent_turns,
+            format_cost(avg_cost),
+            truncate_str(&model_short, 12),
+            format_cost(proj.cost),
+        ).unwrap();
         total_cost += proj.cost;
     }
 
     writeln!(out).unwrap();
     writeln!(out, "  Total: {} projects, {}", result.projects.len(), format_cost(total_cost)).unwrap();
     out
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max { s.to_string() }
+    else { format!("{}...", &s[..s.floor_char_boundary(max.saturating_sub(3))]) }
 }
 
 // ─── 3. Session ─────────────────────────────────────────────────────────────
@@ -181,20 +238,41 @@ pub fn render_session(result: &SessionResult) -> String {
 pub fn render_trend(result: &TrendResult) -> String {
     let mut out = String::new();
     let mut total_cost = 0.0f64;
+    let mut total_turns = 0usize;
+
+    // Find max cost for sparkline scaling
+    let max_cost = result.entries.iter().map(|e| e.cost).fold(0.0f64, f64::max);
 
     writeln!(out, "Usage by {}", result.group_label).unwrap();
     writeln!(out).unwrap();
 
     for entry in &result.entries {
-        writeln!(out, "  {:<10}  {:>4} sess  {:>6} turns  {:>10} output  {}",
+        // Sparkline bar
+        let bar_len = if max_cost > 0.0 { (entry.cost / max_cost * 16.0).round() as usize } else { 0 };
+        let bar = "▇".repeat(bar_len);
+
+        // Primary model for this period
+        let top_model = entry.models.iter()
+            .max_by_key(|(_, tokens)| *tokens)
+            .map(|(m, _)| short_model(m))
+            .unwrap_or_default();
+
+        // Cost per turn
+        let cpt = if entry.turn_count > 0 { entry.cost / entry.turn_count as f64 } else { 0.0 };
+
+        writeln!(out, "  {:<10}  {:>4} sess  {:>6} turns  {:>9}  ${:.3}/t  {:<12} {}",
             entry.label, entry.session_count, entry.turn_count,
-            format_number(entry.tokens.output_tokens),
-            format_cost(entry.cost)).unwrap();
+            format_cost(entry.cost), cpt,
+            truncate_str(&top_model, 12),
+            bar,
+        ).unwrap();
         total_cost += entry.cost;
+        total_turns += entry.turn_count;
     }
 
     writeln!(out).unwrap();
-    writeln!(out, "  Total: {}", format_cost(total_cost)).unwrap();
+    let avg_cpt = if total_turns > 0 { total_cost / total_turns as f64 } else { 0.0 };
+    writeln!(out, "  Total: {}  ({} turns, avg ${:.3}/turn)", format_cost(total_cost), format_number(total_turns as u64), avg_cpt).unwrap();
     out
 }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, Local, Timelike};
 
 use crate::data::models::{GlobalDataQuality, SessionData};
 use crate::pricing::calculator::PricingCalculator;
@@ -181,12 +181,13 @@ fn process_turn(
     cost_by_category.cache_write_1h_cost += cost.cache_write_1h_cost;
     cost_by_category.cache_read_cost += cost.cache_read_cost;
 
-    // Hourly distribution
-    let hour = turn.timestamp.hour() as usize;
+    // Hourly distribution (local timezone)
+    let local_ts = turn.timestamp.with_timezone(&Local);
+    let hour = local_ts.hour() as usize;
     hourly_distribution[hour] += 1;
 
-    // Weekday-hour matrix
-    let weekday = turn.timestamp.weekday().num_days_from_monday() as usize; // 0=Mon..6=Sun
+    // Weekday-hour matrix (local timezone)
+    let weekday = local_ts.weekday().num_days_from_monday() as usize; // 0=Mon..6=Sun
     weekday_hour_matrix[weekday][hour] += 1;
 }
 
