@@ -150,6 +150,59 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         }
     }
 
+    // Usage insights
+    if !result.session_summaries.is_empty() {
+        let summaries = &result.session_summaries;
+
+        // Daily average cost
+        if let Some((start, end)) = result.quality.time_range {
+            let days = (end - start).num_days().max(1) as f64;
+            writeln!(out).unwrap();
+            writeln!(out, "  Daily avg: {} / day  ({} days)",
+                format_cost(result.total_cost / days), days as u64).unwrap();
+        }
+
+        // Compaction stats
+        let total_compactions: usize = summaries.iter().map(|s| s.compaction_count).sum();
+        let sessions_with_compaction = summaries.iter().filter(|s| s.compaction_count > 0).count();
+        if total_compactions > 0 {
+            writeln!(out, "  Compactions: {} total across {} sessions",
+                total_compactions, sessions_with_compaction).unwrap();
+        }
+
+        // Max context
+        let max_ctx = summaries.iter().map(|s| s.max_context).max().unwrap_or(0);
+        if max_ctx > 0 {
+            writeln!(out, "  Peak context: {} tokens", format_number(max_ctx)).unwrap();
+        }
+
+        // Average session duration
+        let durations: Vec<f64> = summaries.iter()
+            .map(|s| s.duration_minutes)
+            .filter(|d| *d > 0.0)
+            .collect();
+        if !durations.is_empty() {
+            let avg_dur = durations.iter().sum::<f64>() / durations.len() as f64;
+            writeln!(out, "  Avg session: {}", format_duration(avg_dur)).unwrap();
+        }
+
+        // Top 3 most expensive sessions
+        let mut by_cost: Vec<&crate::analysis::SessionSummary> = summaries.iter().collect();
+        by_cost.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+        writeln!(out).unwrap();
+        writeln!(out, "  Most Expensive Sessions").unwrap();
+        for s in by_cost.iter().take(3) {
+            let dur = format_duration(s.duration_minutes);
+            writeln!(out, "    {} {} {:>5} turns  {}  {}",
+                &s.session_id[..s.session_id.len().min(8)],
+                truncate_str(&s.project_display_name, 25),
+                s.turn_count,
+                dur,
+                format_cost(s.cost),
+            ).unwrap();
+        }
+    }
+
     // Data quality summary
     writeln!(out).unwrap();
     writeln!(out, "  Data: {} session files, {} agent files",

@@ -258,27 +258,14 @@ function toggleProject(btn, projectId) {
   btn.textContent = isHidden ? '\u25bc' : '\u25b6';
 }
 
-function shiftHeatmapToLocal(data) {
-  // Shift heatmap data from UTC to local timezone
-  const offset = -(new Date().getTimezoneOffset() / 60); // e.g. +8 for CST
-  const out = Array.from({length:7}, () => new Array(24).fill(0));
-  for (let d = 0; d < 7; d++) {
-    for (let h = 0; h < 24; h++) {
-      let newH = h + offset;
-      let newD = d;
-      if (newH >= 24) { newH -= 24; newD = (newD + 1) % 7; }
-      else if (newH < 0) { newH += 24; newD = (newD + 6) % 7; }
-      out[newD][newH] += data[d][h];
-    }
-  }
-  return out;
-}
+// Heatmap data is already in local timezone (converted in Rust).
+// No JS-side timezone shift needed.
 
 function drawHeatmap(canvasId, data) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const localData = shiftHeatmapToLocal(data);
+  const localData = data; // already local timezone from Rust
   const zhDays = ['周一','周二','周三','周四','周五','周六','周日'];
   const enDays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const days = (currentLang === 'zh') ? zhDays : enDays;
