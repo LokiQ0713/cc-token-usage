@@ -1,6 +1,6 @@
 {
   "name": "cc-token-usage",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Analyze Claude Code session token usage, costs, and efficiency",
   "bin": {
     "cc-token-usage": "./bin/cli.mjs"

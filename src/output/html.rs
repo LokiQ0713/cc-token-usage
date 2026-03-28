@@ -1,14 +1,13 @@
 use std::fmt::Write as _;
 
-use chrono::Local;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
-use crate::pricing::calculator::{PricingCalculator, PRICING_FETCH_DATE, PRICING_SOURCE};
+use crate::pricing::calculator::PricingCalculator;
 
 // ─── Chart Colors ────────────────────────────────────────────────────────────
 
 const COLORS: &[&str] = &[
-    "#58a6ff", "#ff6b6b", "#ffd93d", "#6bcb77", "#4d96ff", "#9b59b6",
-    "#e17055", "#00cec9", "#fd79a8", "#fdcb6e",
+    "#3b82f6", "#8b5cf6", "#06b6d4", "#22c55e", "#f59e0b",
+    "#ef4444", "#ec4899", "#a78bfa", "#2dd4bf", "#fb923c",
 ];
 
 // ─── ReportData ──────────────────────────────────────────────────────────────
@@ -66,6 +65,13 @@ fn format_cost(c: f64) -> String {
     format!("{}${}.{:02}", sign, format_number(whole), cents)
 }
 
+/// Format a cost as integer: 1234.5 -> "$1,235"
+fn format_cost_int(c: f64) -> String {
+    let abs = c.abs().round() as u64;
+    let sign = if c < 0.0 { "-" } else { "" };
+    format!("{}${}", sign, format_number(abs))
+}
+
 /// Pick a color from the palette by index.
 fn color(i: usize) -> &'static str {
     COLORS[i % COLORS.len()]
@@ -102,93 +108,131 @@ fn format_duration(minutes: f64) -> String {
 
 fn css() -> &'static str {
     r#"
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', sans-serif;
-  background: #0d1117; color: #c9d1d9;
-  max-width: 1400px; margin: 0 auto; padding: 20px;
+:root {
+  --bg-primary: #0a0a0b;
+  --bg-secondary: #111113;
+  --bg-tertiary: #18181b;
+  --bg-deep: #27272a;
+  --border-color: #27272a;
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-accent: #3b82f6;
+  --footer-color: #71717a;
+  --session-detail-bg: #0a0a0b;
+  --project-session-bg: #111113;
+  --compact-row-bg: #2d1b1b;
+  --agent-badge-bg: #1e3a5f;
 }
-.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #fafafa;
+  --bg-tertiary: #f4f4f5;
+  --bg-deep: #e4e4e7;
+  --border-color: #e4e4e7;
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-tertiary: #a1a1aa;
+  --text-accent: #2563eb;
+  --footer-color: #a1a1aa;
+  --session-detail-bg: #ffffff;
+  --project-session-bg: #fafafa;
+  --compact-row-bg: #fff0f0;
+  --agent-badge-bg: #dbeafe;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; font-variant-numeric: tabular-nums; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg-primary); color: var(--text-primary);
+  max-width: 1200px; margin: 0 auto; padding: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+.card { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; padding: 20px 24px; box-shadow: none; }
+[data-theme="light"] .card { box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06); }
 .card > h2:first-child { margin-top: 0; }
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
-.kpi-value { font-size: 1.6em; font-weight: 700; color: #58a6ff; line-height: 1; }
-.kpi-label { font-size: 0.85em; color: #8b949e; margin-top: 4px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 16px 0; }
+.kpi-grid .card { padding: 14px 16px; }
+.kpi-value { font-size: 1.35rem; font-weight: 600; color: var(--text-primary); line-height: 1.1; }
+.kpi-label { font-size: 0.75rem; font-weight: 500; color: var(--text-tertiary); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
 nav { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
 nav button {
-  padding: 8px 20px; border: 1px solid #30363d; border-radius: 6px;
-  background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 14px;
-  transition: background 0.15s, border-color 0.15s;
+  padding: 8px 20px; border: 1px solid var(--border-color); border-radius: 6px;
+  background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 14px;
+  transition: all 0.15s ease;
 }
-nav button:hover { border-color: #58a6ff; }
-nav button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+nav button:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+nav button.active { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-color); }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
-h1 { color: #58a6ff; font-size: 1.5em; margin-bottom: 16px; }
-h2 { color: #c9d1d9; font-size: 1.2em; margin: 16px 0 12px; }
+h1 { color: var(--text-primary); font-size: 1.5em; font-weight: 600; margin-bottom: 16px; }
+h2 { color: var(--text-primary); font-size: 1.2em; margin: 16px 0 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
-  padding: 8px 10px; text-align: right; border-bottom: 2px solid #30363d;
-  color: #8b949e; cursor: pointer; user-select: none; white-space: nowrap;
-  position: sticky; top: 0; background: #161b22; z-index: 2;
+  padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border-color);
+  font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-tertiary); cursor: pointer; user-select: none; white-space: nowrap;
+  position: sticky; top: 0; background: var(--bg-secondary); z-index: 2;
 }
 th.text-left { text-align: left; }
-th:hover { color: #58a6ff; }
-td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #21262d; }
+th:hover { color: var(--text-accent); }
+td { padding: 10px 12px; text-align: right; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
 td.text-left { text-align: left; }
-tr:hover { background: #1c2128; }
-.sort-asc::after { content: ' \25b2'; color: #58a6ff; }
-.sort-desc::after { content: ' \25bc'; color: #58a6ff; }
+tr:hover { background: var(--bg-tertiary); }
+.sort-asc::after { content: ' \25b2'; color: var(--text-accent); }
+.sort-desc::after { content: ' \25bc'; color: var(--text-accent); }
 .expandable { cursor: pointer; }
-.session-detail { background: #0d1117; }
+.session-detail { background: var(--session-detail-bg); }
 .session-detail td { padding: 0; }
-.session-detail:hover { background: #0d1117; }
+.session-detail:hover { background: var(--session-detail-bg); }
 .detail-content { padding: 16px; overflow-x: auto; }
 .detail-content table { font-size: 12px; }
-.compact-row { background: #2d1b1b !important; }
+.compact-row { background: var(--compact-row-bg) !important; }
 .chart-container { position: relative; height: 350px; margin: 16px 0; }
 .grid-2x2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid-2 > * { min-width: 0; overflow: hidden; }
 .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
-.footer { color: #484f58; font-size: 12px; margin-top: 30px; padding-top: 16px; border-top: 1px solid #21262d; }
+.footer { color: var(--footer-color); font-size: 12px; margin-top: 30px; padding-top: 16px; border-top: 1px solid var(--bg-deep); }
 .header-row { display: flex; align-items: baseline; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-.subtitle { color: #8b949e; font-size: 0.85em; }
-.expand-btn { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 14px; padding: 2px 6px; }
-.expand-btn:hover { color: #58a6ff; }
-.project-session-row { background: #111822; }
-.project-session-row:hover { background: #1c2128; }
-.project-row { background: #161b22; font-weight: 600; }
-.progress-bar { display: inline-block; width: 80px; height: 14px; background: #21262d; border-radius: 7px; overflow: hidden; vertical-align: middle; }
-.progress-fill { height: 100%; border-radius: 7px; transition: width 0.3s; }
+.subtitle { color: var(--text-secondary); font-size: 0.85em; }
+.expand-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 14px; padding: 2px 6px; }
+.expand-btn:hover { color: var(--text-accent); }
+.project-session-row { background: var(--project-session-bg); }
+.project-session-row:hover { background: var(--bg-tertiary); }
+.project-row { background: var(--bg-secondary); font-weight: 600; }
+.progress-bar { display: inline-block; width: 80px; height: 14px; background: var(--bg-deep); border-radius: 7px; overflow: hidden; vertical-align: middle; }
+.progress-fill { height: 100%; border-radius: 7px; transition: width 0.15s ease; }
 .progress-text { display: inline-block; width: 45px; text-align: right; margin-left: 4px; font-size: 12px; }
-.stale-warning { color: #ff6b6b; margin-bottom: 8px; }
+.stale-warning { color: #ef4444; margin-bottom: 8px; }
 .top-nav { display: flex; gap: 8px; margin-bottom: 12px; }
-.top-nav button { padding: 10px 24px; border: 2px solid #30363d; border-radius: 8px; background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 15px; font-weight: 600; transition: background 0.15s, border-color 0.15s; }
-.top-nav button:hover { border-color: #58a6ff; }
-.top-nav button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.top-nav button { padding: 10px 24px; border: 1px solid var(--border-color); border-radius: 8px; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 15px; font-weight: 600; transition: all 0.15s ease; }
+.top-nav button:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.top-nav button.active { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-color); }
 .sub-nav { display: flex; gap: 8px; margin-bottom: 16px; }
-.sub-nav button { padding: 6px 16px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #c9d1d9; cursor: pointer; font-size: 13px; transition: background 0.15s, border-color 0.15s; }
-.sub-nav button:hover { border-color: #238636; }
-.sub-nav button.active { background: #238636; border-color: #238636; color: #fff; }
+.sub-nav button { padding: 6px 16px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; transition: all 0.15s ease; }
+.sub-nav button:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.sub-nav button.active { color: var(--text-primary); background: var(--bg-tertiary); border-color: var(--border-color); }
 .source-content { display: none; }
 .source-content.active { display: block; }
 .sub-tab-content { display: none; }
 .sub-tab-content.active { display: block; }
-.tool-tag { display: inline-block; padding: 1px 6px; margin: 1px 2px; border-radius: 4px; background: #21262d; color: #8b949e; font-size: 11px; white-space: nowrap; }
-.tool-tag .tool-count { color: #58a6ff; font-weight: 600; margin-left: 2px; }
+.tool-tag { display: inline-block; padding: 1px 6px; margin: 1px 2px; border-radius: 4px; background: var(--bg-deep); color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
+.tool-tag .tool-count { color: var(--text-accent); font-weight: 600; margin-left: 2px; }
 .session-tools-cell { max-width: 260px; line-height: 1.8; }
-.agent-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #1f3a5f; color: #58a6ff; font-size: 11px; font-weight: 600; margin-left: 4px; }
+.agent-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: var(--agent-badge-bg); color: var(--text-accent); font-size: 11px; font-weight: 600; margin-left: 4px; }
 .turn-count-cell { white-space: nowrap; }
 .grid-1-2 { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; }
 .chart-container-sm { position: relative; height: 250px; margin: 12px 0; }
 .model-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.model-legend-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #8b949e; }
+.model-legend-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); }
 .model-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .data-table th { cursor: default; }
-.data-table th:hover { color: #8b949e; }
+.data-table th:hover { color: var(--text-secondary); }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.glossary { color: #8b949e; font-size: 12px; margin-bottom: 16px; line-height: 1.7; padding: 12px 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+.glossary { color: var(--text-secondary); font-size: 12px; margin-bottom: 16px; line-height: 1.7; padding: 12px 16px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 8px; }
 .heatmap-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .heatmap-wrap canvas { display: block; }
+.theme-btn { background: none; border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 16px; line-height: 1; }
 @media (max-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
 }
@@ -211,6 +255,85 @@ tr:hover { background: #1c2128; }
 }
 
 // ─── JavaScript ──────────────────────────────────────────────────────────────
+
+fn js_head() -> &'static str {
+    r#"
+// ── Theme init (must run before charts) ─────────────────────────────────────
+var _chartInstances = [];
+(function() {
+  var saved = localStorage.getItem('cc-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+})();
+
+function getThemeColors() {
+  var isDark = (document.documentElement.getAttribute('data-theme') || 'dark') === 'dark';
+  return {
+    text: isDark ? '#fafafa' : '#09090b',
+    textSecondary: isDark ? '#a1a1aa' : '#52525b',
+    grid: isDark ? '#27272a' : '#e4e4e7',
+    accent: isDark ? '#3b82f6' : '#2563eb'
+  };
+}
+
+function toggleTheme() {
+  var current = document.documentElement.getAttribute('data-theme') || 'dark';
+  var next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('cc-theme', next);
+  document.querySelectorAll('.theme-btn').forEach(function(b) {
+    b.textContent = next === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+  });
+  updateChartColors();
+  // Redraw heatmaps
+  for (var key of Object.keys(window)) {
+    if (key.startsWith('_heatmapData_')) {
+      var pfx = key.replace('_heatmapData_', '');
+      drawHeatmap('heatmap-' + pfx, window[key]);
+    }
+  }
+}
+
+function updateChartColors() {
+  var tc = getThemeColors();
+  _chartInstances.forEach(function(chart) {
+    if (!chart || !chart.options || !chart.options.scales) return;
+    var scales = chart.options.scales;
+    ['x','y','y1'].forEach(function(axis) {
+      if (scales[axis]) {
+        if (scales[axis].ticks) {
+          // Don't overwrite specially colored axes like y1 (ffd93d)
+          if (!scales[axis]._preserveColor) {
+            scales[axis].ticks.color = tc.textSecondary;
+          }
+        }
+        if (scales[axis].grid) scales[axis].grid.color = tc.grid;
+        if (scales[axis].title && scales[axis].title.color) {
+          if (!scales[axis]._preserveColor) {
+            scales[axis].title.color = tc.textSecondary;
+          }
+        }
+      }
+    });
+    if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+      chart.options.plugins.legend.labels.color = tc.text;
+    }
+    chart.update();
+  });
+}
+
+// Register Chart.js plugin to track instances for theme toggling
+Chart.register({
+  id: 'themeTracker',
+  afterInit: function(chart) {
+    _chartInstances.push(chart);
+  },
+  beforeDestroy: function(chart) {
+    var idx = _chartInstances.indexOf(chart);
+    if (idx >= 0) _chartInstances.splice(idx, 1);
+  }
+});
+"#
+}
 
 fn js_common() -> &'static str {
     r#"
@@ -295,34 +418,54 @@ function drawHeatmap(canvasId, data) {
   const zhDays = ['周一','周二','周三','周四','周五','周六','周日'];
   const enDays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const days = (currentLang === 'zh') ? zhDays : enDays;
-  const cellW = 28, cellH = 28, padL = 44, padT = 30;
+  const cellW = 22, cellH = 22, padL = 38, padT = 26;
   canvas.width = padL + 24 * cellW + 10;
   canvas.height = padT + 7 * cellH + 10;
 
+  const isDark = (document.documentElement.getAttribute('data-theme') || 'dark') === 'dark';
   const max = Math.max(...localData.flat(), 1);
+  const labelColor = isDark ? '#a1a1aa' : '#52525b';
+
+  // Clear canvas with theme background
+  ctx.fillStyle = isDark ? '#111113' : '#fafafa';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   for (let d = 0; d < 7; d++) {
     for (let h = 0; h < 24; h++) {
       const val = localData[d][h];
       const intensity = val / max;
-      const r = Math.round(13 + intensity * 75);
-      const g = Math.round(17 + intensity * 130);
-      const b = Math.round(34 + intensity * 221);
+      let r, g, b;
+      if (isDark) {
+        // Dark theme: dark → bright blue (darker = less, brighter = more)
+        r = Math.round(13 + intensity * 75);
+        g = Math.round(17 + intensity * 130);
+        b = Math.round(34 + intensity * 221);
+      } else {
+        // Light theme: white -> blue
+        r = Math.round(235 - intensity * 195);
+        g = Math.round(238 - intensity * 158);
+        b = Math.round(245 - intensity * 27);
+      }
       ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
       ctx.fillRect(padL + h * cellW, padT + d * cellH, cellW - 2, cellH - 2);
 
       if (val > 0) {
-        ctx.fillStyle = intensity > 0.6 ? '#fff' : '#8b949e';
-        ctx.font = '10px sans-serif';
+        if (isDark) {
+          ctx.fillStyle = intensity > 0.6 ? '#fafafa' : '#a1a1aa';
+        } else {
+          ctx.fillStyle = intensity > 0.5 ? '#ffffff' : '#09090b';
+        }
+        ctx.font = '8px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(val, padL + h * cellW + cellW/2 - 1, padT + d * cellH + cellH/2 + 3);
+        ctx.fillText(val, padL + h * cellW + cellW/2, padT + d * cellH + cellH/2 + 3);
       }
     }
-    ctx.fillStyle = '#8b949e';
-    ctx.font = '11px sans-serif';
+    ctx.fillStyle = labelColor;
+    ctx.font = '9px sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(days[d], padL - 5, padT + d * cellH + cellH/2 + 3);
+    ctx.fillText(days[d], padL - 4, padT + d * cellH + cellH/2 + 3);
   }
+  ctx.fillStyle = labelColor;
   ctx.textAlign = 'center';
   for (let h = 0; h < 24; h += 2) {
     ctx.fillText(h.toString().padStart(2, '0'), padL + h * cellW + cellW/2, padT - 8);
@@ -418,7 +561,26 @@ function convertTimestamps() {
     }
   });
 }
-document.addEventListener('DOMContentLoaded', function() { applyLang(); convertTimestamps(); });
+document.addEventListener('DOMContentLoaded', function() {
+  applyLang();
+  convertTimestamps();
+  // Init theme button text and sync chart colors with saved theme
+  var theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  document.querySelectorAll('.theme-btn').forEach(function(b) {
+    b.textContent = theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+  });
+  // If theme was loaded as light from localStorage, update chart colors
+  if (theme === 'light') {
+    updateChartColors();
+    // Redraw heatmaps with light colors
+    for (var key of Object.keys(window)) {
+      if (key.startsWith('_heatmapData_')) {
+        var pfx = key.replace('_heatmapData_', '');
+        drawHeatmap('heatmap-' + pfx, window[key]);
+      }
+    }
+  }
+});
 "#
 }
 
@@ -459,10 +621,6 @@ fn render_source_tabs(
     render_projects_tab(out, projects, &overview.session_summaries, pfx);
     writeln!(out, "</div>").unwrap();
 
-    // Pricing source note
-    writeln!(out, r#"<p style="color:#484f58;font-size:11px;margin-top:12px;">Price data: {} ({})</p>"#,
-        PRICING_SOURCE, PRICING_FETCH_DATE).unwrap();
-
     let _ = calc;
 }
 
@@ -485,11 +643,14 @@ pub fn render_full_report_html(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Code Token Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>{js_head}</script>
   <style>{css}</style>
 </head>
 <body>
-"#, css = css()).unwrap();
+"#, css = css(), js_head = js_head()).unwrap();
 
     // ── Header ───────────────────────────────────────────────────────────────
     writeln!(out, r#"<div class="header-row">"#).unwrap();
@@ -498,7 +659,8 @@ pub fn render_full_report_html(
         writeln!(out, r#"<span class="subtitle">{} ~ {}</span>"#,
             start.format("%Y-%m-%d"), end.format("%Y-%m-%d")).unwrap();
     }
-    writeln!(out, r#"<button id="lang-btn" onclick="toggleLang()" style="margin-left:auto;padding:4px 12px;border:1px solid #30363d;border-radius:4px;background:#161b22;color:#c9d1d9;cursor:pointer;font-size:13px;">中文</button>"#).unwrap();
+    writeln!(out, r#"<button class="theme-btn" onclick="toggleTheme()" style="margin-left:auto;">&#x2600;&#xFE0F;</button>"#).unwrap();
+    writeln!(out, r#"<button id="lang-btn" onclick="toggleLang()" style="padding:4px 12px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer;font-size:13px;">中文</button>"#).unwrap();
     writeln!(out, "</div>").unwrap();
 
     // ── Glossary ──────────────────────────────────────────────────────────────
@@ -512,9 +674,6 @@ pub fn render_full_report_html(
 
     // ── JavaScript ───────────────────────────────────────────────────────────
     write!(out, "<script>{}</script>", js_common()).unwrap();
-
-    // ── Footer ───────────────────────────────────────────────────────────────
-    render_footer(&mut out, calc);
 
     writeln!(out, "</body>\n</html>").unwrap();
     out
@@ -540,11 +699,14 @@ pub fn render_dual_report_html(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Code Token Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>{js_head}</script>
   <style>{css}</style>
 </head>
 <body>
-"#, css = css()).unwrap();
+"#, css = css(), js_head = js_head()).unwrap();
 
     // ── Header ───────────────────────────────────────────────────────────────
     writeln!(out, r#"<div class="header-row">"#).unwrap();
@@ -567,7 +729,8 @@ pub fn render_dual_report_html(
     if !time_range_str.is_empty() {
         writeln!(out, r#"<span class="subtitle">{}</span>"#, time_range_str).unwrap();
     }
-    writeln!(out, r#"<button id="lang-btn" onclick="toggleLang()" style="margin-left:auto;padding:4px 12px;border:1px solid #30363d;border-radius:4px;background:#161b22;color:#c9d1d9;cursor:pointer;font-size:13px;">中文</button>"#).unwrap();
+    writeln!(out, r#"<button class="theme-btn" onclick="toggleTheme()" style="margin-left:auto;">&#x2600;&#xFE0F;</button>"#).unwrap();
+    writeln!(out, r#"<button id="lang-btn" onclick="toggleLang()" style="padding:4px 12px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer;font-size:13px;">中文</button>"#).unwrap();
     writeln!(out, "</div>").unwrap();
 
     // ── Glossary ──────────────────────────────────────────────────────────────
@@ -596,9 +759,6 @@ pub fn render_dual_report_html(
     // ── JavaScript ───────────────────────────────────────────────────────────
     write!(out, "<script>{}</script>", js_common()).unwrap();
 
-    // ── Footer ───────────────────────────────────────────────────────────────
-    render_footer(&mut out, calc);
-
     writeln!(out, "</body>\n</html>").unwrap();
     out
 }
@@ -612,10 +772,10 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     write_kpi_i18n(out, &format_number(overview.total_turns as u64), "Turns", "响应数");
     write_kpi_i18n(out, &format_compact(overview.total_output_tokens), "Claude Wrote", "Claude 写了");
     write_kpi_i18n(out, &format_compact(overview.total_context_tokens), "Claude Read", "Claude 读了");
-    write_kpi_progress(out, overview.avg_cache_hit_rate, "Avg Cache Hit Rate", "平均缓存命中率");
-    write_kpi_i18n(out, &format_cost(overview.total_cost), "Token Value (API Rate)", "Token 价值 (API 费率)");
+    write_kpi_i18n(out, &format!("{:.1}%", overview.avg_cache_hit_rate), "Avg Cache Hit Rate", "平均缓存命中率");
+    write_kpi_i18n(out, &format_cost_int(overview.total_cost), "Token Value (API Rate)", "Token 价值 (API 费率)");
     if overview.cache_savings.total_saved > 0.0 {
-        write_kpi_i18n(out, &format_cost(overview.cache_savings.total_saved),
+        write_kpi_i18n(out, &format_cost_int(overview.cache_savings.total_saved),
             &format!("Cache Savings ({:.0}%)", overview.cache_savings.savings_pct),
             &format!("缓存节省 ({:.0}%)", overview.cache_savings.savings_pct));
     }
@@ -645,12 +805,12 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
         writeln!(out, r#"<div class="grid-4">"#).unwrap();
         if let Some((avg, days)) = daily_avg {
             write_kpi_i18n(out,
-                &format!("{}/day", format_cost(avg)),
+                &format!("{}/day", format_cost_int(avg)),
                 &format!("Daily Avg ({} days)", days),
                 &format!("日均费用（{} 天）", days));
         }
         write_kpi_i18n(out,
-            &format_number(max_ctx),
+            &format_compact(max_ctx),
             "Peak Context",
             "峰值上下文");
         write_kpi_i18n(out,
@@ -662,28 +822,32 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
             "Avg Session",
             "平均会话时长");
         writeln!(out, "</div>").unwrap();
+    }
 
-        // Top 3 most expensive sessions
+    // Row: Most Expensive Sessions (left, narrow) + Heatmap (right, wide)
+    writeln!(out, r#"<div class="grid-1-2" style="margin-top:16px;">"#).unwrap();
+
+    // Left: Most Expensive Sessions Top 5
+    {
+        let summaries = &overview.session_summaries;
         let mut by_cost: Vec<&crate::analysis::SessionSummary> = summaries.iter().collect();
         by_cost.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
-        let top3 = &by_cost[..by_cost.len().min(3)];
-        if !top3.is_empty() {
-            writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-            writeln!(out, r#"<h2 data-en="Most Expensive Sessions" data-zh="最贵会话 Top 3">Most Expensive Sessions</h2>"#).unwrap();
+        let top5 = &by_cost[..by_cost.len().min(5)];
+        if !top5.is_empty() {
+            writeln!(out, r#"<div class="card">"#).unwrap();
+            writeln!(out, r#"<h2 data-en="Most Expensive Sessions Top 5" data-zh="最贵会话 Top 5">Most Expensive Sessions Top 5</h2>"#).unwrap();
             writeln!(out, r#"<div class="table-wrap">"#).unwrap();
             writeln!(out, r#"<table class="data-table"><thead><tr>
                 <th class="text-left" data-en="Session" data-zh="会话">Session</th>
                 <th class="text-left" data-en="Project" data-zh="项目">Project</th>
-                <th data-en="Turns" data-zh="响应数">Turns</th>
-                <th data-en="Duration" data-zh="时长">Duration</th>
-                <th data-en="Cost" data-zh="费用">Cost</th>
+                <th style="text-align:right;" data-en="Turns" data-zh="响应数">Turns</th>
+                <th style="text-align:right;" data-en="Cost" data-zh="费用">Cost</th>
             </tr></thead><tbody>"#).unwrap();
-            for s in top3 {
-                writeln!(out, "<tr><td class=\"text-left\">{}</td><td class=\"text-left\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            for s in top5 {
+                writeln!(out, "<tr><td class=\"text-left\">{}</td><td class=\"text-left\">{}</td><td style=\"text-align:right;\">{}</td><td style=\"text-align:right;font-weight:600;\">{}</td></tr>",
                     escape_html(&s.session_id[..s.session_id.len().min(8)]),
                     escape_html(&s.project_display_name),
                     s.turn_count,
-                    format_duration(s.duration_minutes),
                     format_cost(s.cost),
                 ).unwrap();
             }
@@ -691,15 +855,11 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
         }
     }
 
-    // Row 2: Heatmap
-    writeln!(out, r#"<div class="grid-2" style="margin-top:16px;">"#).unwrap();
-
-    // Chart 3: Heatmap (Weekday x Hour) - now with local timezone
+    // Right: Heatmap
     {
         let canvas_id = format!("heatmap-{}", pfx);
         writeln!(out, r#"<div class="card">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Activity Heatmap (Local Time)" data-zh="活跃热力图（本地时间）">Activity Heatmap (Local Time)</h2>"#).unwrap();
-        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each cell = number of turns in that hour slot (local timezone). Rows = weekdays, columns = hours (00-23). Darker = more active." data-zh="每个格子 = 该时段的 turn 数量（本地时区）。行 = 星期几，列 = 小时（00-23）。颜色越深 = 越活跃。">Each cell = number of turns in that hour slot (local timezone). Rows = weekdays, columns = hours (00-23). Darker = more active.</p>"#).unwrap();
         writeln!(out, r#"<div class="heatmap-wrap"><canvas id="{}"></canvas></div>"#, canvas_id).unwrap();
 
         let mut matrix_js = String::from("[");
@@ -723,12 +883,14 @@ document.addEventListener('DOMContentLoaded', function() {{
         writeln!(out, "</div>").unwrap();
     }
 
-    // Chart 4: Efficiency Scatter (Bubble, turns vs cost)
+    writeln!(out, "</div>").unwrap(); // close grid-2
+
+    // Bubble chart (full width, separate row)
     {
         let chart_id = format!("{}-scatterChart", pfx);
-        writeln!(out, r#"<div class="card">"#).unwrap();
+        writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Session Efficiency (Turns vs Cost)" data-zh="会话效率（Turns vs 费用）">Session Efficiency (Turns vs Cost)</h2>"#).unwrap();
-        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions." data-zh="每个气泡 = 一个会话。X = turn 数，Y = 费用。气泡大小 = 输出 token。右上角 = 昂贵的长会话。">Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions.</p>"#).unwrap();
+        writeln!(out, r#"<p style="color:var(--text-secondary);font-size:12px;margin-bottom:8px;" data-en="Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions." data-zh="每个气泡 = 一个会话。X = turn 数，Y = 费用。气泡大小 = 输出 token。右上角 = 昂贵的长会话。">Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions.</p>"#).unwrap();
         writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
         let max_output: u64 = overview.session_summaries.iter().map(|s| s.output_tokens).max().unwrap_or(1);
@@ -750,8 +912,8 @@ new Chart(document.getElementById('{chart_id}'), {{
     datasets: [{{
       label: 'Sessions',
       data: {data},
-      backgroundColor: 'rgba(88,166,255,0.4)',
-      borderColor: '#58a6ff',
+      backgroundColor: 'rgba(59,130,246,0.4)',
+      borderColor: '#3b82f6',
       borderWidth: 1
     }}]
   }},
@@ -767,23 +929,21 @@ new Chart(document.getElementById('{chart_id}'), {{
       }} }}
     }},
     scales: {{
-      x: {{ title: {{ display: true, text: 'Turn Count', color: '#8b949e' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ title: {{ display: true, text: 'Cost ($)', color: '#8b949e' }}, ticks: {{ color: '#8b949e', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#21262d' }} }}
+      x: {{ title: {{ display: true, text: 'Turn Count', color: '#a1a1aa' }}, ticks: {{ color: '#a1a1aa' }}, grid: {{ color: '#27272a' }} }},
+      y: {{ title: {{ display: true, text: 'Cost ($)', color: '#a1a1aa' }}, ticks: {{ color: '#a1a1aa', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#27272a' }} }}
     }}
   }}
 }});
 </script>"#, chart_id = chart_id, data = scatter_data).unwrap();
         writeln!(out, "</div>").unwrap();
     }
-
-    writeln!(out, "</div>").unwrap(); // close grid-2
 }
 
 // ─── Tab 2: Monthly ──────────────────────────────────────────────────────────
 
 fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &TrendResult, pfx: &str) {
     if trend.entries.is_empty() {
-        writeln!(out, r#"<div class="card"><p style="color:#8b949e;">No trend data available.</p></div>"#).unwrap();
+        writeln!(out, r#"<div class="card"><p style="color:var(--text-secondary);">No trend data available.</p></div>"#).unwrap();
         return;
     }
 
@@ -795,6 +955,7 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
     let mut month_turns = 0usize;
     let mut month_sessions = 0usize;
     let mut month_output = 0u64;
+    let mut month_input = 0u64;
 
     let mut daily_entries: Vec<&crate::analysis::TrendEntry> = Vec::new();
 
@@ -804,20 +965,21 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
             month_turns += entry.turn_count;
             month_sessions += entry.session_count;
             month_output += entry.tokens.output_tokens;
+            month_input += entry.tokens.input_tokens + entry.tokens.cache_creation_tokens + entry.tokens.cache_read_tokens;
             daily_entries.push(entry);
         }
     }
 
-    let avg_cost_per_turn = if month_turns > 0 { month_cost / month_turns as f64 } else { 0.0 };
+    let _avg_cost_per_turn = if month_turns > 0 { month_cost / month_turns as f64 } else { 0.0 };
 
     // KPI cards for current month
     writeln!(out, r#"<h2 data-en="Current Period: {m}" data-zh="当前周期：{m}">Current Period: {m}</h2>"#, m = escape_html(latest_month)).unwrap();
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
     write_kpi_i18n(out, &format_number(month_sessions as u64), "Sessions", "会话数");
     write_kpi_i18n(out, &format_number(month_turns as u64), "Turns", "响应数");
+    write_kpi_i18n(out, &format_compact(month_input), "Input Tokens", "输入 Token");
     write_kpi_i18n(out, &format_compact(month_output), "Output Tokens", "输出 Token");
     write_kpi_i18n(out, &format_cost(month_cost), "Cost", "费用");
-    write_kpi_i18n(out, &format!("${:.4}", avg_cost_per_turn), "Avg Cost/Turn", "平均每 Turn 费用");
     writeln!(out, "</div>").unwrap();
 
     // Chart: Daily Cost + Cost/Turn combo chart
@@ -844,8 +1006,8 @@ new Chart(document.getElementById('{chart_id}'), {{
       {{
         label: 'Cost ($)',
         data: [{cost_data}],
-        backgroundColor: 'rgba(88,166,255,0.6)',
-        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(59,130,246,0.6)',
+        borderColor: '#3b82f6',
         borderWidth: 1,
         borderRadius: 4,
         yAxisID: 'y',
@@ -855,8 +1017,8 @@ new Chart(document.getElementById('{chart_id}'), {{
         label: 'Cost/Turn ($)',
         data: [{cpt_data}],
         type: 'line',
-        borderColor: '#ffd93d',
-        backgroundColor: 'rgba(255,217,61,0.1)',
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245,158,11,0.1)',
         pointRadius: 3,
         tension: 0.3,
         yAxisID: 'y1',
@@ -867,7 +1029,7 @@ new Chart(document.getElementById('{chart_id}'), {{
   options: {{
     responsive: true, maintainAspectRatio: false,
     plugins: {{
-      legend: {{ labels: {{ color: '#c9d1d9' }} }},
+      legend: {{ labels: {{ color: '#fafafa' }} }},
       tooltip: {{ callbacks: {{
         afterLabel: function(ctx) {{
           const turns = [{turn_data}];
@@ -876,9 +1038,9 @@ new Chart(document.getElementById('{chart_id}'), {{
       }} }}
     }},
     scales: {{
-      x: {{ ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ position: 'left', ticks: {{ color: '#8b949e', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Cost ($)', color: '#8b949e' }} }},
-      y1: {{ position: 'right', ticks: {{ color: '#ffd93d', callback: function(v) {{ return '$' + v.toFixed(3); }} }}, grid: {{ drawOnChartArea: false }}, title: {{ display: true, text: 'Cost/Turn ($)', color: '#ffd93d' }} }}
+      x: {{ ticks: {{ color: '#a1a1aa' }}, grid: {{ color: '#27272a' }} }},
+      y: {{ position: 'left', ticks: {{ color: '#a1a1aa', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#27272a' }}, title: {{ display: true, text: 'Cost ($)', color: '#a1a1aa' }} }},
+      y1: {{ position: 'right', ticks: {{ color: '#f59e0b', callback: function(v) {{ return '$' + v.toFixed(3); }} }}, grid: {{ drawOnChartArea: false }}, title: {{ display: true, text: 'Cost/Turn ($)', color: '#f59e0b' }} }}
     }}
   }}
 }});
@@ -905,46 +1067,37 @@ new Chart(document.getElementById('{chart_id}'), {{
         }
         all_models.sort();
 
-        if all_models.len() > 1 || (!all_models.is_empty() && daily_entries.len() > 1) {
-            let chart_id = format!("{}-modelDistChart", pfx);
+        if daily_entries.len() > 1 {
+            let chart_id = format!("{}-dailyTurnsCostChart", pfx);
             writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-            writeln!(out, r#"<h2 data-en="Model Usage per Day (Output Tokens)" data-zh="每日模型使用（输出 Token）">Model Usage per Day (Output Tokens)</h2>"#).unwrap();
+            writeln!(out, r#"<h2 data-en="Daily Turns &amp; Cost" data-zh="每日响应数与费用">Daily Turns &amp; Cost</h2>"#).unwrap();
             writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
             let labels: Vec<String> = daily_entries.iter().map(|e| format!("\"{}\"", &e.label[5..])).collect();
-
-            let mut datasets = String::new();
-            for (mi, model_short) in all_models.iter().enumerate() {
-                if mi > 0 { datasets.push(','); }
-                let values: Vec<String> = daily_entries.iter().map(|e| {
-                    // Sum output tokens for all variants of this short model name
-                    let total: u64 = e.models.iter()
-                        .filter(|(k, _)| short_model(k) == *model_short)
-                        .map(|(_, v)| *v)
-                        .sum();
-                    total.to_string()
-                }).collect();
-                write!(datasets, "{{label:\"{}\",data:[{}],backgroundColor:\"{}\",borderWidth:0,borderRadius:2}}",
-                    escape_html(model_short), values.join(","), color(mi)).unwrap();
-            }
+            let turns_data: Vec<String> = daily_entries.iter().map(|e| e.turn_count.to_string()).collect();
+            let cost_data: Vec<String> = daily_entries.iter().map(|e| format!("{:.2}", e.cost)).collect();
 
             writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
   type: 'bar',
   data: {{
     labels: [{labels}],
-    datasets: [{datasets}]
+    datasets: [
+      {{label:'Turns',data:[{turns}],backgroundColor:'rgba(59,130,246,0.5)',borderColor:'#3b82f6',borderWidth:1,borderRadius:3,yAxisID:'y'}},
+      {{label:'Cost ($)',data:[{cost}],type:'line',borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,0.1)',fill:true,pointRadius:3,tension:0.3,yAxisID:'y1'}}
+    ]
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ labels: {{ color: '#c9d1d9' }} }} }},
+    plugins: {{ legend: {{ labels: {{ color: 'var(--text-secondary)' }} }} }},
     scales: {{
-      x: {{ stacked: true, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ stacked: true, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Output Tokens', color: '#8b949e' }} }}
+      x: {{ ticks: {{ color: 'var(--text-secondary)' }}, grid: {{ color: 'var(--border-color)' }} }},
+      y: {{ position:'left', ticks: {{ color: '#3b82f6' }}, grid: {{ color: 'var(--border-color)' }}, title: {{ display:true, text:'Turns', color:'#3b82f6' }} }},
+      y1: {{ position:'right', ticks: {{ color: '#22c55e', callback: function(v){{ return '$'+v; }} }}, grid: {{ drawOnChartArea:false }}, title: {{ display:true, text:'Cost ($)', color:'#22c55e' }} }}
     }}
   }}
 }});
-</script>"#, chart_id = chart_id, labels = labels.join(","), datasets = datasets).unwrap();
+</script>"#, chart_id = chart_id, labels = labels.join(","), turns = turns_data.join(","), cost = cost_data.join(",")).unwrap();
             writeln!(out, "</div>").unwrap();
         }
     }
@@ -952,16 +1105,18 @@ new Chart(document.getElementById('{chart_id}'), {{
     // Table: Monthly summary (aggregate by month if multi-month data)
     {
         // Group trend entries by month
-        let mut months: std::collections::BTreeMap<String, (usize, usize, u64, u64, u64, f64)> = std::collections::BTreeMap::new();
+        #[allow(clippy::type_complexity)]
+        let mut months: std::collections::BTreeMap<String, (usize, usize, u64, u64, u64, f64, u64)> = std::collections::BTreeMap::new();
         for entry in &trend.entries {
             let month_key = entry.label[..7].to_string();
-            let e = months.entry(month_key).or_insert((0, 0, 0, 0, 0, 0.0));
+            let e = months.entry(month_key).or_insert((0, 0, 0, 0, 0, 0.0, 0));
             e.0 += entry.session_count;
             e.1 += entry.turn_count;
             e.2 += entry.tokens.output_tokens;
             e.3 += entry.tokens.cache_creation_tokens;
             e.4 += entry.tokens.cache_read_tokens;
             e.5 += entry.cost;
+            e.6 += entry.tokens.input_tokens + entry.tokens.cache_creation_tokens + entry.tokens.cache_read_tokens;
         }
 
         if months.len() > 1 {
@@ -974,27 +1129,26 @@ new Chart(document.getElementById('{chart_id}'), {{
                 <th class=\"text-left\" onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Month\" data-zh=\"月份\">Month</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Turns\" data-zh=\"响应数\">Turns</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Input Tokens\" data-zh=\"输入 Token\">Input Tokens</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output Tokens\" data-zh=\"输出 Token\">Output Tokens</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost/Turn\" data-zh=\"每 Turn 费用\">Cost/Turn</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
             </tr></thead>", id = tbl_id).unwrap();
             writeln!(out, "<tbody>").unwrap();
 
-            for (month, (sessions, turns, output, _cache_write, _cache_read, cost)) in &months {
-                let cpt = if *turns > 0 { cost / *turns as f64 } else { 0.0 };
+            for (month, (sessions, turns, output, _cache_write, _cache_read, cost, input_ctx)) in &months {
                 writeln!(out, "<tr>\
                     <td class=\"text-left\" data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
-                    <td data-value=\"{:.6}\">${:.4}</td>\
+                    <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{:.4}\">{}</td>\
                 </tr>",
                     escape_html(month), escape_html(month),
                     sessions, format_number(*sessions as u64),
                     turns, format_number(*turns as u64),
+                    input_ctx, format_compact(*input_ctx),
                     output, format_compact(*output),
-                    cpt, cpt,
                     cost, format_cost(*cost),
                 ).unwrap();
             }
@@ -1094,8 +1248,8 @@ new Chart(document.getElementById('{chart_id}'), {{
     indexAxis: 'y', responsive: true, maintainAspectRatio: false,
     plugins: {{ legend: {{ display: false }}, tooltip: {{ callbacks: {{ label: function(ctx) {{ return '$' + ctx.raw.toFixed(2); }} }} }} }},
     scales: {{
-      x: {{ ticks: {{ color: '#8b949e', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#21262d' }} }},
-      y: {{ ticks: {{ color: '#c9d1d9' }}, grid: {{ color: '#21262d' }} }}
+      x: {{ ticks: {{ color: '#a1a1aa', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#27272a' }} }},
+      y: {{ ticks: {{ color: '#fafafa' }}, grid: {{ color: '#27272a' }} }}
     }}
   }}
 }});
@@ -1201,7 +1355,7 @@ new Chart(document.getElementById('{chart_id}'), {{
                 let short_sid = &s.session_id[..s.session_id.len().min(10)];
 
                 writeln!(out, "\
-                    <td class=\"text-left\" style=\"padding-left:30px;\">{sid} <span style=\"color:#8b949e;font-size:11px;\">(<span data-utc-datetime=\"{utc}\">{date}</span> &middot; {dur})</span></td>\
+                    <td class=\"text-left\" style=\"padding-left:30px;\">{sid} <span style=\"color:var(--text-tertiary);font-size:11px;\">(<span data-utc-datetime=\"{utc}\">{date}</span> &middot; {dur})</span></td>\
                     <td></td>\
                     <td class=\"turn-count-cell\" data-value=\"{turns}\">{turns_display}</td>\
                     <td data-value=\"{out}\">{out_fmt}</td>\
@@ -1240,22 +1394,6 @@ fn render_turn_detail_table(out: &mut String, turns: &[crate::analysis::TurnDeta
     render_turn_table_impl(out, turns, table_id);
 }
 
-// ─── Footer ──────────────────────────────────────────────────────────────────
-
-fn render_footer(out: &mut String, calc: &PricingCalculator) {
-    let stale_warning = if PricingCalculator::is_pricing_stale() {
-        format!(r#"<p class="stale-warning">Warning: Price data is {} days old, costs may be inaccurate!</p>"#,
-            PricingCalculator::pricing_age_days())
-    } else { String::new() };
-    let _ = calc;
-
-    let now_local = Local::now().format("%Y-%m-%d %H:%M");
-    writeln!(out, r#"<div class="footer">
-  {}
-  <p>Price data: {} ({}) | Generated by cc-token-analyzer at {}</p>
-</div>"#, stale_warning, PRICING_SOURCE, PRICING_FETCH_DATE, now_local).unwrap();
-}
-
 // ─── KPI Card Helper ─────────────────────────────────────────────────────────
 
 fn write_kpi(out: &mut String, value: &str, label: &str) {
@@ -1269,21 +1407,9 @@ fn write_kpi_i18n(out: &mut String, value: &str, en: &str, zh: &str) {
         value, en, zh, en).unwrap();
 }
 
-/// KPI card with a progress bar for percentage values, bilingual label.
-fn write_kpi_progress(out: &mut String, pct: f64, en: &str, zh: &str) {
-    let bar_color = if pct >= 90.0 { "#6bcb77" } else if pct >= 70.0 { "#ffd93d" } else { "#ff6b6b" };
-    writeln!(out, r#"<div class="card" style="text-align:center;">
-        <div class="kpi-value">{:.1}%</div>
-        <div style="margin:4px auto;width:120px;"><div class="progress-bar" style="width:120px;">
-            <div class="progress-fill" style="width:{:.1}%;background:{};"></div>
-        </div></div>
-        <div class="kpi-label" data-en="{}" data-zh="{}">{}</div>
-    </div>"#, pct, pct, bar_color, en, zh, en).unwrap();
-}
-
 /// Render a progress bar inline for table cells.
 fn html_progress(pct: f64) -> String {
-    let bar_color = if pct >= 90.0 { "#6bcb77" } else if pct >= 70.0 { "#ffd93d" } else { "#ff6b6b" };
+    let bar_color = if pct >= 90.0 { "#22c55e" } else if pct >= 70.0 { "#f59e0b" } else { "#ef4444" };
     format!(r#"<div class="progress-bar"><div class="progress-fill" style="width:{:.1}%;background:{};"></div></div><span class="progress-text">{:.1}%</span>"#,
         pct, bar_color, pct)
 }
@@ -1303,15 +1429,19 @@ pub fn render_session_html(result: &SessionResult) -> String {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Session {short_id} - Claude Code Token Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>{js_head}</script>
   <style>{css}</style>
 </head>
 <body>
-"#, short_id = escape_html(short_id), css = css()).unwrap();
+"#, short_id = escape_html(short_id), css = css(), js_head = js_head()).unwrap();
 
     // Header
     writeln!(out, r#"<div class="header-row">"#).unwrap();
     writeln!(out, "<h1>Session Analysis</h1>").unwrap();
+    writeln!(out, r#"<button class="theme-btn" onclick="toggleTheme()" style="margin-left:auto;">&#x2600;&#xFE0F;</button>"#).unwrap();
     writeln!(out, r#"<span class="subtitle">{} &middot; {}</span>"#,
         escape_html(&result.session_id), escape_html(&result.project)).unwrap();
     writeln!(out, "</div>").unwrap();
@@ -1355,17 +1485,17 @@ new Chart(document.getElementById('contextChart'), {{
     datasets: [{{
       label: 'Context Size',
       data: [{sizes}],
-      borderColor: '#58a6ff',
-      backgroundColor: 'rgba(88,166,255,0.1)',
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59,130,246,0.1)',
       fill: true, tension: 0.3, pointRadius: {pr}
     }}]
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ labels: {{ color: '#c9d1d9' }} }} }},
+    plugins: {{ legend: {{ labels: {{ color: '#fafafa' }} }} }},
     scales: {{
-      x: {{ title: {{ display: true, text: 'Turn', color: '#8b949e' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ title: {{ display: true, text: 'Context Tokens', color: '#8b949e' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }}
+      x: {{ title: {{ display: true, text: 'Turn', color: '#a1a1aa' }}, ticks: {{ color: '#a1a1aa' }}, grid: {{ color: '#27272a' }} }},
+      y: {{ title: {{ display: true, text: 'Context Tokens', color: '#a1a1aa' }}, ticks: {{ color: '#a1a1aa' }}, grid: {{ color: '#27272a' }} }}
     }}
   }}
 }});
@@ -1395,17 +1525,17 @@ new Chart(document.getElementById('cacheChart'), {{
     datasets: [{{
       label: 'Cache Hit Rate (%)',
       data: [{rates}],
-      borderColor: '#ffd93d',
-      backgroundColor: 'rgba(255,217,61,0.1)',
+      borderColor: '#f59e0b',
+      backgroundColor: 'rgba(245,158,11,0.1)',
       fill: true, tension: 0.3, pointRadius: {pr}
     }}]
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ labels: {{ color: '#c9d1d9' }} }} }},
+    plugins: {{ legend: {{ labels: {{ color: '#fafafa' }} }} }},
     scales: {{
-      x: {{ title: {{ display: true, text: 'Turn', color: '#8b949e' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ title: {{ display: true, text: 'Hit Rate (%)', color: '#8b949e' }}, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }}, min: 0, max: 100 }}
+      x: {{ title: {{ display: true, text: 'Turn', color: '#a1a1aa' }}, ticks: {{ color: '#a1a1aa' }}, grid: {{ color: '#27272a' }} }},
+      y: {{ title: {{ display: true, text: 'Hit Rate (%)', color: '#a1a1aa' }}, ticks: {{ color: '#a1a1aa' }}, grid: {{ color: '#27272a' }}, min: 0, max: 100 }}
     }}
   }}
 }});
@@ -1442,7 +1572,7 @@ new Chart(document.getElementById('stopReasonChart'), {{
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
-    plugins: {{ legend: {{ position: 'bottom', labels: {{ color: '#c9d1d9' }} }} }}
+    plugins: {{ legend: {{ position: 'bottom', labels: {{ color: '#fafafa' }} }} }}
   }}
 }});
 </script>"#,
@@ -1459,12 +1589,6 @@ new Chart(document.getElementById('stopReasonChart'), {{
 
     // ── JavaScript ───────────────────────────────────────────────────────────
     write!(out, "<script>{}</script>", js_common()).unwrap();
-
-    // ── Footer ───────────────────────────────────────────────────────────────
-    let now = Local::now().format("%Y-%m-%d %H:%M");
-    writeln!(out, r#"<div class="footer">
-  <p>Session: {} | Generated by cc-token-analyzer at {}</p>
-</div>"#, escape_html(&result.session_id), now).unwrap();
 
     writeln!(out, "</body>\n</html>").unwrap();
     out
@@ -1493,7 +1617,7 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
         let row_class = if t.is_compaction {
             " class=\"compact-row\""
         } else if t.is_agent {
-            " style=\"border-left:2px solid #58a6ff;\""
+            " style=\"border-left:2px solid var(--text-accent);\""
         } else {
             ""
         };
