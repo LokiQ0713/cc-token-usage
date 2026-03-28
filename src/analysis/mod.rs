@@ -166,6 +166,17 @@ pub struct AgentSummary {
     pub total_agent_turns: usize,
     pub agent_output_tokens: u64,
     pub agent_cost: f64,
+    pub agents: Vec<AgentDetail>,
+}
+
+#[derive(Debug)]
+pub struct AgentDetail {
+    pub agent_id: String,
+    pub agent_type: String,
+    pub description: String,
+    pub turns: usize,
+    pub output_tokens: u64,
+    pub cost: f64,
 }
 
 // ─── Session Summary ────────────────────────────────────────────────────────

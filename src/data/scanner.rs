@@ -178,6 +178,39 @@ pub fn resolve_agent_parents(files: &mut [SessionFile]) -> Result<()> {
     Ok(())
 }
 
+/// Load agent metadata from .meta.json files for a given session.
+/// Returns a map of agent_id (without "agent-" prefix) -> (agentType, description).
+pub fn load_agent_meta(session_id: &str, claude_home: &Path) -> std::collections::HashMap<String, (String, String)> {
+    let mut result = std::collections::HashMap::new();
+    let projects_dir = claude_home.join("projects");
+    if !projects_dir.exists() { return result; }
+
+    // Search all project dirs for <session_id>/subagents/agent-*.meta.json
+    if let Ok(entries) = fs::read_dir(&projects_dir) {
+        for entry in entries.flatten() {
+            let subagents_dir = entry.path().join(session_id).join("subagents");
+            if !subagents_dir.exists() { continue; }
+
+            if let Ok(sub_entries) = fs::read_dir(&subagents_dir) {
+                for sub_entry in sub_entries.flatten() {
+                    let name = sub_entry.file_name().to_string_lossy().to_string();
+                    if !name.ends_with(".meta.json") { continue; }
+                    let agent_id = name.trim_start_matches("agent-").trim_end_matches(".meta.json");
+
+                    if let Ok(content) = fs::read_to_string(sub_entry.path()) {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                            let agent_type = val.get("agentType").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                            let description = val.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            result.insert(agent_id.to_string(), (agent_type, description));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

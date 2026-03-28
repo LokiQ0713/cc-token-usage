@@ -133,7 +133,13 @@ fn main() -> Result<()> {
                 bail!("specify a session ID or use --latest");
             };
 
-            let result = analyze_session(session, &calc);
+            // Load agent metadata for this session
+            let raw_meta = cc_token_usage::data::scanner::load_agent_meta(&session.session_id, &claude_home);
+            let agent_meta: std::collections::HashMap<String, cc_token_usage::analysis::session::AgentMeta> = raw_meta.into_iter()
+                .map(|(k, (t, d))| (k, cc_token_usage::analysis::session::AgentMeta { agent_type: t, description: d }))
+                .collect();
+
+            let result = analyze_session(session, &calc, &agent_meta);
 
             match cli.format {
                 OutputFormat::Text => {

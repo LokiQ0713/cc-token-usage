@@ -3,11 +3,19 @@ use std::collections::HashMap;
 use crate::data::models::SessionData;
 use crate::pricing::calculator::PricingCalculator;
 
-use super::{AgentSummary, AggregatedTokens, SessionResult, TurnCostBreakdown, TurnDetail};
+use super::{AgentDetail, AgentSummary, AggregatedTokens, SessionResult, TurnCostBreakdown, TurnDetail};
+
+/// Agent metadata loaded from .meta.json files.
+#[derive(Debug, Clone, Default)]
+pub struct AgentMeta {
+    pub agent_type: String,
+    pub description: String,
+}
 
 pub fn analyze_session(
     session: &SessionData,
     calc: &PricingCalculator,
+    agent_meta: &std::collections::HashMap<String, AgentMeta>,
 ) -> SessionResult {
     let all_turns = session.all_responses();
 
@@ -19,6 +27,7 @@ pub fn analyze_session(
     let mut model_counts: HashMap<&str, usize> = HashMap::new();
     let mut max_context: u64 = 0;
     let mut prev_context_size: Option<u64> = None;
+    let mut agent_acc: HashMap<String, (usize, u64, f64)> = HashMap::new();
 
     for (i, turn) in all_turns.iter().enumerate() {
         let input = turn.usage.input_tokens.unwrap_or(0);
@@ -88,6 +97,15 @@ pub fn analyze_session(
             agent_summary.total_agent_turns += 1;
             agent_summary.agent_output_tokens += output;
             agent_summary.agent_cost += pricing_cost.total;
+
+            // Per-agent accumulation
+            let aid = turn.agent_id.clone().unwrap_or_default();
+            if !aid.is_empty() {
+                let entry = agent_acc.entry(aid).or_insert((0usize, 0u64, 0.0f64));
+                entry.0 += 1;
+                entry.1 += output;
+                entry.2 += pricing_cost.total;
+            }
         }
 
         turn_details.push(TurnDetail {
@@ -136,6 +154,21 @@ pub fn analyze_session(
     } else {
         0.0
     };
+
+    // Per-agent details
+    let mut agents: Vec<AgentDetail> = agent_acc.into_iter().map(|(aid, (turns, output, cost))| {
+        let meta = agent_meta.get(&aid);
+        AgentDetail {
+            agent_id: aid,
+            agent_type: meta.map_or_else(|| "unknown".into(), |m| m.agent_type.clone()),
+            description: meta.map_or_else(|| "".into(), |m| m.description.clone()),
+            turns,
+            output_tokens: output,
+            cost,
+        }
+    }).collect();
+    agents.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+    agent_summary.agents = agents;
 
     // Primary model
     let model = model_counts

@@ -283,6 +283,39 @@ pub fn render_session(result: &SessionResult) -> String {
         result.compaction_count).unwrap();
     writeln!(out, "  Cost:      {}", format_cost(result.total_cost)).unwrap();
 
+    // Per-agent breakdown
+    if !result.agent_summary.agents.is_empty() {
+        writeln!(out).unwrap();
+        writeln!(out, "  Agent Breakdown").unwrap();
+        writeln!(out, "  {:<14} {:<40} {:>6} {:>10} {:>9}",
+            "Type", "Description", "Turns", "Output", "Cost").unwrap();
+        writeln!(out, "  {}", "-".repeat(83)).unwrap();
+
+        // Main agent line
+        let main_turns = result.turn_details.iter().filter(|t| !t.is_agent).count();
+        let main_output: u64 = result.turn_details.iter()
+            .filter(|t| !t.is_agent).map(|t| t.output_tokens).sum();
+        let main_cost = result.total_cost - result.agent_summary.agent_cost;
+        writeln!(out, "  {:<14} {:<40} {:>6} {:>10} {:>9}",
+            "main", "(this conversation)",
+            main_turns, format_number(main_output), format_cost(main_cost)).unwrap();
+
+        for agent in &result.agent_summary.agents {
+            let desc = if agent.description.len() > 40 {
+                format!("{}...", &agent.description[..agent.description.floor_char_boundary(37)])
+            } else {
+                agent.description.clone()
+            };
+            writeln!(out, "  {:<14} {:<40} {:>6} {:>10} {:>9}",
+                agent.agent_type,
+                desc,
+                agent.turns,
+                format_number(agent.output_tokens),
+                format_cost(agent.cost),
+            ).unwrap();
+        }
+    }
+
     out
 }
 
