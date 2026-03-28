@@ -7,7 +7,7 @@ use crate::pricing::calculator::PricingCalculator;
 
 use super::{
     AggregatedTokens, CacheSavings, CostByCategory, OverviewResult, SessionSummary,
-    SubscriptionValue, TurnCostBreakdown, TurnDetail,
+    SubscriptionValue,
 };
 
 pub fn analyze_overview(
@@ -68,16 +68,14 @@ pub fn analyze_overview(
     };
 
     // Build session summaries
-    let mut session_summaries: Vec<SessionSummary> = sessions
+    let session_summaries: Vec<SessionSummary> = sessions
         .iter()
         .map(|s| build_session_summary(s, calc))
         .collect();
 
-    // Populate turn_details for all sessions
-    for (idx, session) in sessions.iter().enumerate() {
-        let details = build_turn_details(session, calc);
-        session_summaries[idx].turn_details = Some(details);
-    }
+    // Note: turn_details intentionally left as None for overview.
+    // Individual session details are only generated for the session subcommand.
+    // This keeps the HTML report lightweight.
 
     // ── Cache savings calculation ───────────────────────────────────────────
     // Savings = what cache_read tokens would cost at base_input rate minus actual cache_read cost
@@ -328,78 +326,3 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
     }
 }
 
-/// Build turn-level details for a session (used by HTML report for expandable rows).
-fn build_turn_details(session: &SessionData, calc: &PricingCalculator) -> Vec<TurnDetail> {
-    let all_turns = session.all_responses();
-
-    let mut details = Vec::new();
-    let mut prev_context_size: Option<u64> = None;
-
-    for (i, turn) in all_turns.iter().enumerate() {
-        let input = turn.usage.input_tokens.unwrap_or(0);
-        let output = turn.usage.output_tokens.unwrap_or(0);
-        let cache_create = turn.usage.cache_creation_input_tokens.unwrap_or(0);
-        let cache_read = turn.usage.cache_read_input_tokens.unwrap_or(0);
-
-        let (cache_write_5m, cache_write_1h) = if let Some(ref detail) = turn.usage.cache_creation {
-            (
-                detail.ephemeral_5m_input_tokens.unwrap_or(0),
-                detail.ephemeral_1h_input_tokens.unwrap_or(0),
-            )
-        } else {
-            (0, 0)
-        };
-
-        let context_size = input + cache_create + cache_read;
-        let cache_hit_rate = if context_size > 0 {
-            (cache_read as f64 / context_size as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let is_compaction = match prev_context_size {
-            Some(prev) => prev > 0 && (context_size as f64) < (prev as f64 * 0.9),
-            None => false,
-        };
-        let context_delta = match prev_context_size {
-            Some(prev) => context_size as i64 - prev as i64,
-            None => 0,
-        };
-        prev_context_size = Some(context_size);
-
-        let pricing_cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
-
-        let cost_breakdown = TurnCostBreakdown {
-            input_cost: pricing_cost.input_cost,
-            output_cost: pricing_cost.output_cost,
-            cache_write_5m_cost: pricing_cost.cache_write_5m_cost,
-            cache_write_1h_cost: pricing_cost.cache_write_1h_cost,
-            cache_read_cost: pricing_cost.cache_read_cost,
-            total: pricing_cost.total,
-        };
-
-        details.push(TurnDetail {
-            turn_number: i + 1,
-            timestamp: turn.timestamp,
-            model: turn.model.clone(),
-            input_tokens: input,
-            output_tokens: output,
-            cache_write_5m_tokens: cache_write_5m,
-            cache_write_1h_tokens: cache_write_1h,
-            cache_read_tokens: cache_read,
-            context_size,
-            cache_hit_rate,
-            cost: pricing_cost.total,
-            cost_breakdown,
-            stop_reason: turn.stop_reason.clone(),
-            is_agent: turn.is_agent,
-            is_compaction,
-            context_delta,
-            user_text: turn.user_text.clone(),
-            assistant_text: turn.assistant_text.clone(),
-            tool_names: turn.tool_names.clone(),
-        });
-    }
-
-    details
-}

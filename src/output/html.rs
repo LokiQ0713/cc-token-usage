@@ -1,8 +1,7 @@
 use std::fmt::Write as _;
 
-use crate::analysis::{
-    AggregatedTokens, OverviewResult, ProjectResult, SessionResult, TrendResult,
-};
+use chrono::Local;
+use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
 use crate::pricing::calculator::{PricingCalculator, PRICING_FETCH_DATE, PRICING_SOURCE};
 
 // ─── Chart Colors ────────────────────────────────────────────────────────────
@@ -166,9 +165,20 @@ tr:hover { background: #1c2128; }
 .source-content.active { display: block; }
 .sub-tab-content { display: none; }
 .sub-tab-content.active { display: block; }
+.tool-tag { display: inline-block; padding: 1px 6px; margin: 1px 2px; border-radius: 4px; background: #21262d; color: #8b949e; font-size: 11px; white-space: nowrap; }
+.tool-tag .tool-count { color: #58a6ff; font-weight: 600; margin-left: 2px; }
+.session-tools-cell { max-width: 260px; line-height: 1.8; }
+.agent-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; background: #1f3a5f; color: #58a6ff; font-size: 11px; font-weight: 600; margin-left: 4px; }
+.turn-count-cell { white-space: nowrap; }
+.grid-1-2 { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; }
+.chart-container-sm { position: relative; height: 250px; margin: 12px 0; }
+.model-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.model-legend-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #8b949e; }
+.model-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 @media (max-width: 900px) {
   .grid-2x2 { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
+  .grid-1-2 { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 }
 "#
@@ -248,20 +258,39 @@ function toggleProject(btn, projectId) {
   btn.textContent = isHidden ? '\u25bc' : '\u25b6';
 }
 
+function shiftHeatmapToLocal(data) {
+  // Shift heatmap data from UTC to local timezone
+  const offset = -(new Date().getTimezoneOffset() / 60); // e.g. +8 for CST
+  const out = Array.from({length:7}, () => new Array(24).fill(0));
+  for (let d = 0; d < 7; d++) {
+    for (let h = 0; h < 24; h++) {
+      let newH = h + offset;
+      let newD = d;
+      if (newH >= 24) { newH -= 24; newD = (newD + 1) % 7; }
+      else if (newH < 0) { newH += 24; newD = (newD + 6) % 7; }
+      out[newD][newH] += data[d][h];
+    }
+  }
+  return out;
+}
+
 function drawHeatmap(canvasId, data) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const cellW = 28, cellH = 28, padL = 40, padT = 30;
+  const localData = shiftHeatmapToLocal(data);
+  const zhDays = ['周一','周二','周三','周四','周五','周六','周日'];
+  const enDays = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const days = (currentLang === 'zh') ? zhDays : enDays;
+  const cellW = 28, cellH = 28, padL = 44, padT = 30;
   canvas.width = padL + 24 * cellW + 10;
   canvas.height = padT + 7 * cellH + 10;
 
-  const max = Math.max(...data.flat(), 1);
+  const max = Math.max(...localData.flat(), 1);
 
   for (let d = 0; d < 7; d++) {
     for (let h = 0; h < 24; h++) {
-      const val = data[d][h];
+      const val = localData[d][h];
       const intensity = val / max;
       const r = Math.round(13 + intensity * 75);
       const g = Math.round(17 + intensity * 130);
@@ -347,8 +376,36 @@ function applyLang() {
   });
   const btn = document.getElementById('lang-btn');
   if (btn) btn.textContent = currentLang === 'en' ? '中文' : 'EN';
+  // Redraw heatmaps with localized day names
+  for (const key of Object.keys(window)) {
+    if (key.startsWith('_heatmapData_')) {
+      const pfx = key.replace('_heatmapData_', '');
+      drawHeatmap('heatmap-' + pfx, window[key]);
+    }
+  }
 }
-document.addEventListener('DOMContentLoaded', applyLang);
+// Convert UTC timestamps to local timezone
+function convertTimestamps() {
+  document.querySelectorAll('[data-utc]').forEach(el => {
+    const utc = el.getAttribute('data-utc');
+    const d = new Date(utc);
+    if (!isNaN(d)) {
+      const pad = n => String(n).padStart(2, '0');
+      el.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+      el.title = d.toLocaleString();
+    }
+  });
+  document.querySelectorAll('[data-utc-datetime]').forEach(el => {
+    const utc = el.getAttribute('data-utc-datetime');
+    const d = new Date(utc);
+    if (!isNaN(d)) {
+      const pad = n => String(n).padStart(2, '0');
+      el.textContent = pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      el.title = d.toLocaleString();
+    }
+  });
+}
+document.addEventListener('DOMContentLoaded', function() { applyLang(); convertTimestamps(); });
 "#
 }
 
@@ -538,6 +595,8 @@ pub fn render_dual_report_html(
 fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     // KPI cards
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
+    write_kpi_i18n(out, &format_number(overview.total_sessions as u64), "Sessions / 会话", "会话数");
+    write_kpi_i18n(out, &format_number(overview.total_turns as u64), "Turns / 响应", "Turn 总数");
     write_kpi_i18n(out, &format_compact(overview.total_output_tokens), "Claude Wrote", "Claude 写了");
     write_kpi_i18n(out, &format_compact(overview.total_context_tokens), "Claude Read", "Claude 读了");
     write_kpi_progress(out, overview.avg_cache_hit_rate, "Avg Cache Hit Rate");
@@ -549,83 +608,110 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     }
     writeln!(out, "</div>").unwrap();
 
-    // Charts 2x2 grid
-    writeln!(out, r#"<div class="grid-2x2">"#).unwrap();
+    // Row 1: Tool Usage Ranking + Session Cost Distribution
+    writeln!(out, r#"<div class="grid-2">"#).unwrap();
 
-    // Chart 1: Model Usage Distribution (Doughnut, by output_tokens)
-    {
-        let chart_id = format!("{}-modelUsageChart", pfx);
+    // Chart 1: Tool Usage Ranking (Horizontal Bar)
+    if !overview.tool_counts.is_empty() {
+        let chart_id = format!("{}-toolRankChart", pfx);
+        let top_tools: Vec<&(String, usize)> = overview.tool_counts.iter().take(15).collect();
         writeln!(out, r#"<div class="card">"#).unwrap();
-        writeln!(out, "<h2>Model Usage (Output Tokens)</h2>").unwrap();
+        writeln!(out, r#"<h2 data-en="Tool Usage Ranking" data-zh="工具使用排行">Tool Usage Ranking</h2>"#).unwrap();
         writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
-        let mut models: Vec<(&String, &AggregatedTokens)> = overview.tokens_by_model.iter().collect();
-        models.sort_by(|a, b| b.1.output_tokens.cmp(&a.1.output_tokens));
-
-        let labels: Vec<String> = models.iter().map(|(m, _)| format!("\"{}\"", short_model(m))).collect();
-        let data: Vec<String> = models.iter().map(|(_, t)| t.output_tokens.to_string()).collect();
-        let colors_list: Vec<String> = (0..models.len()).map(|i| format!("\"{}\"", color(i))).collect();
+        let labels: Vec<String> = top_tools.iter().map(|(name, _)| format!("\"{}\"", escape_html(name))).collect();
+        let data: Vec<String> = top_tools.iter().map(|(_, count)| count.to_string()).collect();
+        let colors_list: Vec<String> = (0..top_tools.len()).map(|i| format!("\"{}\"", color(i))).collect();
 
         writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
-  type: 'doughnut',
+  type: 'bar',
   data: {{
     labels: [{labels}],
-    datasets: [{{ data: [{data}], backgroundColor: [{colors}], borderWidth: 0 }}]
+    datasets: [{{ label: 'Count', data: [{data}], backgroundColor: [{colors}], borderWidth: 0, borderRadius: 4 }}]
   }},
   options: {{
-    responsive: true, maintainAspectRatio: false,
-    plugins: {{
-      legend: {{ position: 'bottom', labels: {{ color: '#c9d1d9' }} }}
+    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{
+      x: {{ ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
+      y: {{ ticks: {{ color: '#c9d1d9', font: {{ size: 11 }} }}, grid: {{ color: '#21262d' }} }}
     }}
   }}
 }});
-</script>"#,
-            chart_id = chart_id,
-            labels = labels.join(","), data = data.join(","), colors = colors_list.join(",")).unwrap();
+</script>"#, chart_id = chart_id, labels = labels.join(","), data = data.join(","), colors = colors_list.join(",")).unwrap();
         writeln!(out, "</div>").unwrap();
     }
 
-    // Chart 2: Cost by Category (Doughnut)
-    {
-        let chart_id = format!("{}-costCatChart", pfx);
+    // Chart 2: Session Cost Distribution (Histogram)
+    if !overview.session_summaries.is_empty() {
+        let chart_id = format!("{}-costDistChart", pfx);
         writeln!(out, r#"<div class="card">"#).unwrap();
-        writeln!(out, "<h2>Cost by Category</h2>").unwrap();
+        writeln!(out, r#"<h2 data-en="Session Cost Distribution" data-zh="会话费用分布">Session Cost Distribution</h2>"#).unwrap();
+        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Number of sessions in each cost range. Helps identify your typical session cost and expensive outliers." data-zh="每个费用区间的会话数量。帮助识别典型会话费用和昂贵的异常值。">Number of sessions in each cost range. Helps identify your typical session cost and expensive outliers.</p>"#).unwrap();
         writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
-        let cat = &overview.cost_by_category;
-        let labels = r#""Input","Output","Cache Write 5m","Cache Write 1h","Cache Read""#;
-        let data = format!("{:.2},{:.2},{:.2},{:.2},{:.2}",
-            cat.input_cost, cat.output_cost, cat.cache_write_5m_cost,
-            cat.cache_write_1h_cost, cat.cache_read_cost);
-        let colors_str = format!(r#""{}","{}","{}","{}","{}""#,
-            color(0), color(1), color(2), color(3), color(4));
+        // Build histogram buckets
+        let costs: Vec<f64> = overview.session_summaries.iter().map(|s| s.cost).collect();
+        let max_cost = costs.iter().cloned().fold(0.0f64, f64::max);
+        let bucket_count = 12usize;
+        let bucket_size = if max_cost > 0.0 { (max_cost / bucket_count as f64).max(0.01) } else { 0.1 };
+        let mut buckets = vec![0usize; bucket_count + 1];
+        for c in &costs {
+            let idx = (c / bucket_size).floor() as usize;
+            let idx = idx.min(bucket_count);
+            buckets[idx] += 1;
+        }
+        // Trim trailing empty buckets
+        while buckets.len() > 1 && *buckets.last().unwrap() == 0 {
+            buckets.pop();
+        }
+
+        let labels: Vec<String> = (0..buckets.len()).map(|i| {
+            let lo = i as f64 * bucket_size;
+            let hi = lo + bucket_size;
+            format!("\"${:.2}-${:.2}\"", lo, hi)
+        }).collect();
+        let data: Vec<String> = buckets.iter().map(|c| c.to_string()).collect();
 
         writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
-  type: 'doughnut',
+  type: 'bar',
   data: {{
     labels: [{labels}],
-    datasets: [{{ data: [{data}], backgroundColor: [{colors}], borderWidth: 0 }}]
+    datasets: [{{
+      label: 'Sessions',
+      data: [{data}],
+      backgroundColor: 'rgba(107,203,119,0.6)',
+      borderColor: '#6bcb77',
+      borderWidth: 1,
+      borderRadius: 4
+    }}]
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
-    plugins: {{
-      legend: {{ position: 'bottom', labels: {{ color: '#c9d1d9' }} }},
-      tooltip: {{ callbacks: {{ label: function(ctx) {{ return ctx.label + ': $' + ctx.raw.toFixed(2); }} }} }}
+    plugins: {{ legend: {{ display: false }} }},
+    scales: {{
+      x: {{ ticks: {{ color: '#8b949e', maxRotation: 45 }}, grid: {{ color: '#21262d' }} }},
+      y: {{ ticks: {{ color: '#8b949e', stepSize: 1 }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Sessions', color: '#8b949e' }} }}
     }}
   }}
 }});
-</script>"#, chart_id = chart_id, labels = labels, data = data, colors = colors_str).unwrap();
+</script>"#, chart_id = chart_id, labels = labels.join(","), data = data.join(",")).unwrap();
         writeln!(out, "</div>").unwrap();
     }
 
-    // Chart 3: Heatmap (Weekday x Hour)
+    writeln!(out, "</div>").unwrap(); // close grid-2
+
+    // Row 2: Heatmap + Session Efficiency (wide layout)
+    writeln!(out, r#"<div class="grid-2" style="margin-top:16px;">"#).unwrap();
+
+    // Chart 3: Heatmap (Weekday x Hour) - now with local timezone
     {
         let canvas_id = format!("heatmap-{}", pfx);
         writeln!(out, r#"<div class="card">"#).unwrap();
-        writeln!(out, r#"<h2 data-en="Activity Heatmap" data-zh="活跃热力图">Activity Heatmap</h2>"#).unwrap();
-        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each cell = number of turns in that hour slot. Rows = weekdays (Mon-Sun), columns = hours (00-23). Darker = more active. Helps identify your peak coding hours and work patterns." data-zh="每个格子 = 该时段的 turn 数量。行 = 星期几（周一到周日），列 = 小时（00-23）。颜色越深 = 越活跃。帮助你识别高峰编码时段和工作模式。">Each cell = number of turns in that hour slot. Rows = weekdays (Mon-Sun), columns = hours (00-23). Darker = more active. Helps identify your peak coding hours and work patterns.</p>"#).unwrap();
+        writeln!(out, r#"<h2 data-en="Activity Heatmap (Local Time)" data-zh="活跃热力图（本地时间）">Activity Heatmap (Local Time)</h2>"#).unwrap();
+        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each cell = number of turns in that hour slot (local timezone). Rows = weekdays, columns = hours (00-23). Darker = more active." data-zh="每个格子 = 该时段的 turn 数量（本地时区）。行 = 星期几，列 = 小时（00-23）。颜色越深 = 越活跃。">Each cell = number of turns in that hour slot (local timezone). Rows = weekdays, columns = hours (00-23). Darker = more active.</p>"#).unwrap();
         writeln!(out, r#"<canvas id="{}"></canvas>"#, canvas_id).unwrap();
 
         let mut matrix_js = String::from("[");
@@ -640,7 +726,6 @@ new Chart(document.getElementById('{chart_id}'), {{
         }
         matrix_js.push(']');
 
-        // Store heatmap data globally; draw on DOMContentLoaded
         writeln!(out, r#"<script>
 window._heatmapData_{pfx} = {matrix};
 document.addEventListener('DOMContentLoaded', function() {{
@@ -655,7 +740,7 @@ document.addEventListener('DOMContentLoaded', function() {{
         let chart_id = format!("{}-scatterChart", pfx);
         writeln!(out, r#"<div class="card">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Session Efficiency (Turns vs Cost)" data-zh="会话效率（Turns vs 费用）">Session Efficiency (Turns vs Cost)</h2>"#).unwrap();
-        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each bubble = one session. X-axis = number of turns (more turns = longer session). Y-axis = API cost ($). Bubble size = output tokens generated. Outliers in the top-right are expensive long sessions — consider splitting them. Dots near the bottom are efficient short sessions." data-zh="每个气泡 = 一个会话。X 轴 = turn 数（越多 = 会话越长）。Y 轴 = API 等效费用（$）。气泡大小 = 生成的 output tokens。右上角的离群点是昂贵的长会话——考虑拆分。底部的点是高效的短会话。">Each bubble = one session. X-axis = number of turns (more turns = longer session). Y-axis = API cost ($). Bubble size = output tokens generated. Outliers in the top-right are expensive long sessions — consider splitting them. Dots near the bottom are efficient short sessions.</p>"#).unwrap();
+        writeln!(out, r#"<p style="color:#8b949e;font-size:12px;margin-bottom:8px;" data-en="Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions." data-zh="每个气泡 = 一个会话。X = turn 数，Y = 费用。气泡大小 = 输出 token。右上角 = 昂贵的长会话。">Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions.</p>"#).unwrap();
         writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
         let max_output: u64 = overview.session_summaries.iter().map(|s| s.output_tokens).max().unwrap_or(1);
@@ -665,7 +750,8 @@ document.addEventListener('DOMContentLoaded', function() {{
             let radius = if max_output > 0 {
                 3.0 + (s.output_tokens as f64 / max_output as f64) * 20.0
             } else { 3.0 };
-            write!(scatter_data, "{{x:{},y:{:.4},r:{:.1}}}", s.turn_count, s.cost, radius).unwrap();
+            let cpt = if s.turn_count > 0 { s.cost / s.turn_count as f64 } else { 0.0 };
+            write!(scatter_data, "{{x:{},y:{:.4},r:{:.1},cpt:{:.4},out:{}}}", s.turn_count, s.cost, radius, cpt, s.output_tokens).unwrap();
         }
         scatter_data.push(']');
 
@@ -687,7 +773,8 @@ new Chart(document.getElementById('{chart_id}'), {{
       legend: {{ display: false }},
       tooltip: {{ callbacks: {{
         label: function(ctx) {{
-          return 'Turns: ' + ctx.raw.x + ', Cost: $' + ctx.raw.y.toFixed(2);
+          const d = ctx.raw;
+          return ['Turns: ' + d.x + '  Cost: $' + d.y.toFixed(2), 'Cost/Turn: $' + d.cpt.toFixed(3) + '  Output: ' + d.out.toLocaleString()];
         }}
       }} }}
     }},
@@ -701,7 +788,7 @@ new Chart(document.getElementById('{chart_id}'), {{
         writeln!(out, "</div>").unwrap();
     }
 
-    writeln!(out, "</div>").unwrap(); // close grid-2x2
+    writeln!(out, "</div>").unwrap(); // close grid-2
 }
 
 // ─── Tab 2: Monthly ──────────────────────────────────────────────────────────
@@ -721,7 +808,7 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
     let mut month_sessions = 0usize;
     let mut month_output = 0u64;
 
-    let mut daily_costs: Vec<(String, f64)> = Vec::new();
+    let mut daily_entries: Vec<&crate::analysis::TrendEntry> = Vec::new();
 
     for entry in &trend.entries {
         if entry.label.starts_with(latest_month) {
@@ -729,57 +816,149 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
             month_turns += entry.turn_count;
             month_sessions += entry.session_count;
             month_output += entry.tokens.output_tokens;
-            daily_costs.push((entry.label.clone(), entry.cost));
+            daily_entries.push(entry);
         }
     }
 
+    let avg_cost_per_turn = if month_turns > 0 { month_cost / month_turns as f64 } else { 0.0 };
+
     // KPI cards for current month
-    writeln!(out, "<h2>Current Period: {}</h2>", escape_html(latest_month)).unwrap();
+    writeln!(out, r#"<h2 data-en="Current Period: {m}" data-zh="当前周期：{m}">Current Period: {m}</h2>"#, m = escape_html(latest_month)).unwrap();
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
-    write_kpi(out, &format_number(month_sessions as u64), "Sessions");
-    write_kpi(out, &format_number(month_turns as u64), "Turns");
-    write_kpi(out, &format_number(month_output), "Output Tokens");
-    write_kpi(out, &format_cost(month_cost), "Cost");
+    write_kpi_i18n(out, &format_number(month_sessions as u64), "Sessions", "会话数");
+    write_kpi_i18n(out, &format_number(month_turns as u64), "Turns", "Turn 数");
+    write_kpi_i18n(out, &format_compact(month_output), "Output Tokens", "输出 Token");
+    write_kpi_i18n(out, &format_cost(month_cost), "Cost", "费用");
+    write_kpi_i18n(out, &format!("${:.4}", avg_cost_per_turn), "Avg Cost/Turn", "平均每 Turn 费用");
     writeln!(out, "</div>").unwrap();
 
-    // Chart: Daily Cost Bar Chart
-    if !daily_costs.is_empty() {
+    // Chart: Daily Cost + Cost/Turn combo chart
+    if !daily_entries.is_empty() {
         let chart_id = format!("{}-dailyCostChart", pfx);
         writeln!(out, r#"<div class="card">"#).unwrap();
-        writeln!(out, "<h2>Daily Cost ({})</h2>", escape_html(latest_month)).unwrap();
+        writeln!(out, r#"<h2 data-en="Daily Cost &amp; Cost/Turn ({})" data-zh="每日费用 &amp; 每 Turn 费用 ({})">Daily Cost &amp; Cost/Turn ({})</h2>"#,
+            escape_html(latest_month), escape_html(latest_month), escape_html(latest_month)).unwrap();
         writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
-        let labels: Vec<String> = daily_costs.iter().map(|(d, _)| format!("\"{}\"", &d[5..])).collect(); // show MM-DD
-        let data: Vec<String> = daily_costs.iter().map(|(_, c)| format!("{:.2}", c)).collect();
+        let labels: Vec<String> = daily_entries.iter().map(|e| format!("\"{}\"", &e.label[5..])).collect();
+        let cost_data: Vec<String> = daily_entries.iter().map(|e| format!("{:.2}", e.cost)).collect();
+        let cpt_data: Vec<String> = daily_entries.iter().map(|e| {
+            if e.turn_count > 0 { format!("{:.4}", e.cost / e.turn_count as f64) } else { "0".to_string() }
+        }).collect();
+        let turn_data: Vec<String> = daily_entries.iter().map(|e| e.turn_count.to_string()).collect();
 
         writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
   type: 'bar',
   data: {{
     labels: [{labels}],
-    datasets: [{{
-      label: 'Cost ($)',
-      data: [{data}],
-      backgroundColor: 'rgba(88,166,255,0.6)',
-      borderColor: '#58a6ff',
-      borderWidth: 1,
-      borderRadius: 4
-    }}]
+    datasets: [
+      {{
+        label: 'Cost ($)',
+        data: [{cost_data}],
+        backgroundColor: 'rgba(88,166,255,0.6)',
+        borderColor: '#58a6ff',
+        borderWidth: 1,
+        borderRadius: 4,
+        yAxisID: 'y',
+        order: 2
+      }},
+      {{
+        label: 'Cost/Turn ($)',
+        data: [{cpt_data}],
+        type: 'line',
+        borderColor: '#ffd93d',
+        backgroundColor: 'rgba(255,217,61,0.1)',
+        pointRadius: 3,
+        tension: 0.3,
+        yAxisID: 'y1',
+        order: 1
+      }}
+    ]
   }},
   options: {{
     responsive: true, maintainAspectRatio: false,
     plugins: {{
-      legend: {{ display: false }},
-      tooltip: {{ callbacks: {{ label: function(ctx) {{ return '$' + ctx.raw.toFixed(2); }} }} }}
+      legend: {{ labels: {{ color: '#c9d1d9' }} }},
+      tooltip: {{ callbacks: {{
+        afterLabel: function(ctx) {{
+          const turns = [{turn_data}];
+          return 'Turns: ' + turns[ctx.dataIndex];
+        }}
+      }} }}
     }},
     scales: {{
       x: {{ ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
-      y: {{ ticks: {{ color: '#8b949e', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#21262d' }} }}
+      y: {{ position: 'left', ticks: {{ color: '#8b949e', callback: function(v) {{ return '$' + v; }} }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Cost ($)', color: '#8b949e' }} }},
+      y1: {{ position: 'right', ticks: {{ color: '#ffd93d', callback: function(v) {{ return '$' + v.toFixed(3); }} }}, grid: {{ drawOnChartArea: false }}, title: {{ display: true, text: 'Cost/Turn ($)', color: '#ffd93d' }} }}
     }}
   }}
 }});
-</script>"#, chart_id = chart_id, labels = labels.join(","), data = data.join(",")).unwrap();
+</script>"#, chart_id = chart_id,
+            labels = labels.join(","),
+            cost_data = cost_data.join(","),
+            cpt_data = cpt_data.join(","),
+            turn_data = turn_data.join(","),
+        ).unwrap();
         writeln!(out, "</div>").unwrap();
+    }
+
+    // Chart: Model distribution per day (stacked bar)
+    {
+        // Collect all unique model names
+        let mut all_models: Vec<String> = Vec::new();
+        for entry in &daily_entries {
+            for model_name in entry.models.keys() {
+                let short = short_model(model_name);
+                if !all_models.contains(&short) {
+                    all_models.push(short);
+                }
+            }
+        }
+        all_models.sort();
+
+        if all_models.len() > 1 || (!all_models.is_empty() && daily_entries.len() > 1) {
+            let chart_id = format!("{}-modelDistChart", pfx);
+            writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
+            writeln!(out, r#"<h2 data-en="Model Usage per Day (Output Tokens)" data-zh="每日模型使用（输出 Token）">Model Usage per Day (Output Tokens)</h2>"#).unwrap();
+            writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
+
+            let labels: Vec<String> = daily_entries.iter().map(|e| format!("\"{}\"", &e.label[5..])).collect();
+
+            let mut datasets = String::new();
+            for (mi, model_short) in all_models.iter().enumerate() {
+                if mi > 0 { datasets.push(','); }
+                let values: Vec<String> = daily_entries.iter().map(|e| {
+                    // Sum output tokens for all variants of this short model name
+                    let total: u64 = e.models.iter()
+                        .filter(|(k, _)| short_model(k) == *model_short)
+                        .map(|(_, v)| *v)
+                        .sum();
+                    total.to_string()
+                }).collect();
+                write!(datasets, "{{label:\"{}\",data:[{}],backgroundColor:\"{}\",borderWidth:0,borderRadius:2}}",
+                    escape_html(model_short), values.join(","), color(mi)).unwrap();
+            }
+
+            writeln!(out, r#"<script>
+new Chart(document.getElementById('{chart_id}'), {{
+  type: 'bar',
+  data: {{
+    labels: [{labels}],
+    datasets: [{datasets}]
+  }},
+  options: {{
+    responsive: true, maintainAspectRatio: false,
+    plugins: {{ legend: {{ labels: {{ color: '#c9d1d9' }} }} }},
+    scales: {{
+      x: {{ stacked: true, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }} }},
+      y: {{ stacked: true, ticks: {{ color: '#8b949e' }}, grid: {{ color: '#21262d' }}, title: {{ display: true, text: 'Output Tokens', color: '#8b949e' }} }}
+    }}
+  }}
+}});
+</script>"#, chart_id = chart_id, labels = labels.join(","), datasets = datasets).unwrap();
+            writeln!(out, "</div>").unwrap();
+        }
     }
 
     // Table: Monthly summary (aggregate by month if multi-month data)
@@ -800,36 +979,34 @@ new Chart(document.getElementById('{chart_id}'), {{
         if months.len() > 1 {
             let tbl_id = format!("{}-tbl-monthly", pfx);
             writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-            writeln!(out, "<h2>Monthly Summary</h2>").unwrap();
+            writeln!(out, r#"<h2 data-en="Monthly Summary" data-zh="月度汇总">Monthly Summary</h2>"#).unwrap();
             writeln!(out, r#"<div style="overflow-x:auto;">"#).unwrap();
             writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
             writeln!(out, "<thead><tr>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Month</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Sessions</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Month\" data-zh=\"月份\">Month</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\">Turns</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Output Tokens</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Cache Write</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Cache Read</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Cost</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output Tokens\" data-zh=\"输出 Token\">Output Tokens</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost/Turn\" data-zh=\"每 Turn 费用\">Cost/Turn</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
             </tr></thead>", id = tbl_id).unwrap();
             writeln!(out, "<tbody>").unwrap();
 
-            for (month, (sessions, turns, output, cache_write, cache_read, cost)) in &months {
+            for (month, (sessions, turns, output, _cache_write, _cache_read, cost)) in &months {
+                let cpt = if *turns > 0 { cost / *turns as f64 } else { 0.0 };
                 writeln!(out, "<tr>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
-                    <td data-value=\"{}\">{}</td>\
-                    <td data-value=\"{}\">{}</td>\
+                    <td data-value=\"{:.6}\">${:.4}</td>\
                     <td data-value=\"{:.4}\">{}</td>\
                 </tr>",
                     escape_html(month), escape_html(month),
                     sessions, format_number(*sessions as u64),
                     turns, format_number(*turns as u64),
-                    output, format_number(*output),
-                    cache_write, format_number(*cache_write),
-                    cache_read, format_number(*cache_read),
+                    output, format_compact(*output),
+                    cpt, cpt,
                     cost, format_cost(*cost),
                 ).unwrap();
             }
@@ -838,35 +1015,51 @@ new Chart(document.getElementById('{chart_id}'), {{
         }
     }
 
-    // Table: Daily detail
+    // Table: Daily detail with cost/turn
     {
         let tbl_id = format!("{}-tbl-daily", pfx);
         writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-        writeln!(out, "<h2>{} Breakdown</h2>", escape_html(&trend.group_label)).unwrap();
+        writeln!(out, r#"<h2 data-en="{} Breakdown" data-zh="{}明细">{} Breakdown</h2>"#,
+            escape_html(&trend.group_label), escape_html(&trend.group_label), escape_html(&trend.group_label)).unwrap();
         writeln!(out, r#"<div style="overflow-x:auto;">"#).unwrap();
         writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
         writeln!(out, "<thead><tr>\
             <th onclick=\"sortTableSimple(this,'{id}')\">{}</th>\
-            <th onclick=\"sortTableSimple(this,'{id}')\">Sessions</th>\
+            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\">Turns</th>\
-            <th onclick=\"sortTableSimple(this,'{id}')\">Output Tokens</th>\
-            <th onclick=\"sortTableSimple(this,'{id}')\">Cost</th>\
+            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output Tokens\" data-zh=\"输出 Token\">Output Tokens</th>\
+            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost/Turn\" data-zh=\"每 Turn 费用\">Cost/Turn</th>\
+            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
+            <th data-en=\"Models\" data-zh=\"模型\">Models</th>\
         </tr></thead>", escape_html(&trend.group_label), id = tbl_id).unwrap();
         writeln!(out, "<tbody>").unwrap();
 
         for entry in &trend.entries {
+            let cpt = if entry.turn_count > 0 { entry.cost / entry.turn_count as f64 } else { 0.0 };
+            // Model summary for this day
+            let mut model_list: Vec<(&String, &u64)> = entry.models.iter().collect();
+            model_list.sort_by(|a, b| b.1.cmp(a.1));
+            let models_html: String = model_list.iter().take(3).map(|(m, tokens)| {
+                format!("<span class=\"tool-tag\">{} <span class=\"tool-count\">{}</span></span>",
+                    escape_html(&short_model(m)), format_compact(**tokens))
+            }).collect::<Vec<_>>().join("");
+
             writeln!(out, "<tr>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
+                <td data-value=\"{:.6}\">${:.4}</td>\
                 <td data-value=\"{:.4}\">{}</td>\
+                <td>{}</td>\
             </tr>",
                 escape_html(&entry.label), escape_html(&entry.label),
                 entry.session_count, format_number(entry.session_count as u64),
                 entry.turn_count, format_number(entry.turn_count as u64),
-                entry.tokens.output_tokens, format_number(entry.tokens.output_tokens),
+                entry.tokens.output_tokens, format_compact(entry.tokens.output_tokens),
+                cpt, cpt,
                 entry.cost, format_cost(entry.cost),
+                models_html,
             ).unwrap();
         }
 
@@ -919,13 +1112,13 @@ new Chart(document.getElementById('{chart_id}'), {{
     writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
     writeln!(out, "<thead><tr>\
         <th></th>\
-        <th>Project / Session</th>\
-        <th>Sessions</th>\
-        <th>Turns</th>\
-        <th>Agent%</th>\
+        <th data-en=\"Project / Session\" data-zh=\"项目 / 会话\">Project / Session</th>\
+        <th data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
+        <th data-en=\"Turns (Agent)\" data-zh=\"Turns (Agent)\">Turns (Agent)</th>\
         <th>Output</th>\
         <th>CacheHit%</th>\
-        <th>Cost</th>\
+        <th data-en=\"Tools\" data-zh=\"工具\">Tools</th>\
+        <th data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
     </tr></thead>").unwrap();
     writeln!(out, "<tbody>").unwrap();
 
@@ -936,9 +1129,6 @@ new Chart(document.getElementById('{chart_id}'), {{
     }
 
     for (i, proj) in projects.projects.iter().enumerate() {
-        let agent_pct = if proj.total_turns > 0 {
-            proj.agent_turns as f64 / proj.total_turns as f64 * 100.0
-        } else { 0.0 };
         let cache_hit = if proj.tokens.context_tokens() > 0 {
             proj.tokens.cache_read_tokens as f64 / proj.tokens.context_tokens() as f64 * 100.0
         } else { 0.0 };
@@ -946,21 +1136,26 @@ new Chart(document.getElementById('{chart_id}'), {{
 
         // Level 1: Project row (expandable)
         let hit_bar = html_progress(cache_hit);
+        let turns_display = if proj.agent_turns > 0 {
+            format!("{} <span class=\"agent-badge\">+{} agent</span>",
+                format_number(proj.total_turns as u64), proj.agent_turns)
+        } else {
+            format_number(proj.total_turns as u64)
+        };
         writeln!(out, r#"<tr class="project-row expandable">"#).unwrap();
         writeln!(out, r#"<td><button class="expand-btn" onclick="toggleProject(this,'{pid}')">{arrow}</button></td>"#,
             pid = pid, arrow = "\u{25b6}").unwrap();
         writeln!(out, "\
             <td><strong>{name}</strong></td>\
             <td data-value=\"{sess}\">{sess_fmt}</td>\
-            <td data-value=\"{turns}\">{turns_fmt}</td>\
-            <td data-value=\"{apct:.1}\">{apct:.1}%</td>\
+            <td class=\"turn-count-cell\" data-value=\"{turns}\">{turns_display}</td>\
             <td data-value=\"{out}\">{out_fmt}</td>\
             <td data-value=\"{hit:.1}\">{hit_bar}</td>\
+            <td></td>\
             <td data-value=\"{cost:.4}\">{cost_fmt}</td>",
             name = escape_html(&proj.display_name),
             sess = proj.session_count, sess_fmt = format_number(proj.session_count as u64),
-            turns = proj.total_turns, turns_fmt = format_number(proj.total_turns as u64),
-            apct = agent_pct,
+            turns = proj.total_turns, turns_display = turns_display,
             out = proj.tokens.output_tokens, out_fmt = format_compact(proj.tokens.output_tokens),
             hit = cache_hit, hit_bar = hit_bar,
             cost = proj.cost, cost_fmt = format_cost(proj.cost),
@@ -973,7 +1168,8 @@ new Chart(document.getElementById('{chart_id}'), {{
             sorted.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
 
             for s in &sorted {
-                let date = s.first_timestamp.map(|t| t.format("%m-%d %H:%M").to_string()).unwrap_or_default();
+                let utc_iso = s.first_timestamp.map(|t| t.to_rfc3339()).unwrap_or_default();
+                let date_fallback = s.first_timestamp.map(|t| t.format("%m-%d %H:%M").to_string()).unwrap_or_default();
                 let s_hit = html_progress(s.cache_hit_rate);
 
                 // Session summary row
@@ -986,20 +1182,40 @@ new Chart(document.getElementById('{chart_id}'), {{
                 } else {
                     writeln!(out, "<td></td>").unwrap();
                 }
+
+                // Turns with agent badge
+                let s_turns_display = if s.agent_turn_count > 0 {
+                    format!("{} <span class=\"agent-badge\">+{} agent</span>",
+                        format_number(s.turn_count as u64), s.agent_turn_count)
+                } else {
+                    format_number(s.turn_count as u64)
+                };
+
+                // Top tools as tags
+                let tools_html: String = s.top_tools.iter().take(5).map(|(name, count)| {
+                    format!("<span class=\"tool-tag\">{} <span class=\"tool-count\">{}</span></span>",
+                        escape_html(name), count)
+                }).collect::<Vec<_>>().join("");
+
+                let duration_str = format_duration(s.duration_minutes);
+                let short_sid = &s.session_id[..s.session_id.len().min(10)];
+
                 writeln!(out, "\
-                    <td style=\"padding-left:30px;text-align:left;\">{sid} <span style=\"color:#8b949e;font-size:11px;\">({date})</span></td>\
+                    <td style=\"padding-left:30px;text-align:left;\">{sid} <span style=\"color:#8b949e;font-size:11px;\">(<span data-utc-datetime=\"{utc}\">{date}</span> &middot; {dur})</span></td>\
                     <td></td>\
-                    <td data-value=\"{turns}\">{turns_fmt}</td>\
-                    <td data-value=\"{agents}\">{agents}</td>\
+                    <td class=\"turn-count-cell\" data-value=\"{turns}\">{turns_display}</td>\
                     <td data-value=\"{out}\">{out_fmt}</td>\
                     <td data-value=\"{hit:.1}\">{hit_bar}</td>\
+                    <td class=\"session-tools-cell\">{tools}</td>\
                     <td data-value=\"{cost:.4}\">{cost_fmt}</td>",
-                    sid = escape_html(&s.session_id),
-                    date = date,
-                    turns = s.turn_count, turns_fmt = format_number(s.turn_count as u64),
-                    agents = s.agent_turn_count,
+                    sid = escape_html(short_sid),
+                    utc = utc_iso,
+                    date = date_fallback,
+                    dur = duration_str,
+                    turns = s.turn_count, turns_display = s_turns_display,
                     out = s.output_tokens, out_fmt = format_compact(s.output_tokens),
                     hit = s.cache_hit_rate, hit_bar = s_hit,
+                    tools = tools_html,
                     cost = s.cost, cost_fmt = format_cost(s.cost),
                 ).unwrap();
                 writeln!(out, "</tr>").unwrap();
@@ -1033,11 +1249,11 @@ fn render_footer(out: &mut String, calc: &PricingCalculator) {
     } else { String::new() };
     let _ = calc;
 
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
+    let now_local = Local::now().format("%Y-%m-%d %H:%M");
     writeln!(out, r#"<div class="footer">
   {}
   <p>Price data: {} ({}) | Generated by cc-token-analyzer at {}</p>
-</div>"#, stale_warning, PRICING_SOURCE, PRICING_FETCH_DATE, now).unwrap();
+</div>"#, stale_warning, PRICING_SOURCE, PRICING_FETCH_DATE, now_local).unwrap();
 }
 
 // ─── KPI Card Helper ─────────────────────────────────────────────────────────
@@ -1245,7 +1461,7 @@ new Chart(document.getElementById('stopReasonChart'), {{
     write!(out, "<script>{}</script>", js_common()).unwrap();
 
     // ── Footer ───────────────────────────────────────────────────────────────
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
+    let now = Local::now().format("%Y-%m-%d %H:%M");
     writeln!(out, r#"<div class="footer">
   <p>Session: {} | Generated by cc-token-analyzer at {}</p>
 </div>"#, escape_html(&result.session_id), now).unwrap();
@@ -1254,29 +1470,35 @@ new Chart(document.getElementById('stopReasonChart'), {{
     out
 }
 
-/// Shared turn detail table — used by both expandable session detail and single session report.
+/// Shared turn detail table -- used by both expandable session detail and single session report.
 fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail], table_id: &str) {
     writeln!(out, r#"<table id="{}" style="font-size:12px;">"#, table_id).unwrap();
     writeln!(out, "<thead><tr>\
         <th onclick=\"sortTableSimple(this,'{id}')\">Turn</th>\
-        <th onclick=\"sortTableSimple(this,'{id}')\">Time</th>\
+        <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Time\" data-zh=\"时间\">Time</th>\
         <th>Model</th>\
-        <th style=\"text-align:left\">User</th>\
-        <th style=\"text-align:left\">Assistant</th>\
-        <th style=\"text-align:left\">Tools</th>\
+        <th style=\"text-align:left\" data-en=\"User\" data-zh=\"用户\">User</th>\
+        <th style=\"text-align:left\" data-en=\"Assistant\" data-zh=\"助手\">Assistant</th>\
+        <th style=\"text-align:left\" data-en=\"Tools\" data-zh=\"工具\">Tools</th>\
         <th onclick=\"sortTableSimple(this,'{id}')\">Output</th>\
         <th onclick=\"sortTableSimple(this,'{id}')\">Context</th>\
         <th onclick=\"sortTableSimple(this,'{id}')\">Hit%</th>\
-        <th onclick=\"sortTableSimple(this,'{id}')\">Cost</th>\
+        <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
         <th>Stop</th>\
         <th>\u{26a1}</th>\
     </tr></thead>", id = table_id).unwrap();
     writeln!(out, "<tbody>").unwrap();
 
     for t in turns {
-        let row_class = if t.is_compaction { r#" class="compact-row""# } else { "" };
+        let row_class = if t.is_compaction {
+            " class=\"compact-row\""
+        } else if t.is_agent {
+            " style=\"border-left:2px solid #58a6ff;\""
+        } else {
+            ""
+        };
         let stop = t.stop_reason.as_deref().unwrap_or("-");
-        let compact_mark = if t.is_compaction { "\u{26a1}" } else { "" };
+        let compact_mark = if t.is_compaction { "\u{26a1}" } else if t.is_agent { "\u{1f916}" } else { "" };
 
         let user_text = t.user_text.as_deref().unwrap_or("");
         let user_preview = if user_text.len() > 80 {
@@ -1290,17 +1512,28 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
         } else {
             asst_text.to_string()
         };
-        let tools = t.tool_names.join(", ");
+
+        // Tools as tags instead of plain text
+        let tools_html: String = if t.tool_names.is_empty() {
+            String::new()
+        } else {
+            t.tool_names.iter().map(|name| {
+                format!("<span class=\"tool-tag\">{}</span>", escape_html(name))
+            }).collect::<Vec<_>>().join("")
+        };
         let hit_bar = html_progress(t.cache_hit_rate);
 
         let model_short = short_model(&t.model);
+        let utc_iso = t.timestamp.to_rfc3339();
+        let time_fallback = t.timestamp.format("%H:%M:%S").to_string();
+
         writeln!(out, "<tr{cls}>\
             <td data-value=\"{turn}\">{turn}</td>\
-            <td>{time}</td>\
+            <td><span data-utc=\"{utc}\">{time}</span></td>\
             <td>{model}</td>\
             <td style=\"text-align:left;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"{user_full}\">{user}</td>\
             <td style=\"text-align:left;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"{asst_full}\">{asst}</td>\
-            <td style=\"text-align:left;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{tools}</td>\
+            <td style=\"text-align:left;max-width:160px;line-height:1.6;\">{tools}</td>\
             <td data-value=\"{out_val}\">{out_fmt}</td>\
             <td data-value=\"{ctx_val}\">{ctx_fmt}</td>\
             <td data-value=\"{hit:.1}\">{hit_bar}</td>\
@@ -1310,13 +1543,14 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
         </tr>",
             cls = row_class,
             turn = t.turn_number,
-            time = t.timestamp.format("%H:%M:%S"),
+            utc = utc_iso,
+            time = time_fallback,
             model = model_short,
             user_full = escape_html(user_text),
             user = escape_html(&user_preview),
             asst_full = escape_html(asst_text),
             asst = escape_html(&asst_preview),
-            tools = escape_html(&tools),
+            tools = tools_html,
             out_val = t.output_tokens, out_fmt = format_compact(t.output_tokens),
             ctx_val = t.context_size, ctx_fmt = format_compact(t.context_size),
             hit = t.cache_hit_rate, hit_bar = hit_bar,
