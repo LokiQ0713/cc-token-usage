@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::data::models::{SessionData, ValidatedTurn};
+use crate::data::models::SessionData;
 use crate::pricing::calculator::PricingCalculator;
 
 use super::{AgentSummary, AggregatedTokens, SessionResult, TurnCostBreakdown, TurnDetail};
@@ -9,17 +9,7 @@ pub fn analyze_session(
     session: &SessionData,
     calc: &PricingCalculator,
 ) -> SessionResult {
-    // Merge turns and agent_turns, keeping track of which are agent turns
-    let mut all_turns: Vec<(&ValidatedTurn, bool)> = Vec::new();
-    for turn in &session.turns {
-        all_turns.push((turn, false));
-    }
-    for turn in &session.agent_turns {
-        all_turns.push((turn, true));
-    }
-
-    // Sort by timestamp
-    all_turns.sort_by_key(|(turn, _)| turn.timestamp);
+    let all_turns = session.all_responses();
 
     let mut turn_details = Vec::new();
     let mut total_tokens = AggregatedTokens::default();
@@ -30,7 +20,7 @@ pub fn analyze_session(
     let mut max_context: u64 = 0;
     let mut prev_context_size: Option<u64> = None;
 
-    for (i, (turn, is_from_agent_file)) in all_turns.iter().enumerate() {
+    for (i, turn) in all_turns.iter().enumerate() {
         let input = turn.usage.input_tokens.unwrap_or(0);
         let output = turn.usage.output_tokens.unwrap_or(0);
         let cache_create = turn.usage.cache_creation_input_tokens.unwrap_or(0);
@@ -93,7 +83,7 @@ pub fn analyze_session(
         *model_counts.entry(&turn.model).or_insert(0) += 1;
 
         // Agent summary
-        let is_agent = turn.is_agent || *is_from_agent_file;
+        let is_agent = turn.is_agent;
         if is_agent {
             agent_summary.total_agent_turns += 1;
             agent_summary.agent_output_tokens += output;

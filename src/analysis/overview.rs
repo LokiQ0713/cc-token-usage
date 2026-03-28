@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::{Datelike, Timelike};
 
-use crate::data::models::{GlobalDataQuality, SessionData, ValidatedTurn};
+use crate::data::models::{GlobalDataQuality, SessionData};
 use crate::pricing::calculator::PricingCalculator;
 
 use super::{
@@ -24,10 +24,10 @@ pub fn analyze_overview(
     let mut total_turns = 0usize;
     let mut total_agent_turns = 0usize;
     let mut cost_by_category = CostByCategory::default();
+    let mut tool_count_map: HashMap<String, usize> = HashMap::new();
 
     for session in sessions {
-        // Process regular turns
-        for turn in &session.turns {
+        for turn in session.all_responses() {
             process_turn(
                 turn,
                 calc,
@@ -39,24 +39,17 @@ pub fn analyze_overview(
                 &mut cost_by_category,
             );
             total_turns += 1;
-        }
+            if turn.is_agent { total_agent_turns += 1; }
 
-        // Process agent turns
-        for turn in &session.agent_turns {
-            process_turn(
-                turn,
-                calc,
-                &mut tokens_by_model,
-                &mut cost_by_model,
-                &mut total_cost,
-                &mut hourly_distribution,
-                &mut weekday_hour_matrix,
-                &mut cost_by_category,
-            );
-            total_turns += 1;
-            total_agent_turns += 1;
+            // Aggregate tool usage
+            for name in &turn.tool_names {
+                *tool_count_map.entry(name.clone()).or_insert(0) += 1;
+            }
         }
     }
+
+    let mut tool_counts: Vec<(String, usize)> = tool_count_map.into_iter().collect();
+    tool_counts.sort_by(|a, b| b.1.cmp(&a.1));
 
     // Compute totals from tokens_by_model
     let mut total_output_tokens: u64 = 0;
@@ -149,7 +142,7 @@ pub fn analyze_overview(
         quality,
         subscription_value,
         weekday_hour_matrix,
-        tool_counts: Vec::new(), // No tool name data available in ValidatedTurn
+        tool_counts,
         cost_by_category,
         session_summaries,
         total_output_tokens,
@@ -161,7 +154,7 @@ pub fn analyze_overview(
 
 #[allow(clippy::too_many_arguments)]
 fn process_turn(
-    turn: &ValidatedTurn,
+    turn: &crate::data::models::ValidatedTurn,
     calc: &PricingCalculator,
     tokens_by_model: &mut HashMap<String, AggregatedTokens>,
     cost_by_model: &mut HashMap<String, f64>,
@@ -211,16 +204,7 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         .map(crate::analysis::project::project_display_name)
         .unwrap_or_else(|| "(unknown)".to_string());
 
-    // Merge and sort all turns by timestamp
-    let mut all_turns: Vec<(&ValidatedTurn, bool)> = Vec::new();
-    for turn in &session.turns {
-        all_turns.push((turn, false));
-    }
-    for turn in &session.agent_turns {
-        all_turns.push((turn, true));
-    }
-    all_turns.sort_by_key(|(t, _)| t.timestamp);
-
+    let all_turns = session.all_responses();
     let turn_count = all_turns.len();
 
     // Duration
@@ -243,8 +227,9 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
     let mut tool_use_count: usize = 0;
     let mut total_cost: f64 = 0.0;
     let mut prev_context_size: Option<u64> = None;
+    let mut tool_map: HashMap<String, usize> = HashMap::new();
 
-    for (turn, is_from_agent_file) in &all_turns {
+    for turn in &all_turns {
         *model_counts.entry(&turn.model).or_insert(0) += 1;
 
         let input = turn.usage.input_tokens.unwrap_or(0);
@@ -277,13 +262,16 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         prev_context_size = Some(ctx);
 
         // Agent turns
-        if turn.is_agent || *is_from_agent_file {
+        if turn.is_agent {
             agent_turn_count += 1;
         }
 
         // Tool use count
         if turn.stop_reason.as_deref() == Some("tool_use") {
             tool_use_count += 1;
+        }
+        for name in &turn.tool_names {
+            *tool_map.entry(name.clone()).or_insert(0) += 1;
         }
 
         // Cost
@@ -329,26 +317,24 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         compaction_count,
         cost: total_cost,
         tool_use_count,
-        top_tools: Vec::new(), // No tool name data available
+        top_tools: {
+            let mut tools: Vec<(String, usize)> = tool_map.into_iter().collect();
+            tools.sort_by(|a, b| b.1.cmp(&a.1));
+            tools.truncate(5);
+            tools
+        },
         turn_details: None,
     }
 }
 
 /// Build turn-level details for a session (used by HTML report for expandable rows).
 fn build_turn_details(session: &SessionData, calc: &PricingCalculator) -> Vec<TurnDetail> {
-    let mut all_turns: Vec<(&ValidatedTurn, bool)> = Vec::new();
-    for turn in &session.turns {
-        all_turns.push((turn, false));
-    }
-    for turn in &session.agent_turns {
-        all_turns.push((turn, true));
-    }
-    all_turns.sort_by_key(|(t, _)| t.timestamp);
+    let all_turns = session.all_responses();
 
     let mut details = Vec::new();
     let mut prev_context_size: Option<u64> = None;
 
-    for (i, (turn, is_from_agent_file)) in all_turns.iter().enumerate() {
+    for (i, turn) in all_turns.iter().enumerate() {
         let input = turn.usage.input_tokens.unwrap_or(0);
         let output = turn.usage.output_tokens.unwrap_or(0);
         let cache_create = turn.usage.cache_creation_input_tokens.unwrap_or(0);
@@ -391,8 +377,6 @@ fn build_turn_details(session: &SessionData, calc: &PricingCalculator) -> Vec<Tu
             total: pricing_cost.total,
         };
 
-        let is_agent = turn.is_agent || *is_from_agent_file;
-
         details.push(TurnDetail {
             turn_number: i + 1,
             timestamp: turn.timestamp,
@@ -407,7 +391,7 @@ fn build_turn_details(session: &SessionData, calc: &PricingCalculator) -> Vec<Tu
             cost: pricing_cost.total,
             cost_breakdown,
             stop_reason: turn.stop_reason.clone(),
-            is_agent,
+            is_agent: turn.is_agent,
             is_compaction,
             context_delta,
             user_text: turn.user_text.clone(),

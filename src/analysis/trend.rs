@@ -34,8 +34,7 @@ pub fn analyze_trend(
         }
 
         // Process all turns
-        let all_turns = session.turns.iter().chain(session.agent_turns.iter());
-        for turn in all_turns {
+        for turn in session.all_responses() {
             let date = turn.timestamp.date_naive();
             if date < cutoff {
                 continue;

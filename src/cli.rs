@@ -74,6 +74,16 @@ pub enum Command {
         latest: bool,
     },
 
+    /// Validate token counting accuracy against raw JSONL data
+    Validate {
+        /// Validate a specific session ID (optional, validates all if omitted)
+        id: Option<String>,
+
+        /// Show only failed checks
+        #[arg(long)]
+        failures_only: bool,
+    },
+
     /// Show usage trends over time
     Trend {
         /// Number of days to include (0 = all history)

@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use crate::analysis::validate::ValidationReport;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
 use crate::pricing::calculator::PricingCalculator;
 
@@ -194,6 +195,75 @@ pub fn render_trend(result: &TrendResult) -> String {
 
     writeln!(out).unwrap();
     writeln!(out, "  Total: {}", format_cost(total_cost)).unwrap();
+    out
+}
+
+pub fn render_validation(report: &ValidationReport, failures_only: bool) -> String {
+    let mut out = String::new();
+
+    writeln!(out, "Token Validation Report").unwrap();
+    writeln!(out, "{}", "━".repeat(60)).unwrap();
+    writeln!(out).unwrap();
+
+    // Structure checks
+    writeln!(out, "Structure Checks:").unwrap();
+    for check in &report.structure_checks {
+        if failures_only && check.passed { continue; }
+        let status = if check.passed { "OK" } else { "FAIL" };
+        if check.passed {
+            writeln!(out, "  [{:>4}] {}: {}", status, check.name, check.actual).unwrap();
+        } else {
+            writeln!(out, "  [{:>4}] {}: expected={}, actual={}", status, check.name, check.expected, check.actual).unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+
+    // Per-session results
+    let mut fail_sessions = Vec::new();
+    for sv in &report.session_results {
+        let all_checks: Vec<_> = sv.token_checks.iter().chain(sv.agent_checks.iter()).collect();
+        let has_failures = all_checks.iter().any(|c| !c.passed);
+
+        if failures_only && !has_failures { continue; }
+
+        if has_failures {
+            fail_sessions.push(sv);
+        }
+    }
+
+    if !failures_only {
+        writeln!(out, "Session Validation: {} sessions checked", report.session_results.len()).unwrap();
+        let sessions_ok = report.summary.sessions_passed;
+        let sessions_fail = report.summary.sessions_validated - sessions_ok;
+        writeln!(out, "  {} PASS, {} FAIL", sessions_ok, sessions_fail).unwrap();
+        writeln!(out).unwrap();
+    }
+
+    // Show failed sessions in detail
+    if !fail_sessions.is_empty() {
+        writeln!(out, "Failed Sessions:").unwrap();
+        writeln!(out).unwrap();
+    }
+    for sv in &fail_sessions {
+        writeln!(out, "  Session {}  {}", &sv.session_id[..8.min(sv.session_id.len())], sv.project).unwrap();
+        for check in sv.token_checks.iter().chain(sv.agent_checks.iter()) {
+            if !check.passed {
+                writeln!(out, "    [FAIL] {}: expected={}, actual={}", check.name, check.expected, check.actual).unwrap();
+            }
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Summary
+    writeln!(out, "{}", "━".repeat(60)).unwrap();
+    let result_text = if report.summary.failed == 0 { "PASS" } else { "FAIL" };
+    writeln!(out, "Result: {} ({}/{} checks passed, {} sessions validated)",
+        result_text,
+        report.summary.passed,
+        report.summary.total_checks,
+        report.summary.sessions_validated,
+    ).unwrap();
+
     out
 }
 

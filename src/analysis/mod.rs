@@ -2,6 +2,7 @@ pub mod overview;
 pub mod project;
 pub mod session;
 pub mod trend;
+pub mod validate;
 
 use crate::data::models::{GlobalDataQuality, TokenUsage};
 use chrono::{DateTime, NaiveDate, Utc};

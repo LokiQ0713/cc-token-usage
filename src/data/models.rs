@@ -15,6 +15,16 @@ pub enum JournalEntry {
     Assistant(AssistantMessage),
     #[serde(rename = "queue-operation")]
     QueueOperation(serde_json::Value),
+    #[serde(rename = "progress")]
+    Progress(serde_json::Value),
+    #[serde(rename = "system")]
+    System(serde_json::Value),
+    #[serde(rename = "last-prompt")]
+    LastPrompt(serde_json::Value),
+    #[serde(rename = "file-history-snapshot")]
+    FileHistorySnapshot(serde_json::Value),
+    #[serde(other)]
+    Unknown,
 }
 
 /// A user-authored message entry.
@@ -62,7 +72,7 @@ pub struct ApiMessage {
 }
 
 /// Token usage statistics for a single API call.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct TokenUsage {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -102,6 +112,17 @@ pub enum ContentBlock {
         id: Option<String>,
         name: Option<String>,
         input: Option<serde_json::Value>,
+    },
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: Option<String>,
+        signature: Option<String>,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: Option<String>,
+        content: Option<serde_json::Value>,
+        is_error: Option<bool>,
     },
     #[serde(other)]
     Other,
@@ -147,6 +168,27 @@ pub struct SessionData {
     pub last_timestamp: Option<DateTime<Utc>>,
     pub version: Option<String>,
     pub quality: DataQuality,
+}
+
+impl SessionData {
+    /// All API responses (main + agent), sorted by timestamp.
+    pub fn all_responses(&self) -> Vec<&ValidatedTurn> {
+        let mut all: Vec<&ValidatedTurn> = self.turns.iter()
+            .chain(self.agent_turns.iter())
+            .collect();
+        all.sort_by_key(|r| r.timestamp);
+        all
+    }
+
+    /// Total number of API responses (main + agent).
+    pub fn total_turn_count(&self) -> usize {
+        self.turns.len() + self.agent_turns.len()
+    }
+
+    /// Number of agent API responses.
+    pub fn agent_turn_count(&self) -> usize {
+        self.agent_turns.len()
+    }
 }
 
 /// Quality metrics for a single session file.
@@ -251,6 +293,42 @@ mod tests {
                 assert_eq!(val.get("sessionId").and_then(|v| v.as_str()), Some("abc"));
             }
             _ => panic!("expected QueueOperation variant"),
+        }
+    }
+
+    #[test]
+    fn test_parse_progress_entry() {
+        let json = r#"{"type":"progress","data":{"type":"hook_progress"},"uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
+        let entry: JournalEntry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, JournalEntry::Progress(_)));
+    }
+
+    #[test]
+    fn test_parse_system_entry() {
+        let json = r#"{"type":"system","subtype":"turn_duration","durationMs":1234,"uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
+        let entry: JournalEntry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, JournalEntry::System(_)));
+    }
+
+    #[test]
+    fn test_parse_unknown_entry_type() {
+        let json = r#"{"type":"some-future-type","data":"whatever","uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z"}"#;
+        let entry: JournalEntry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, JournalEntry::Unknown));
+    }
+
+    #[test]
+    fn test_parse_thinking_content_block() {
+        let json = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"thinking","thinking":"Let me analyze this...","signature":"abc123"},{"type":"text","text":"Here is my answer."}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}"#;
+        let entry: JournalEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            JournalEntry::Assistant(msg) => {
+                let content = msg.message.unwrap().content.unwrap();
+                assert_eq!(content.len(), 2);
+                assert!(matches!(&content[0], ContentBlock::Thinking { thinking: Some(t), .. } if t.contains("analyze")));
+                assert!(matches!(&content[1], ContentBlock::Text { .. }));
+            }
+            _ => panic!("expected Assistant variant"),
         }
     }
 

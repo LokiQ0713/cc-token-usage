@@ -31,17 +31,10 @@ pub fn analyze_projects(
 
         acc.session_count += 1;
 
-        for turn in &session.turns {
+        for turn in session.all_responses() {
             acc.tokens.add_usage(&turn.usage);
             acc.total_turns += 1;
-            let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
-            acc.cost += cost.total;
-        }
-
-        for turn in &session.agent_turns {
-            acc.tokens.add_usage(&turn.usage);
-            acc.total_turns += 1;
-            acc.agent_turns += 1;
+            if turn.is_agent { acc.agent_turns += 1; }
             let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
             acc.cost += cost.total;
         }

@@ -5,11 +5,13 @@ use cc_token_usage::analysis::overview::analyze_overview;
 use cc_token_usage::analysis::project::analyze_projects;
 use cc_token_usage::analysis::session::analyze_session;
 use cc_token_usage::analysis::trend::analyze_trend;
+use cc_token_usage::analysis::validate;
 use cc_token_usage::cli::{Cli, Command, GroupBy, OutputFormat};
 use cc_token_usage::config::Config;
 use cc_token_usage::data::loader;
+use cc_token_usage::data::models::SessionData;
 use cc_token_usage::output::html::{render_full_report_html, render_session_html};
-use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend};
+use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend, render_validation};
 use cc_token_usage::pricing::calculator::PricingCalculator;
 
 fn main() -> Result<()> {
@@ -147,6 +149,26 @@ fn main() -> Result<()> {
                     println!("Report written to {}", output_path.display());
                 }
             }
+        }
+
+        // ── Validate ─────────────────────────────────────────────────────────
+        Command::Validate { id, failures_only } => {
+            let target_sessions: Vec<&SessionData> = if let Some(ref prefix) = id {
+                let matches: Vec<_> = sessions
+                    .iter()
+                    .filter(|s| s.session_id.starts_with(prefix))
+                    .collect();
+                if matches.is_empty() {
+                    bail!("no session found matching prefix '{}'", prefix);
+                }
+                matches
+            } else {
+                sessions.iter().collect()
+            };
+
+            let report = validate::validate_all(&target_sessions, &quality, &claude_home, &calc)
+                .context("validation failed")?;
+            println!("{}", render_validation(&report, failures_only));
         }
 
         // ── Trend ───────────────────────────────────────────────────────────

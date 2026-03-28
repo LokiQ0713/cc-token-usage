@@ -83,137 +83,11 @@ fn merge_agent_turns(parent: &mut SessionData, agent_turns: Vec<super::models::V
 /// 3. Parses main sessions first, then merges agent turns into their parents
 /// 4. Computes global time range and quality metrics
 pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    // Step 1: Scan for all session files
     let mut files = scan_claude_home(claude_home)
         .context("failed to scan claude home for session files")?;
-
-    // Step 2: Resolve legacy agent parent relationships
     resolve_agent_parents(&mut files)
         .context("failed to resolve agent parent sessions")?;
-
-    // Partition into main sessions and agent files
-    let (main_files, agent_files): (Vec<_>, Vec<_>) =
-        files.into_iter().partition(|f| !f.is_agent);
-
-    let mut global_quality = GlobalDataQuality {
-        total_session_files: main_files.len(),
-        total_agent_files: agent_files.len(),
-        ..Default::default()
-    };
-
-    // Step 3a: Process all main sessions
-    let mut sessions: HashMap<String, SessionData> = HashMap::new();
-
-    for sf in &main_files {
-        let (turns, quality) = parse_session_file(&sf.file_path, false)
-            .with_context(|| format!("failed to parse session: {}", sf.file_path.display()))?;
-
-        let version = extract_version(&sf.file_path);
-
-        let (first_ts, last_ts) = time_range(turns.iter().map(|t| &t.timestamp));
-
-        global_quality.total_valid_turns += quality.valid_turns;
-        global_quality.total_skipped +=
-            quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
-
-        let session = SessionData {
-            session_id: sf.session_id.clone(),
-            project: sf.project.clone(),
-            turns,
-            agent_turns: Vec::new(),
-            first_timestamp: first_ts,
-            last_timestamp: last_ts,
-            version,
-            quality,
-        };
-
-        sessions.insert(sf.session_id.clone(), session);
-    }
-
-    // Step 3b: Process agent files and merge into parent sessions
-    for sf in &agent_files {
-        let (agent_turns, quality) = parse_session_file(&sf.file_path, true)
-            .with_context(|| format!("failed to parse agent file: {}", sf.file_path.display()))?;
-
-        global_quality.total_valid_turns += quality.valid_turns;
-        global_quality.total_skipped +=
-            quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
-
-        let target_id = match &sf.parent_session_id {
-            Some(parent_id) => {
-                if !sessions.contains_key(parent_id) {
-                    let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
-                    sessions.insert(parent_id.clone(), SessionData {
-                        session_id: parent_id.clone(),
-                        project,
-                        turns: Vec::new(),
-                        agent_turns: Vec::new(),
-                        first_timestamp: None,
-                        last_timestamp: None,
-                        version: None,
-                        quality: DataQuality::default(),
-                    });
-                    global_quality.orphan_agents += 1;
-                }
-                parent_id.clone()
-            }
-            None => {
-                let virtual_id = sf.session_id.clone();
-                if !sessions.contains_key(&virtual_id) {
-                    let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
-                    sessions.insert(virtual_id.clone(), SessionData {
-                        session_id: virtual_id.clone(),
-                        project,
-                        turns: Vec::new(),
-                        agent_turns: Vec::new(),
-                        first_timestamp: None,
-                        last_timestamp: None,
-                        version: None,
-                        quality: DataQuality::default(),
-                    });
-                    global_quality.orphan_agents += 1;
-                }
-                virtual_id
-            }
-        };
-
-        let parent = sessions.get_mut(&target_id).unwrap();
-        merge_agent_turns(parent, agent_turns, &quality);
-    }
-
-    // Step 4: Recompute time ranges to include agent turns, and collect results
-    let mut result: Vec<SessionData> = sessions.into_values().collect();
-
-    // Compute global time range
-    let mut global_min: Option<DateTime<Utc>> = None;
-    let mut global_max: Option<DateTime<Utc>> = None;
-
-    for session in &mut result {
-        // Recompute session time range including agent turns
-        let all_timestamps = session
-            .turns
-            .iter()
-            .chain(session.agent_turns.iter())
-            .map(|t| &t.timestamp);
-        let (first_ts, last_ts) = time_range(all_timestamps);
-        session.first_timestamp = first_ts;
-        session.last_timestamp = last_ts;
-
-        // Update global range
-        if let Some(ts) = first_ts {
-            global_min = Some(global_min.map_or(ts, |m: DateTime<Utc>| m.min(ts)));
-        }
-        if let Some(ts) = last_ts {
-            global_max = Some(global_max.map_or(ts, |m: DateTime<Utc>| m.max(ts)));
-        }
-    }
-
-    global_quality.time_range = match (global_min, global_max) {
-        (Some(min), Some(max)) => Some((min, max)),
-        _ => None,
-    };
-
-    Ok((result, global_quality))
+    load_from_files(files)
 }
 
 /// Load all session data from a projects directory directly.
@@ -222,15 +96,15 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
 /// this function takes the projects directory itself. Useful for loading data from
 /// archive directories like `~/.config/superpowers/conversation-archive/`.
 pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    // Step 1: Scan for all session files directly from projects_dir
     let mut files = scan_projects_dir(projects_dir)
         .context("failed to scan projects dir for session files")?;
-
-    // Step 2: Resolve legacy agent parent relationships
     resolve_agent_parents(&mut files)
         .context("failed to resolve agent parent sessions")?;
+    load_from_files(files)
+}
 
-    // Partition into main sessions and agent files
+/// Shared loading logic: partition files, parse sessions, merge agents, compute time ranges.
+fn load_from_files(files: Vec<super::models::SessionFile>) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
     let (main_files, agent_files): (Vec<_>, Vec<_>) =
         files.into_iter().partition(|f| !f.is_agent);
 
@@ -240,7 +114,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
         ..Default::default()
     };
 
-    // Step 3a: Process all main sessions
+    // Process all main sessions
     let mut sessions: HashMap<String, SessionData> = HashMap::new();
 
     for sf in &main_files {
@@ -254,7 +128,7 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
         global_quality.total_skipped +=
             quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
-        let session = SessionData {
+        sessions.insert(sf.session_id.clone(), SessionData {
             session_id: sf.session_id.clone(),
             project: sf.project.clone(),
             turns,
@@ -263,12 +137,10 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
             last_timestamp: last_ts,
             version,
             quality,
-        };
-
-        sessions.insert(sf.session_id.clone(), session);
+        });
     }
 
-    // Step 3b: Process agent files and merge into parent sessions
+    // Process agent files and merge into parent sessions
     for sf in &agent_files {
         let (agent_turns, quality) = parse_session_file(&sf.file_path, true)
             .with_context(|| format!("failed to parse agent file: {}", sf.file_path.display()))?;
@@ -277,61 +149,34 @@ pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, 
         global_quality.total_skipped +=
             quality.skipped_synthetic + quality.skipped_sidechain + quality.skipped_invalid + quality.skipped_parse_error;
 
-        let target_id = match &sf.parent_session_id {
-            Some(parent_id) => {
-                if !sessions.contains_key(parent_id) {
-                    let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
-                    sessions.insert(parent_id.clone(), SessionData {
-                        session_id: parent_id.clone(),
-                        project,
-                        turns: Vec::new(),
-                        agent_turns: Vec::new(),
-                        first_timestamp: None,
-                        last_timestamp: None,
-                        version: None,
-                        quality: DataQuality::default(),
-                    });
-                    global_quality.orphan_agents += 1;
-                }
-                parent_id.clone()
-            }
-            None => {
-                let virtual_id = sf.session_id.clone();
-                if !sessions.contains_key(&virtual_id) {
-                    let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
-                    sessions.insert(virtual_id.clone(), SessionData {
-                        session_id: virtual_id.clone(),
-                        project,
-                        turns: Vec::new(),
-                        agent_turns: Vec::new(),
-                        first_timestamp: None,
-                        last_timestamp: None,
-                        version: None,
-                        quality: DataQuality::default(),
-                    });
-                    global_quality.orphan_agents += 1;
-                }
-                virtual_id
-            }
-        };
+        let target_id = sf.parent_session_id.clone().unwrap_or_else(|| sf.session_id.clone());
+        if !sessions.contains_key(&target_id) {
+            let project = sf.project.clone().or_else(|| Some("(orphan)".to_string()));
+            sessions.insert(target_id.clone(), SessionData {
+                session_id: target_id.clone(),
+                project,
+                turns: Vec::new(),
+                agent_turns: Vec::new(),
+                first_timestamp: None,
+                last_timestamp: None,
+                version: None,
+                quality: DataQuality::default(),
+            });
+            global_quality.orphan_agents += 1;
+        }
 
         let parent = sessions.get_mut(&target_id).unwrap();
         merge_agent_turns(parent, agent_turns, &quality);
     }
 
-    // Step 4: Recompute time ranges to include agent turns, and collect results
+    // Recompute time ranges to include agent turns
     let mut result: Vec<SessionData> = sessions.into_values().collect();
-
     let mut global_min: Option<DateTime<Utc>> = None;
     let mut global_max: Option<DateTime<Utc>> = None;
 
     for session in &mut result {
-        let all_timestamps = session
-            .turns
-            .iter()
-            .chain(session.agent_turns.iter())
-            .map(|t| &t.timestamp);
-        let (first_ts, last_ts) = time_range(all_timestamps);
+        let all_timestamps = session.all_responses();
+        let (first_ts, last_ts) = time_range(all_timestamps.iter().map(|t| &t.timestamp));
         session.first_timestamp = first_ts;
         session.last_timestamp = last_ts;
 
