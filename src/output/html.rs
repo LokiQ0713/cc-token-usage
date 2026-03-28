@@ -110,8 +110,8 @@ body {
 }
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
 .card > h2:first-child { margin-top: 0; }
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }
-.kpi-value { font-size: 1.8em; font-weight: 700; color: #58a6ff; line-height: 1.3; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+.kpi-value { font-size: 1.6em; font-weight: 700; color: #58a6ff; line-height: 1; }
 .kpi-label { font-size: 0.85em; color: #8b949e; margin-top: 4px; }
 nav { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
 nav button {
@@ -127,12 +127,14 @@ h1 { color: #58a6ff; font-size: 1.5em; margin-bottom: 16px; }
 h2 { color: #c9d1d9; font-size: 1.2em; margin: 16px 0 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th {
-  padding: 8px 10px; text-align: left; border-bottom: 2px solid #30363d;
+  padding: 8px 10px; text-align: right; border-bottom: 2px solid #30363d;
   color: #8b949e; cursor: pointer; user-select: none; white-space: nowrap;
-  position: sticky; top: 0; background: #161b22; z-index: 1;
+  position: sticky; top: 0; background: #161b22; z-index: 2;
 }
+th.text-left { text-align: left; }
 th:hover { color: #58a6ff; }
-td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #21262d; }
+td { padding: 6px 10px; text-align: right; border-bottom: 1px solid #21262d; }
+td.text-left { text-align: left; }
 tr:hover { background: #1c2128; }
 .sort-asc::after { content: ' \25b2'; color: #58a6ff; }
 .sort-desc::after { content: ' \25bc'; color: #58a6ff; }
@@ -152,7 +154,6 @@ tr:hover { background: #1c2128; }
 .subtitle { color: #8b949e; font-size: 0.85em; }
 .expand-btn { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 14px; padding: 2px 6px; }
 .expand-btn:hover { color: #58a6ff; }
-.project-session-row td:first-child { padding-left: 30px; }
 .project-session-row { background: #111822; }
 .project-session-row:hover { background: #1c2128; }
 .project-row { background: #161b22; font-weight: 600; }
@@ -196,13 +197,13 @@ tr:hover { background: #1c2128; }
   .grid-2 { grid-template-columns: 1fr; }
   .grid-1-2 { grid-template-columns: 1fr; }
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
-  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
 }
 @media (max-width: 600px) {
   body { padding: 12px; }
   .grid-4 { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: 1fr 1fr; }
-  .kpi-value { font-size: 1.4em; }
+  .kpi-value { font-size: 1.2em; }
   .header-row { flex-direction: column; gap: 8px; }
   .header-row button { margin-left: 0 !important; }
 }
@@ -607,11 +608,11 @@ pub fn render_dual_report_html(
 fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     // KPI cards
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
-    write_kpi_i18n(out, &format_number(overview.total_sessions as u64), "Sessions / 会话", "会话数");
-    write_kpi_i18n(out, &format_number(overview.total_turns as u64), "Turns / 响应", "Turn 总数");
+    write_kpi_i18n(out, &format_number(overview.total_sessions as u64), "Sessions", "会话数");
+    write_kpi_i18n(out, &format_number(overview.total_turns as u64), "Turns", "响应数");
     write_kpi_i18n(out, &format_compact(overview.total_output_tokens), "Claude Wrote", "Claude 写了");
     write_kpi_i18n(out, &format_compact(overview.total_context_tokens), "Claude Read", "Claude 读了");
-    write_kpi_progress(out, overview.avg_cache_hit_rate, "Avg Cache Hit Rate");
+    write_kpi_progress(out, overview.avg_cache_hit_rate, "Avg Cache Hit Rate", "平均缓存命中率");
     write_kpi_i18n(out, &format_cost(overview.total_cost), "Token Value (API Rate)", "Token 价值 (API 费率)");
     if overview.cache_savings.total_saved > 0.0 {
         write_kpi_i18n(out, &format_cost(overview.cache_savings.total_saved),
@@ -653,7 +654,7 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
             "Peak Context",
             "峰值上下文");
         write_kpi_i18n(out,
-            &total_compactions.to_string(),
+            &format_number(total_compactions as u64),
             "Compactions",
             "上下文压缩次数");
         write_kpi_i18n(out,
@@ -671,14 +672,14 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
             writeln!(out, r#"<h2 data-en="Most Expensive Sessions" data-zh="最贵会话 Top 3">Most Expensive Sessions</h2>"#).unwrap();
             writeln!(out, r#"<div class="table-wrap">"#).unwrap();
             writeln!(out, r#"<table class="data-table"><thead><tr>
-                <th data-en="Session" data-zh="会话">Session</th>
-                <th data-en="Project" data-zh="项目">Project</th>
-                <th data-en="Turns" data-zh="Turns">Turns</th>
+                <th class="text-left" data-en="Session" data-zh="会话">Session</th>
+                <th class="text-left" data-en="Project" data-zh="项目">Project</th>
+                <th data-en="Turns" data-zh="响应数">Turns</th>
                 <th data-en="Duration" data-zh="时长">Duration</th>
                 <th data-en="Cost" data-zh="费用">Cost</th>
             </tr></thead><tbody>"#).unwrap();
             for s in top3 {
-                writeln!(out, "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                writeln!(out, "<tr><td class=\"text-left\">{}</td><td class=\"text-left\">{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                     escape_html(&s.session_id[..s.session_id.len().min(8)]),
                     escape_html(&s.project_display_name),
                     s.turn_count,
@@ -813,7 +814,7 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
     writeln!(out, r#"<h2 data-en="Current Period: {m}" data-zh="当前周期：{m}">Current Period: {m}</h2>"#, m = escape_html(latest_month)).unwrap();
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
     write_kpi_i18n(out, &format_number(month_sessions as u64), "Sessions", "会话数");
-    write_kpi_i18n(out, &format_number(month_turns as u64), "Turns", "Turn 数");
+    write_kpi_i18n(out, &format_number(month_turns as u64), "Turns", "响应数");
     write_kpi_i18n(out, &format_compact(month_output), "Output Tokens", "输出 Token");
     write_kpi_i18n(out, &format_cost(month_cost), "Cost", "费用");
     write_kpi_i18n(out, &format!("${:.4}", avg_cost_per_turn), "Avg Cost/Turn", "平均每 Turn 费用");
@@ -970,9 +971,9 @@ new Chart(document.getElementById('{chart_id}'), {{
             writeln!(out, r#"<div class="table-wrap">"#).unwrap();
             writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
             writeln!(out, "<thead><tr>\
-                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Month\" data-zh=\"月份\">Month</th>\
+                <th class=\"text-left\" onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Month\" data-zh=\"月份\">Month</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
-                <th onclick=\"sortTableSimple(this,'{id}')\">Turns</th>\
+                <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Turns\" data-zh=\"响应数\">Turns</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output Tokens\" data-zh=\"输出 Token\">Output Tokens</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost/Turn\" data-zh=\"每 Turn 费用\">Cost/Turn</th>\
                 <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
@@ -982,7 +983,7 @@ new Chart(document.getElementById('{chart_id}'), {{
             for (month, (sessions, turns, output, _cache_write, _cache_read, cost)) in &months {
                 let cpt = if *turns > 0 { cost / *turns as f64 } else { 0.0 };
                 writeln!(out, "<tr>\
-                    <td data-value=\"{}\">{}</td>\
+                    <td class=\"text-left\" data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
@@ -1011,20 +1012,26 @@ new Chart(document.getElementById('{chart_id}'), {{
             "Month" => "每月",
             other => other,
         };
+        let group_col_zh = match trend.group_label.as_str() {
+            "Day" => "日期",
+            "Week" => "周",
+            "Month" => "月份",
+            other => other,
+        };
         writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
         writeln!(out, r#"<h2 data-en="{} Breakdown" data-zh="{}明细">{} Breakdown</h2>"#,
             escape_html(&trend.group_label), escape_html(group_zh), escape_html(&trend.group_label)).unwrap();
         writeln!(out, r#"<div class="table-wrap">"#).unwrap();
         writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
         writeln!(out, "<thead><tr>\
-            <th onclick=\"sortTableSimple(this,'{id}')\">{}</th>\
+            <th class=\"text-left\" onclick=\"sortTableSimple(this,'{id}')\" data-en=\"{en}\" data-zh=\"{zh}\">{en}</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
-            <th onclick=\"sortTableSimple(this,'{id}')\">Turns</th>\
+            <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Turns\" data-zh=\"响应数\">Turns</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Input Tokens\" data-zh=\"输入 Token\">Input Tokens</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output Tokens\" data-zh=\"输出 Token\">Output Tokens</th>\
             <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
-            <th data-en=\"Models\" data-zh=\"模型\">Models</th>\
-        </tr></thead>", escape_html(&trend.group_label), id = tbl_id).unwrap();
+            <th class=\"text-left\" data-en=\"Models\" data-zh=\"模型\">Models</th>\
+        </tr></thead>", en = escape_html(&trend.group_label), zh = escape_html(group_col_zh), id = tbl_id).unwrap();
         writeln!(out, "<tbody>").unwrap();
 
         for entry in &trend.entries {
@@ -1038,13 +1045,13 @@ new Chart(document.getElementById('{chart_id}'), {{
             }).collect::<Vec<_>>().join("");
 
             writeln!(out, "<tr>\
-                <td data-value=\"{}\">{}</td>\
+                <td class=\"text-left\" data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{:.4}\">{}</td>\
-                <td>{}</td>\
+                <td class=\"text-left\">{}</td>\
             </tr>",
                 escape_html(&entry.label), escape_html(&entry.label),
                 entry.session_count, format_number(entry.session_count as u64),
@@ -1069,7 +1076,7 @@ fn render_projects_tab(out: &mut String, projects: &ProjectResult, sessions: &[c
         if !top_n.is_empty() {
             let chart_id = format!("{}-projectCostChart", pfx);
             writeln!(out, r#"<div class="card">"#).unwrap();
-            writeln!(out, "<h2>Project Cost Top 10</h2>").unwrap();
+            writeln!(out, r#"<h2 data-en="Project Cost Top 10" data-zh="项目费用 Top 10">Project Cost Top 10</h2>"#).unwrap();
             writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
 
             let labels: Vec<String> = top_n.iter().map(|p| format!("\"{}\"", escape_html(&p.display_name))).collect();
@@ -1104,13 +1111,13 @@ new Chart(document.getElementById('{chart_id}'), {{
     writeln!(out, r#"<div class="table-wrap">"#).unwrap();
     writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
     writeln!(out, "<thead><tr>\
-        <th></th>\
-        <th data-en=\"Project / Session\" data-zh=\"项目 / 会话\">Project / Session</th>\
+        <th class=\"text-left\"></th>\
+        <th class=\"text-left\" data-en=\"Project / Session\" data-zh=\"项目 / 会话\">Project / Session</th>\
         <th data-en=\"Sessions\" data-zh=\"会话\">Sessions</th>\
-        <th data-en=\"Turns (Agent)\" data-zh=\"Turns (Agent)\">Turns (Agent)</th>\
-        <th>Output</th>\
-        <th>CacheHit%</th>\
-        <th data-en=\"Tools\" data-zh=\"工具\">Tools</th>\
+        <th data-en=\"Turns (Agent)\" data-zh=\"响应数 (Agent)\">Turns (Agent)</th>\
+        <th data-en=\"Output\" data-zh=\"输出\">Output</th>\
+        <th data-en=\"CacheHit\" data-zh=\"缓存命中率\">CacheHit</th>\
+        <th class=\"text-left\" data-en=\"Tools\" data-zh=\"工具\">Tools</th>\
         <th data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
     </tr></thead>").unwrap();
     writeln!(out, "<tbody>").unwrap();
@@ -1136,15 +1143,15 @@ new Chart(document.getElementById('{chart_id}'), {{
             format_number(proj.total_turns as u64)
         };
         writeln!(out, r#"<tr class="project-row expandable">"#).unwrap();
-        writeln!(out, r#"<td><button class="expand-btn" onclick="toggleProject(this,'{pid}')">{arrow}</button></td>"#,
+        writeln!(out, r#"<td class="text-left"><button class="expand-btn" onclick="toggleProject(this,'{pid}')">{arrow}</button></td>"#,
             pid = pid, arrow = "\u{25b6}").unwrap();
         writeln!(out, "\
-            <td><strong>{name}</strong></td>\
+            <td class=\"text-left\"><strong>{name}</strong></td>\
             <td data-value=\"{sess}\">{sess_fmt}</td>\
             <td class=\"turn-count-cell\" data-value=\"{turns}\">{turns_display}</td>\
             <td data-value=\"{out}\">{out_fmt}</td>\
             <td data-value=\"{hit:.1}\">{hit_bar}</td>\
-            <td></td>\
+            <td class=\"text-left\"></td>\
             <td data-value=\"{cost:.4}\">{cost_fmt}</td>",
             name = escape_html(&proj.display_name),
             sess = proj.session_count, sess_fmt = format_number(proj.session_count as u64),
@@ -1160,7 +1167,7 @@ new Chart(document.getElementById('{chart_id}'), {{
             let mut sorted = proj_sessions.clone();
             sorted.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
 
-            for s in &sorted {
+            for s in sorted.iter().filter(|s| s.turn_count > 0) {
                 let utc_iso = s.first_timestamp.map(|t| t.to_rfc3339()).unwrap_or_default();
                 let date_fallback = s.first_timestamp.map(|t| t.format("%m-%d %H:%M").to_string()).unwrap_or_default();
                 let s_hit = html_progress(s.cache_hit_rate);
@@ -1171,9 +1178,9 @@ new Chart(document.getElementById('{chart_id}'), {{
 
                 let has_detail = s.turn_details.is_some();
                 if has_detail {
-                    writeln!(out, r#"<td><button class="expand-btn" onclick="toggleSession(this)">{}</button></td>"#, "\u{25b6}").unwrap();
+                    writeln!(out, r#"<td class="text-left"><button class="expand-btn" onclick="toggleSession(this)">{}</button></td>"#, "\u{25b6}").unwrap();
                 } else {
-                    writeln!(out, "<td></td>").unwrap();
+                    writeln!(out, r#"<td class="text-left"></td>"#).unwrap();
                 }
 
                 // Turns with agent badge
@@ -1194,12 +1201,12 @@ new Chart(document.getElementById('{chart_id}'), {{
                 let short_sid = &s.session_id[..s.session_id.len().min(10)];
 
                 writeln!(out, "\
-                    <td style=\"padding-left:30px;text-align:left;\">{sid} <span style=\"color:#8b949e;font-size:11px;\">(<span data-utc-datetime=\"{utc}\">{date}</span> &middot; {dur})</span></td>\
+                    <td class=\"text-left\" style=\"padding-left:30px;\">{sid} <span style=\"color:#8b949e;font-size:11px;\">(<span data-utc-datetime=\"{utc}\">{date}</span> &middot; {dur})</span></td>\
                     <td></td>\
                     <td class=\"turn-count-cell\" data-value=\"{turns}\">{turns_display}</td>\
                     <td data-value=\"{out}\">{out_fmt}</td>\
                     <td data-value=\"{hit:.1}\">{hit_bar}</td>\
-                    <td class=\"session-tools-cell\">{tools}</td>\
+                    <td class=\"text-left session-tools-cell\">{tools}</td>\
                     <td data-value=\"{cost:.4}\">{cost_fmt}</td>",
                     sid = escape_html(short_sid),
                     utc = utc_iso,
@@ -1262,16 +1269,16 @@ fn write_kpi_i18n(out: &mut String, value: &str, en: &str, zh: &str) {
         value, en, zh, en).unwrap();
 }
 
-/// KPI card with a progress bar for percentage values.
-fn write_kpi_progress(out: &mut String, pct: f64, label: &str) {
+/// KPI card with a progress bar for percentage values, bilingual label.
+fn write_kpi_progress(out: &mut String, pct: f64, en: &str, zh: &str) {
     let bar_color = if pct >= 90.0 { "#6bcb77" } else if pct >= 70.0 { "#ffd93d" } else { "#ff6b6b" };
     writeln!(out, r#"<div class="card" style="text-align:center;">
         <div class="kpi-value">{:.1}%</div>
-        <div style="margin:8px auto;width:120px;"><div class="progress-bar" style="width:120px;">
+        <div style="margin:4px auto;width:120px;"><div class="progress-bar" style="width:120px;">
             <div class="progress-fill" style="width:{:.1}%;background:{};"></div>
         </div></div>
-        <div class="kpi-label">{}</div>
-    </div>"#, pct, pct, bar_color, label).unwrap();
+        <div class="kpi-label" data-en="{}" data-zh="{}">{}</div>
+    </div>"#, pct, pct, bar_color, en, zh, en).unwrap();
 }
 
 /// Render a progress bar inline for table cells.
@@ -1469,16 +1476,16 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
     writeln!(out, "<thead><tr>\
         <th onclick=\"sortTableSimple(this,'{id}')\">Turn</th>\
         <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Time\" data-zh=\"时间\">Time</th>\
-        <th>Model</th>\
-        <th style=\"text-align:left\" data-en=\"User\" data-zh=\"用户\">User</th>\
-        <th style=\"text-align:left\" data-en=\"Assistant\" data-zh=\"助手\">Assistant</th>\
-        <th style=\"text-align:left\" data-en=\"Tools\" data-zh=\"工具\">Tools</th>\
-        <th onclick=\"sortTableSimple(this,'{id}')\">Output</th>\
-        <th onclick=\"sortTableSimple(this,'{id}')\">Context</th>\
+        <th class=\"text-left\" data-en=\"Model\" data-zh=\"模型\">Model</th>\
+        <th class=\"text-left\" data-en=\"User\" data-zh=\"用户\">User</th>\
+        <th class=\"text-left\" data-en=\"Assistant\" data-zh=\"助手\">Assistant</th>\
+        <th class=\"text-left\" data-en=\"Tools\" data-zh=\"工具\">Tools</th>\
+        <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Output\" data-zh=\"输出\">Output</th>\
+        <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Context\" data-zh=\"上下文\">Context</th>\
         <th onclick=\"sortTableSimple(this,'{id}')\">Hit%</th>\
         <th onclick=\"sortTableSimple(this,'{id}')\" data-en=\"Cost\" data-zh=\"费用\">Cost</th>\
-        <th>Stop</th>\
-        <th>\u{26a1}</th>\
+        <th class=\"text-left\">Stop</th>\
+        <th class=\"text-left\">\u{26a1}</th>\
     </tr></thead>", id = table_id).unwrap();
     writeln!(out, "<tbody>").unwrap();
 
@@ -1523,16 +1530,16 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
         writeln!(out, "<tr{cls}>\
             <td data-value=\"{turn}\">{turn}</td>\
             <td><span data-utc=\"{utc}\">{time}</span></td>\
-            <td>{model}</td>\
-            <td style=\"text-align:left;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"{user_full}\">{user}</td>\
-            <td style=\"text-align:left;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"{asst_full}\">{asst}</td>\
-            <td style=\"text-align:left;max-width:160px;line-height:1.6;\">{tools}</td>\
+            <td class=\"text-left\">{model}</td>\
+            <td class=\"text-left\" style=\"max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"{user_full}\">{user}</td>\
+            <td class=\"text-left\" style=\"max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\" title=\"{asst_full}\">{asst}</td>\
+            <td class=\"text-left\" style=\"max-width:160px;line-height:1.6;\">{tools}</td>\
             <td data-value=\"{out_val}\">{out_fmt}</td>\
             <td data-value=\"{ctx_val}\">{ctx_fmt}</td>\
             <td data-value=\"{hit:.1}\">{hit_bar}</td>\
             <td data-value=\"{cost:.6}\">{cost_fmt}</td>\
-            <td>{stop}</td>\
-            <td>{compact}</td>\
+            <td class=\"text-left\">{stop}</td>\
+            <td class=\"text-left\">{compact}</td>\
         </tr>",
             cls = row_class,
             turn = t.turn_number,
