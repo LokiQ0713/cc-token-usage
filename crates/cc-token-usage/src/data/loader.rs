@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::models::{DataQuality, GlobalDataQuality, SessionData};
 use super::parser::parse_session_file;
-use super::scanner::{resolve_agent_parents, scan_claude_home, scan_projects_dir};
+use super::scanner::{resolve_agent_parents, scan_claude_home};
 
 /// Extract the Claude Code version string from the first line of a JSONL file.
 ///
@@ -85,19 +85,6 @@ fn merge_agent_turns(parent: &mut SessionData, agent_turns: Vec<super::models::V
 pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
     let mut files = scan_claude_home(claude_home)
         .context("failed to scan claude home for session files")?;
-    resolve_agent_parents(&mut files)
-        .context("failed to resolve agent parent sessions")?;
-    load_from_files(files)
-}
-
-/// Load all session data from a projects directory directly.
-///
-/// Unlike `load_all` which expects a Claude home directory (and appends `projects/`),
-/// this function takes the projects directory itself. Useful for loading data from
-/// archive directories like `~/.config/superpowers/conversation-archive/`.
-pub fn load_from_projects_dir(projects_dir: &Path) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    let mut files = scan_projects_dir(projects_dir)
-        .context("failed to scan projects dir for session files")?;
     resolve_agent_parents(&mut files)
         .context("failed to resolve agent parent sessions")?;
     load_from_files(files)

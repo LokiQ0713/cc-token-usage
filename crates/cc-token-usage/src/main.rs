@@ -74,28 +74,24 @@ fn main() -> Result<()> {
     let (sessions, quality) = loader::load_all(&claude_home)
         .with_context(|| format!("failed to load data from {}", claude_home.display()))?;
 
-    // 7. Execute analysis + render output
+    // 7. Determine output modes: None → both text + html
+    let want_text = cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Text));
+    let want_html = cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Html));
+
+    // 8. Execute analysis + render output
     match command {
         // ── Overview (default when no subcommand) ────────────────────────
         Command::Overview => {
             let overview = analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
 
-            match cli.format {
-                OutputFormat::Text => {
-                    println!("{}", render_overview(&overview, &calc));
-                }
-                OutputFormat::Html => {
-                    let projects = analyze_projects(&sessions, &calc, 20);
-                    let trend = analyze_trend(&sessions, &calc, 0, false);
-                    let html = render_full_report_html(&overview, &projects, &trend, &calc);
-
-                    let output_path = cli
-                        .output
-                        .unwrap_or_else(|| std::env::temp_dir().join("cc-token-report.html"));
-                    std::fs::write(&output_path, &html)
-                        .with_context(|| format!("failed to write {}", output_path.display()))?;
-                    println!("Report written to {}", output_path.display());
-                }
+            if want_text {
+                println!("{}", render_overview(&overview, &calc));
+            }
+            if want_html {
+                let projects = analyze_projects(&sessions, &calc, 20);
+                let trend = analyze_trend(&sessions, &calc, 0, false);
+                let html = render_full_report_html(&overview, &projects, &trend, &calc);
+                write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }
 
@@ -103,36 +99,27 @@ fn main() -> Result<()> {
         Command::Project { name: _, top } => {
             let projects = analyze_projects(&sessions, &calc, top);
 
-            match cli.format {
-                OutputFormat::Text => {
-                    println!("{}", render_projects(&projects));
-                }
-                OutputFormat::Html => {
-                    let overview =
-                        analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
-                    let trend = analyze_trend(&sessions, &calc, 0, false);
-                    let html = render_full_report_html(&overview, &projects, &trend, &calc);
-                    let output_path = cli
-                        .output
-                        .unwrap_or_else(|| std::env::temp_dir().join("cc-token-report.html"));
-                    std::fs::write(&output_path, &html)
-                        .with_context(|| format!("failed to write {}", output_path.display()))?;
-                    println!("Report written to {}", output_path.display());
-                }
+            if want_text {
+                println!("{}", render_projects(&projects));
+            }
+            if want_html {
+                let overview =
+                    analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
+                let trend = analyze_trend(&sessions, &calc, 0, false);
+                let html = render_full_report_html(&overview, &projects, &trend, &calc);
+                write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }
 
         // ── Session ─────────────────────────────────────────────────────────
         Command::Session { id, latest } => {
             let session = if latest {
-                // Find the session with the most recent last_timestamp
                 sessions
                     .iter()
                     .filter(|s| s.last_timestamp.is_some())
                     .max_by_key(|s| s.last_timestamp)
                     .context("no sessions found with timestamps")?
             } else if let Some(ref prefix) = id {
-                // Prefix match on session ID
                 let matches: Vec<_> = sessions
                     .iter()
                     .filter(|s| s.session_id.starts_with(prefix))
@@ -150,7 +137,6 @@ fn main() -> Result<()> {
                 bail!("specify a session ID or use --latest");
             };
 
-            // Load agent metadata for this session
             let raw_meta = cc_token_usage::data::scanner::load_agent_meta(&session.session_id, &claude_home);
             let agent_meta: std::collections::HashMap<String, cc_token_usage::analysis::session::AgentMeta> = raw_meta.into_iter()
                 .map(|(k, (t, d))| (k, cc_token_usage::analysis::session::AgentMeta { agent_type: t, description: d }))
@@ -158,23 +144,16 @@ fn main() -> Result<()> {
 
             let result = analyze_session(session, &calc, &agent_meta);
 
-            match cli.format {
-                OutputFormat::Text => {
-                    println!("{}", render_session(&result));
-                }
-                OutputFormat::Html => {
-                    let html = render_session_html(&result);
-                    let output_path = cli
-                        .output
-                        .unwrap_or_else(|| std::env::temp_dir().join("cc-session-report.html"));
-                    std::fs::write(&output_path, &html)
-                        .with_context(|| format!("failed to write {}", output_path.display()))?;
-                    println!("Report written to {}", output_path.display());
-                }
+            if want_text {
+                println!("{}", render_session(&result));
+            }
+            if want_html {
+                let html = render_session_html(&result);
+                write_html(&html, cli.output.as_deref(), "cc-session-report.html")?;
             }
         }
 
-        // ── Validate ─────────────────────────────────────────────────────────
+        // ── Validate (text only, no HTML view) ──────────────────────────────
         Command::Validate { id, failures_only } => {
             let target_sessions: Vec<&SessionData> = if let Some(ref prefix) = id {
                 let matches: Vec<_> = sessions
@@ -202,25 +181,30 @@ fn main() -> Result<()> {
             let group_by_month = matches!(group_by, GroupBy::Month);
             let trend = analyze_trend(&sessions, &calc, days, group_by_month);
 
-            match cli.format {
-                OutputFormat::Text => {
-                    println!("{}", render_trend(&trend));
-                }
-                OutputFormat::Html => {
-                    let overview =
-                        analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
-                    let projects = analyze_projects(&sessions, &calc, 20);
-                    let html = render_full_report_html(&overview, &projects, &trend, &calc);
-                    let output_path = cli
-                        .output
-                        .unwrap_or_else(|| std::env::temp_dir().join("cc-token-report.html"));
-                    std::fs::write(&output_path, &html)
-                        .with_context(|| format!("failed to write {}", output_path.display()))?;
-                    println!("Report written to {}", output_path.display());
-                }
+            if want_text {
+                println!("{}", render_trend(&trend));
+            }
+            if want_html {
+                let overview =
+                    analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
+                let projects = analyze_projects(&sessions, &calc, 20);
+                let html = render_full_report_html(&overview, &projects, &trend, &calc);
+                write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }
     }
 
+    Ok(())
+}
+
+/// Write HTML to file and print the path for the user to click.
+fn write_html(html: &str, output: Option<&std::path::Path>, default_name: &str) -> Result<()> {
+    let path = match output {
+        Some(p) => p.to_path_buf(),
+        None => std::env::temp_dir().join(default_name),
+    };
+    std::fs::write(&path, html)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    println!("\nHTML report: {}", path.display());
     Ok(())
 }

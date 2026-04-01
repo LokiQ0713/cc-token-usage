@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "cc-token-usage"
-version = "1.5.1"
+version = "1.5.2"
 dependencies = [
  "anyhow",
  "chrono",

@@ -20,9 +20,9 @@ pub enum GroupBy {
     about = "Analyze Claude Code session token usage, costs, and efficiency"
 )]
 pub struct Cli {
-    /// Output format
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text, global = true)]
-    pub format: OutputFormat,
+    /// Output format (default: both text + html)
+    #[arg(long, value_enum, global = true)]
+    pub format: Option<OutputFormat>,
 
     /// Write output to a file instead of stdout
     #[arg(long, global = true)]
@@ -39,10 +39,6 @@ pub struct Cli {
     /// Path to config file
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
-
-    /// Path to conversation archive directory (default: auto-detect ~/.config/superpowers/conversation-archive)
-    #[arg(long, global = true)]
-    pub archive_dir: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
