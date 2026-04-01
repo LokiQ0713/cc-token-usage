@@ -118,6 +118,17 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     writeln!(out, "    Input:       {:>9}  ({:.0}%)", format_cost(cat.input_cost), cat.input_cost / total * 100.0).unwrap();
     writeln!(out, "    Cache Read:  {:>9}  ({:.0}%)", format_cost(cat.cache_read_cost), cat.cache_read_cost / total * 100.0).unwrap();
 
+    // Efficiency metrics
+    writeln!(out).unwrap();
+    writeln!(out, "  Efficiency").unwrap();
+    writeln!(out, "    Output ratio:       {:.2}% ({} output / {} input)",
+        result.output_ratio,
+        format_number(result.total_output_tokens),
+        format_number(result.total_context_tokens)).unwrap();
+    writeln!(out, "    Cost per turn:      ${:.3}/turn", result.cost_per_turn).unwrap();
+    writeln!(out, "    Output per turn:    {} tokens/turn avg",
+        format_number(result.tokens_per_output_turn)).unwrap();
+
     // Tool usage top 10
     if !result.tool_counts.is_empty() {
         writeln!(out).unwrap();
@@ -410,6 +421,47 @@ pub fn render_session(result: &SessionResult) -> String {
                 format_number(agent.output_tokens),
                 format_cost(agent.cost),
             ).unwrap();
+        }
+    }
+
+    // ── Context Collapse section ──
+    if result.collapse_count > 0 {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Context Collapse ──────────────────────────").unwrap();
+
+        let risk_warning = if result.collapse_max_risk > 0.5 { " \u{26a0}" } else { "" };
+        writeln!(out, "  Collapses:    {} (avg risk: {:.2}, max: {:.2}{})",
+            result.collapse_count, result.collapse_avg_risk, result.collapse_max_risk, risk_warning).unwrap();
+
+        if !result.collapse_summaries.is_empty() {
+            writeln!(out, "  Summaries:").unwrap();
+            for (i, summary) in result.collapse_summaries.iter().enumerate() {
+                // Determine per-summary risk from snapshot staged spans if available
+                // We don't have per-commit risk, so just show the summary text
+                // Mark if max_risk > 0.5 for the last entry (heuristic)
+                let display = truncate_str(summary, 60);
+                writeln!(out, "    {}. \"{}\"", i + 1, display).unwrap();
+            }
+        }
+    }
+
+    // ── Code Attribution section ──
+    if let Some(ref attr) = result.attribution {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Code Attribution ──────────────────────────").unwrap();
+        writeln!(out, "  Files touched:     {}", attr.file_count).unwrap();
+        writeln!(out, "  Claude wrote:      {} chars", format_number(attr.total_claude_contribution)).unwrap();
+        if let Some(prompts) = attr.prompt_count {
+            let escape_str = attr.escape_count
+                .filter(|&e| e > 0)
+                .map(|e| format!(" ({} escaped)", e))
+                .unwrap_or_default();
+            writeln!(out, "  Prompts:           {}{}", prompts, escape_str).unwrap();
+        }
+        if let Some(perms) = attr.permission_prompt_count {
+            if perms > 0 {
+                writeln!(out, "  Permissions:       {} prompts shown", perms).unwrap();
+            }
         }
     }
 

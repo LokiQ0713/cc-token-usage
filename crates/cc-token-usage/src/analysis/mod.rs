@@ -4,13 +4,14 @@ pub mod session;
 pub mod trend;
 pub mod validate;
 
-use crate::data::models::{GlobalDataQuality, PrLinkInfo, TokenUsage};
+use crate::data::models::{AttributionData, GlobalDataQuality, PrLinkInfo, TokenUsage};
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::Serialize;
 use std::collections::HashMap;
 
 // ─── Common Aggregation ──────────────────────────────────────────────────────
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct AggregatedTokens {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -44,7 +45,7 @@ impl AggregatedTokens {
 
 // ─── Cost Breakdown ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct TurnCostBreakdown {
     pub input_cost: f64,
     pub output_cost: f64,
@@ -54,7 +55,7 @@ pub struct TurnCostBreakdown {
     pub total: f64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct CostByCategory {
     pub input_cost: f64,
     pub output_cost: f64,
@@ -84,10 +85,14 @@ pub struct OverviewResult {
     pub total_context_tokens: u64,
     pub avg_cache_hit_rate: f64,
     pub cache_savings: CacheSavings,
+    // Efficiency metrics
+    pub output_ratio: f64,              // output / total input (as percentage)
+    pub cost_per_turn: f64,             // $/turn
+    pub tokens_per_output_turn: u64,    // avg output tokens per turn
 }
 
 /// How much money was saved by cache hits vs paying full input price.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct CacheSavings {
     pub total_saved: f64,           // $ saved by cache reads
     pub without_cache_cost: f64,    // hypothetical cost if all cache_read charged at base_input
@@ -96,6 +101,7 @@ pub struct CacheSavings {
     pub by_model: Vec<(String, f64)>, // model -> savings, sorted desc
 }
 
+#[derive(Debug, Serialize)]
 pub struct SubscriptionValue {
     pub monthly_price: f64,
     pub api_equivalent: f64,
@@ -104,10 +110,12 @@ pub struct SubscriptionValue {
 
 // ─── Project ─────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Serialize)]
 pub struct ProjectResult {
     pub projects: Vec<ProjectSummary>,
 }
 
+#[derive(Debug, Serialize)]
 pub struct ProjectSummary {
     pub name: String,
     pub display_name: String,
@@ -121,6 +129,7 @@ pub struct ProjectSummary {
 
 // ─── Session ─────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Serialize)]
 pub struct SessionResult {
     pub session_id: String,
     pub project: String,
@@ -157,9 +166,16 @@ pub struct SessionResult {
     pub inference_geos: HashMap<String, usize>,
     // Git
     pub git_branches: HashMap<String, usize>,
+    // Context Collapse
+    pub collapse_count: usize,
+    pub collapse_summaries: Vec<String>,
+    pub collapse_avg_risk: f64,
+    pub collapse_max_risk: f64,
+    // Attribution
+    pub attribution: Option<AttributionData>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct TurnDetail {
     pub turn_number: usize,
     pub timestamp: DateTime<Utc>,
@@ -182,7 +198,7 @@ pub struct TurnDetail {
     pub tool_names: Vec<String>,      // 使用的工具名
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct AgentSummary {
     pub total_agent_turns: usize,
     pub agent_output_tokens: u64,
@@ -190,7 +206,7 @@ pub struct AgentSummary {
     pub agents: Vec<AgentDetail>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct AgentDetail {
     pub agent_id: String,
     pub agent_type: String,
@@ -203,7 +219,7 @@ pub struct AgentDetail {
 // ─── Session Summary ────────────────────────────────────────────────────────
 
 /// Session-level summary for overview reports and session ranking tables.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct SessionSummary {
     pub session_id: String,
     pub project_display_name: String,
@@ -222,15 +238,20 @@ pub struct SessionSummary {
     pub tool_use_count: usize,      // tool_use stop_reason 的次数
     pub top_tools: Vec<(String, usize)>, // 工具名 -> 使用次数，前5
     pub turn_details: Option<Vec<TurnDetail>>, // 仅 top sessions 有详情
+    // Efficiency metrics
+    pub output_ratio: f64,              // output / total context (as percentage)
+    pub cost_per_turn: f64,             // $/turn
 }
 
 // ─── Trend ───────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Serialize)]
 pub struct TrendResult {
     pub entries: Vec<TrendEntry>,
     pub group_label: String, // "Day" or "Month"
 }
 
+#[derive(Debug, Serialize)]
 pub struct TrendEntry {
     pub label: String, // "2026-03-15" or "2026-03"
     pub date: NaiveDate,

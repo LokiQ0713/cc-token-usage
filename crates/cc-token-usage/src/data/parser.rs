@@ -9,7 +9,7 @@ use cc_session_jsonl::types::{
     ApiMessage, AssistantEntry, ContentBlock, Entry, UserEntry,
 };
 
-use super::models::{DataQuality, PrLinkInfo, SessionMetadata, TokenUsage, ValidatedTurn};
+use super::models::{AttributionData, CollapseCommit, CollapseSnapshot, DataQuality, PrLinkInfo, SessionMetadata, TokenUsage, ValidatedTurn};
 
 // ─── Pipeline Stage 1: JSON Parse (now via cc-session-jsonl) ──────────────
 
@@ -319,6 +319,52 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
                     Some("dequeue") => metadata.queue_dequeues += 1,
                     _ => {}
                 }
+                continue;
+            }
+            Entry::ContextCollapseCommit(cc) => {
+                let collapse_id = cc.collapse_id.unwrap_or_default();
+                let summary = cc.summary.unwrap_or_default();
+                if !collapse_id.is_empty() || !summary.is_empty() {
+                    metadata.collapse_commits.push(CollapseCommit { collapse_id, summary });
+                }
+                continue;
+            }
+            Entry::ContextCollapseSnapshot(cs) => {
+                // last-wins semantics for snapshot
+                let staged = cs.staged.unwrap_or_default();
+                let staged_count = staged.len();
+                let risks: Vec<f64> = staged.iter().filter_map(|s| s.risk).collect();
+                let avg_risk = if risks.is_empty() { 0.0 } else { risks.iter().sum::<f64>() / risks.len() as f64 };
+                let max_risk = risks.iter().cloned().fold(0.0f64, f64::max);
+                metadata.collapse_snapshot = Some(CollapseSnapshot {
+                    staged_count,
+                    avg_risk,
+                    max_risk,
+                    armed: cs.armed.unwrap_or(false),
+                    last_spawn_tokens: cs.last_spawn_tokens.unwrap_or(0),
+                });
+                continue;
+            }
+            Entry::AttributionSnapshot(a) => {
+                // last-wins semantics
+                let surface = a.surface.unwrap_or_default();
+                let (file_count, total_contribution) = if let Some(obj) = a.file_states.as_ref().and_then(|v| v.as_object()) {
+                    let fc = obj.len();
+                    let tc: u64 = obj.values()
+                        .filter_map(|v| v.get("claudeContribution")?.as_u64())
+                        .sum();
+                    (fc, tc)
+                } else {
+                    (0, 0)
+                };
+                metadata.attribution = Some(AttributionData {
+                    surface,
+                    file_count,
+                    total_claude_contribution: total_contribution,
+                    prompt_count: a.prompt_count,
+                    escape_count: a.escape_count,
+                    permission_prompt_count: a.permission_prompt_count,
+                });
                 continue;
             }
             _ => continue,

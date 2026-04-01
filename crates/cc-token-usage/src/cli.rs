@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub enum OutputFormat {
     Text,
     Html,
+    Json,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

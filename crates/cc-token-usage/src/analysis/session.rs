@@ -258,5 +258,12 @@ pub fn analyze_session(
         inference_geos,
         // Git
         git_branches,
+        // Context Collapse
+        collapse_count: session.metadata.collapse_commits.len(),
+        collapse_summaries: session.metadata.collapse_commits.iter().map(|c| c.summary.clone()).collect(),
+        collapse_avg_risk: session.metadata.collapse_snapshot.as_ref().map_or(0.0, |s| s.avg_risk),
+        collapse_max_risk: session.metadata.collapse_snapshot.as_ref().map_or(0.0, |s| s.max_risk),
+        // Attribution
+        attribution: session.metadata.attribution.clone(),
     }
 }

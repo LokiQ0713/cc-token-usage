@@ -11,6 +11,7 @@ use cc_token_usage::config::Config;
 use cc_token_usage::data::loader;
 use cc_token_usage::data::models::SessionData;
 use cc_token_usage::output::html::{render_full_report_html, render_session_html};
+use cc_token_usage::output::json::{render_overview_json, render_projects_json, render_session_json, render_trend_json};
 use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend, render_validation};
 use cc_token_usage::pricing::calculator::PricingCalculator;
 
@@ -74,9 +75,10 @@ fn main() -> Result<()> {
     let (sessions, quality) = loader::load_all(&claude_home)
         .with_context(|| format!("failed to load data from {}", claude_home.display()))?;
 
-    // 7. Determine output modes: None → both text + html
-    let want_text = cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Text));
-    let want_html = cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Html));
+    // 7. Determine output modes: None → both text + html; Json is exclusive
+    let want_json = matches!(cli.format, Some(OutputFormat::Json));
+    let want_text = !want_json && (cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Text)));
+    let want_html = !want_json && (cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Html)));
 
     // 8. Execute analysis + render output
     match command {
@@ -84,6 +86,9 @@ fn main() -> Result<()> {
         Command::Overview => {
             let overview = analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
 
+            if want_json {
+                println!("{}", render_overview_json(&overview));
+            }
             if want_text {
                 println!("{}", render_overview(&overview, &calc));
             }
@@ -99,6 +104,9 @@ fn main() -> Result<()> {
         Command::Project { name: _, top } => {
             let projects = analyze_projects(&sessions, &calc, top);
 
+            if want_json {
+                println!("{}", render_projects_json(&projects));
+            }
             if want_text {
                 println!("{}", render_projects(&projects));
             }
@@ -144,6 +152,9 @@ fn main() -> Result<()> {
 
             let result = analyze_session(session, &calc, &agent_meta);
 
+            if want_json {
+                println!("{}", render_session_json(&result));
+            }
             if want_text {
                 println!("{}", render_session(&result));
             }
@@ -181,6 +192,9 @@ fn main() -> Result<()> {
             let group_by_month = matches!(group_by, GroupBy::Month);
             let trend = analyze_trend(&sessions, &calc, days, group_by_month);
 
+            if want_json {
+                println!("{}", render_trend_json(&trend));
+            }
             if want_text {
                 println!("{}", render_trend(&trend));
             }

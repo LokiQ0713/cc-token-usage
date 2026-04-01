@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ─── Re-exports from cc-session-jsonl ───────────────────────────────────────
 
@@ -104,11 +104,39 @@ pub struct SessionData {
 // ─── Session Metadata ───────────────────────────────────────────────────────
 
 /// PR link info extracted from pr-link entries.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PrLinkInfo {
     pub number: u64,
     pub url: String,
     pub repository: String,
+}
+
+/// A committed context collapse event.
+#[derive(Debug, Clone)]
+pub struct CollapseCommit {
+    pub collapse_id: String,
+    pub summary: String,
+}
+
+/// Snapshot of context collapse risk state.
+#[derive(Debug, Clone)]
+pub struct CollapseSnapshot {
+    pub staged_count: usize,
+    pub avg_risk: f64,
+    pub max_risk: f64,
+    pub armed: bool,
+    pub last_spawn_tokens: u64,
+}
+
+/// Attribution data extracted from attribution-snapshot entries.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AttributionData {
+    pub surface: String,
+    pub file_count: usize,
+    pub total_claude_contribution: u64,
+    pub prompt_count: Option<u64>,
+    pub escape_count: Option<u64>,
+    pub permission_prompt_count: Option<u64>,
 }
 
 /// Metadata collected from non-assistant/user entries during parsing.
@@ -124,6 +152,9 @@ pub struct SessionMetadata {
     pub queue_dequeues: usize,
     pub api_error_count: usize,             // assistant entries with api_error/error
     pub user_prompt_count: usize,           // count of user entries
+    pub collapse_commits: Vec<CollapseCommit>,
+    pub collapse_snapshot: Option<CollapseSnapshot>,
+    pub attribution: Option<AttributionData>,
 }
 
 impl SessionData {
@@ -160,7 +191,7 @@ pub struct DataQuality {
 }
 
 /// Quality metrics aggregated across all session files.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct GlobalDataQuality {
     pub total_session_files: usize,
     pub total_agent_files: usize,
