@@ -53,7 +53,7 @@ pub enum Command {
     /// Analyze token usage for a specific project
     Project {
         /// Project name to analyze
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         name: Option<String>,
 
         /// Show top N sessions by token usage

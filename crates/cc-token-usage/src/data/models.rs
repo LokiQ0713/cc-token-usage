@@ -66,7 +66,7 @@ impl From<cc_session_jsonl::types::Usage> for TokenUsage {
 // ─── Validated Data Layer ────────────────────────────────────────────────────
 
 /// A single validated assistant turn, ready for analysis.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValidatedTurn {
     pub uuid: String,
     pub request_id: Option<String>,
@@ -88,7 +88,7 @@ pub struct ValidatedTurn {
 }
 
 /// Aggregated data from a single session.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SessionData {
     pub session_id: String,
     pub project: Option<String>,
@@ -140,7 +140,7 @@ pub struct AttributionData {
 }
 
 /// Metadata collected from non-assistant/user entries during parsing.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SessionMetadata {
     pub title: Option<String>,              // custom-title > ai-title
     pub tags: Vec<String>,
@@ -179,7 +179,7 @@ impl SessionData {
 }
 
 /// Quality metrics for a single session file.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DataQuality {
     pub total_lines: usize,
     pub valid_turns: usize,

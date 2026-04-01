@@ -103,8 +103,15 @@ fn main() -> Result<()> {
         }
 
         // ── Project ─────────────────────────────────────────────────────────
-        Command::Project { name: _, top } => {
-            let projects = analyze_projects(&sessions, &calc, top);
+        Command::Project { name, top } => {
+            let filtered: Vec<SessionData>;
+            let target_sessions = if let Some(ref filter) = name {
+                filtered = sessions.iter().filter(|s| s.project.as_ref().is_some_and(|p| p.contains(filter.as_str()))).cloned().collect();
+                &filtered
+            } else {
+                &sessions
+            };
+            let projects = analyze_projects(target_sessions, &calc, top);
 
             if want_json {
                 println!("{}", render_projects_json(&projects));
@@ -114,8 +121,8 @@ fn main() -> Result<()> {
             }
             if want_html {
                 let overview =
-                    analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
-                let trend = analyze_trend(&sessions, &calc, 0, false);
+                    analyze_overview(target_sessions, quality.clone(), &calc, subscription_price);
+                let trend = analyze_trend(target_sessions, &calc, 0, false);
                 let html = render_full_report_html(&overview, &projects, &trend, &calc);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
@@ -183,6 +190,9 @@ fn main() -> Result<()> {
 
             let report = validate::validate_all(&target_sessions, &quality, &claude_home, &calc)
                 .context("validation failed")?;
+            if want_json {
+                eprintln!("Note: JSON output is not yet supported for validate. Showing text instead.");
+            }
             println!("{}", render_validation(&report, failures_only));
         }
 
@@ -197,7 +207,10 @@ fn main() -> Result<()> {
             if want_text {
                 println!("{}", render_wrapped(&result));
             }
-            // HTML: future
+            if want_html && !want_text {
+                eprintln!("Note: HTML output is not yet supported for wrapped. Showing text instead.");
+                println!("{}", render_wrapped(&result));
+            }
         }
 
         // ── Update (already handled above, unreachable) ─────────────────────
