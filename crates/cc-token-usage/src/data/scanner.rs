@@ -1,214 +1,40 @@
-use anyhow::{Context, Result};
-use std::fs;
-use std::io::{BufRead, BufReader};
+//! Session file discovery — thin wrapper around cc-session-jsonl's scanner.
+//!
+//! Re-exports the core scanner functions and types. The `load_agent_meta`
+//! function converts cc-session-jsonl's `AgentMeta` into the (String, String)
+//! tuple format expected by the existing analysis layer.
+
 use std::path::Path;
 
-use super::models::SessionFile;
-
-/// Check if a string looks like a UUID (8-4-4-4-12 hex pattern).
-fn is_uuid(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 5 {
-        return false;
-    }
-    let expected_lens = [8, 4, 4, 4, 12];
-    parts
-        .iter()
-        .zip(expected_lens.iter())
-        .all(|(part, &len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
-}
+pub use cc_session_jsonl::scanner::{
+    resolve_agent_parents, scan_sessions as scan_sessions_raw, SessionFile,
+};
 
 /// Scan `~/.claude/projects/` for all session JSONL files and return metadata.
 ///
-/// Finds three kinds of files:
-/// 1. Main sessions: `<project>/<uuid>.jsonl`
-/// 2. Legacy agents: `<project>/agent-<id>.jsonl`
-/// 3. New-style agents: `<project>/<uuid>/subagents/agent-<id>.jsonl`
-pub fn scan_claude_home(claude_home: &Path) -> Result<Vec<SessionFile>> {
-    let projects_dir = claude_home.join("projects");
-    scan_projects_dir(&projects_dir)
-}
-
-/// Scan a projects directory for all session JSONL files.
-///
-/// This is the core scanner that works on any directory containing project
-/// subdirectories with JSONL session files. `scan_claude_home` delegates to
-/// this after appending `projects/`.
-///
-/// Directory structure expected:
-/// ```text
-/// projects_dir/
-///   <project>/
-///     <uuid>.jsonl              — main session
-///     agent-<id>.jsonl          — legacy agent
-///     <uuid>/subagents/agent-<id>.jsonl — new-style agent
-/// ```
-pub fn scan_projects_dir(projects_dir: &Path) -> Result<Vec<SessionFile>> {
-    if !projects_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut results = Vec::new();
-
-    // Iterate over project directories
-    let project_entries = fs::read_dir(projects_dir)
-        .with_context(|| format!("failed to read projects dir: {}", projects_dir.display()))?;
-
-    for project_entry in project_entries {
-        let project_entry = project_entry?;
-        let project_path = project_entry.path();
-        if !project_path.is_dir() {
-            continue;
-        }
-        let project_name = project_entry
-            .file_name()
-            .to_string_lossy()
-            .into_owned();
-
-        // Iterate over entries inside each project directory
-        let entries = fs::read_dir(&project_path)
-            .with_context(|| format!("failed to read project dir: {}", project_path.display()))?;
-
-        for entry in entries {
-            let entry = entry?;
-            let entry_path = entry.path();
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-
-            if entry_path.is_file() {
-                // Skip non-jsonl files
-                if !file_name.ends_with(".jsonl") {
-                    continue;
-                }
-
-                let stem = file_name.trim_end_matches(".jsonl");
-
-                if is_uuid(stem) {
-                    // Type 1: Main session — <project>/<uuid>.jsonl
-                    results.push(SessionFile {
-                        session_id: stem.to_string(),
-                        project: Some(project_name.clone()),
-                        file_path: entry_path,
-                        is_agent: false,
-                        parent_session_id: None,
-                    });
-                } else if stem.starts_with("agent-") {
-                    // Type 2: Legacy agent — <project>/agent-<id>.jsonl
-                    results.push(SessionFile {
-                        session_id: stem.to_string(),
-                        project: Some(project_name.clone()),
-                        file_path: entry_path,
-                        is_agent: true,
-                        parent_session_id: None,
-                    });
-                }
-            } else if entry_path.is_dir() {
-                // Skip well-known non-session directories
-                if file_name == "memory" || file_name == "tool-results" {
-                    continue;
-                }
-
-                // Check for new-style agents under <uuid>/subagents/
-                if is_uuid(&file_name) {
-                    let parent_uuid = file_name.clone();
-                    let subagents_dir = entry_path.join("subagents");
-                    if subagents_dir.is_dir() {
-                        let sub_entries = fs::read_dir(&subagents_dir).with_context(|| {
-                            format!(
-                                "failed to read subagents dir: {}",
-                                subagents_dir.display()
-                            )
-                        })?;
-
-                        for sub_entry in sub_entries {
-                            let sub_entry = sub_entry?;
-                            let sub_path = sub_entry.path();
-                            let sub_name = sub_entry.file_name().to_string_lossy().into_owned();
-
-                            if !sub_path.is_file() || !sub_name.ends_with(".jsonl") {
-                                continue;
-                            }
-
-                            let sub_stem = sub_name.trim_end_matches(".jsonl");
-                            if sub_stem.starts_with("agent-") {
-                                // Type 3: New-style agent
-                                results.push(SessionFile {
-                                    session_id: sub_stem.to_string(),
-                                    project: Some(project_name.clone()),
-                                    file_path: sub_path,
-                                    is_agent: true,
-                                    parent_session_id: Some(parent_uuid.clone()),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(results)
-}
-
-/// For legacy agent files that have no parent_session_id yet, read the first
-/// JSON line and extract the `sessionId` field to use as parent_session_id.
-pub fn resolve_agent_parents(files: &mut [SessionFile]) -> Result<()> {
-    for file in files.iter_mut() {
-        if !file.is_agent || file.parent_session_id.is_some() {
-            continue;
-        }
-
-        // Read first line and extract sessionId
-        let f = fs::File::open(&file.file_path).with_context(|| {
-            format!(
-                "failed to open agent file for parent resolution: {}",
-                file.file_path.display()
-            )
-        })?;
-        let reader = BufReader::new(f);
-
-        if let Some(Ok(first_line)) = reader.lines().next() {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&first_line) {
-                if let Some(sid) = val.get("sessionId").and_then(|v| v.as_str()) {
-                    file.parent_session_id = Some(sid.to_string());
-                }
-            }
-        }
-    }
-
-    Ok(())
+/// This is a thin wrapper around `cc_session_jsonl::scan_sessions` that converts
+/// the `io::Result` into `anyhow::Result` for compatibility with the rest of the codebase.
+pub fn scan_claude_home(claude_home: &Path) -> anyhow::Result<Vec<SessionFile>> {
+    Ok(cc_session_jsonl::scanner::scan_sessions(claude_home)?)
 }
 
 /// Load agent metadata from .meta.json files for a given session.
-/// Returns a map of agent_id (without "agent-" prefix) -> (agentType, description).
-pub fn load_agent_meta(session_id: &str, claude_home: &Path) -> std::collections::HashMap<String, (String, String)> {
-    let mut result = std::collections::HashMap::new();
-    let projects_dir = claude_home.join("projects");
-    if !projects_dir.exists() { return result; }
-
-    // Search all project dirs for <session_id>/subagents/agent-*.meta.json
-    if let Ok(entries) = fs::read_dir(&projects_dir) {
-        for entry in entries.flatten() {
-            let subagents_dir = entry.path().join(session_id).join("subagents");
-            if !subagents_dir.exists() { continue; }
-
-            if let Ok(sub_entries) = fs::read_dir(&subagents_dir) {
-                for sub_entry in sub_entries.flatten() {
-                    let name = sub_entry.file_name().to_string_lossy().to_string();
-                    if !name.ends_with(".meta.json") { continue; }
-                    let agent_id = name.trim_start_matches("agent-").trim_end_matches(".meta.json");
-
-                    if let Ok(content) = fs::read_to_string(sub_entry.path()) {
-                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                            let agent_type = val.get("agentType").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                            let description = val.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            result.insert(agent_id.to_string(), (agent_type, description));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    result
+/// Returns a map of agent_id (e.g., "agent-abc123") -> (agentType, description).
+///
+/// This wraps cc-session-jsonl's `load_agent_meta` and converts `AgentMeta`
+/// into the tuple format used by the existing session analysis code.
+pub fn load_agent_meta(
+    session_id: &str,
+    claude_home: &Path,
+) -> std::collections::HashMap<String, (String, String)> {
+    cc_session_jsonl::scanner::load_agent_meta(session_id, claude_home)
+        .into_iter()
+        .map(|(k, meta)| {
+            let agent_type = meta.agent_type.unwrap_or_else(|| "unknown".to_string());
+            let description = meta.description.unwrap_or_default();
+            (k, (agent_type, description))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::models::{DataQuality, GlobalDataQuality, SessionData};
+use super::models::{DataQuality, GlobalDataQuality, SessionData, SessionFile};
 use super::parser::parse_session_file;
 use super::scanner::{resolve_agent_parents, scan_claude_home};
 
@@ -91,7 +91,7 @@ pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuali
 }
 
 /// Shared loading logic: partition files, parse sessions, merge agents, compute time ranges.
-fn load_from_files(files: Vec<super::models::SessionFile>) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
+fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
     let (main_files, agent_files): (Vec<_>, Vec<_>) =
         files.into_iter().partition(|f| !f.is_agent);
 
@@ -105,10 +105,10 @@ fn load_from_files(files: Vec<super::models::SessionFile>) -> Result<(Vec<Sessio
     let mut sessions: HashMap<String, SessionData> = HashMap::new();
 
     for sf in &main_files {
-        let (turns, quality) = parse_session_file(&sf.file_path, false)
-            .with_context(|| format!("failed to parse session: {}", sf.file_path.display()))?;
+        let (turns, quality) = parse_session_file(&sf.path, false)
+            .with_context(|| format!("failed to parse session: {}", sf.path.display()))?;
 
-        let version = extract_version(&sf.file_path);
+        let version = extract_version(&sf.path);
         let (first_ts, last_ts) = time_range(turns.iter().map(|t| &t.timestamp));
 
         global_quality.total_valid_turns += quality.valid_turns;
@@ -129,8 +129,8 @@ fn load_from_files(files: Vec<super::models::SessionFile>) -> Result<(Vec<Sessio
 
     // Process agent files and merge into parent sessions
     for sf in &agent_files {
-        let (agent_turns, quality) = parse_session_file(&sf.file_path, true)
-            .with_context(|| format!("failed to parse agent file: {}", sf.file_path.display()))?;
+        let (agent_turns, quality) = parse_session_file(&sf.path, true)
+            .with_context(|| format!("failed to parse agent file: {}", sf.path.display()))?;
 
         global_quality.total_valid_turns += quality.valid_turns;
         global_quality.total_skipped +=

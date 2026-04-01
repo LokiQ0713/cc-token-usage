@@ -5,22 +5,23 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::models::{
-    ApiMessage, AssistantMessage, ContentBlock, DataQuality, JournalEntry, UserMessage,
-    ValidatedTurn,
+use cc_session_jsonl::types::{
+    ApiMessage, AssistantEntry, ContentBlock, Entry, UserEntry,
 };
 
-// ─── Pipeline Stage 1: JSON Parse ──────────────────────────────────────────
+use super::models::{DataQuality, TokenUsage, ValidatedTurn};
 
-fn parse_line(line: &str) -> Option<JournalEntry> {
-    serde_json::from_str(line).ok()
+// ─── Pipeline Stage 1: JSON Parse (now via cc-session-jsonl) ──────────────
+
+fn parse_line(line: &str) -> Option<Entry> {
+    cc_session_jsonl::parse_entry(line).ok()
 }
 
 // ─── Pipeline Stage 2: Type Filter + User Text Extraction ──────────────────
 
 /// Extract user message text (truncated to 500 chars) for pairing with assistant turns.
-fn extract_user_text(user_msg: &UserMessage) -> Option<String> {
-    let content_val = user_msg.message.as_ref()?.get("content")?;
+fn extract_user_text(user_entry: &UserEntry) -> Option<String> {
+    let content_val = user_entry.message.as_ref()?.content.as_ref()?;
 
     let text = if let Some(s) = content_val.as_str() {
         s.to_string()
@@ -67,20 +68,20 @@ struct ValidatedFields {
     request_id: Option<String>,
     timestamp: DateTime<Utc>,
     model: String,
-    usage: super::models::TokenUsage,
+    usage: TokenUsage,
     stop_reason: Option<String>,
     content: Option<Vec<ContentBlock>>,
     agent_id: Option<String>,
 }
 
 fn validate_assistant(
-    msg: AssistantMessage,
+    msg: AssistantEntry,
     is_agent: bool,
     now: DateTime<Utc>,
-) -> Result<ValidatedFields, FilterReason> {
+) -> std::result::Result<ValidatedFields, FilterReason> {
     let api: ApiMessage = msg.message.ok_or(FilterReason::NoApiMessage)?;
 
-    // Sidechain filter (skip for agent files — they always have isSidechain=true)
+    // Sidechain filter (skip for agent files -- they always have isSidechain=true)
     if !is_agent && msg.is_sidechain == Some(true) {
         return Err(FilterReason::Sidechain);
     }
@@ -91,16 +92,19 @@ fn validate_assistant(
     }
 
     let model = api.model.ok_or(FilterReason::NoModel)?;
-    let usage = api.usage.ok_or(FilterReason::NoUsage)?;
+    let lib_usage = api.usage.ok_or(FilterReason::NoUsage)?;
 
     // Non-zero usage
-    let total_tokens = usage.input_tokens.unwrap_or(0)
-        + usage.output_tokens.unwrap_or(0)
-        + usage.cache_creation_input_tokens.unwrap_or(0)
-        + usage.cache_read_input_tokens.unwrap_or(0);
+    let total_tokens = lib_usage.input_tokens.unwrap_or(0)
+        + lib_usage.output_tokens.unwrap_or(0)
+        + lib_usage.cache_creation_input_tokens.unwrap_or(0)
+        + lib_usage.cache_read_input_tokens.unwrap_or(0);
     if total_tokens == 0 {
         return Err(FilterReason::ZeroUsage);
     }
+
+    // Convert to local TokenUsage
+    let usage: TokenUsage = lib_usage.into();
 
     // Timestamp validation
     let timestamp_str = msg.timestamp.as_deref()
@@ -152,7 +156,7 @@ fn extract_content(content: &Option<Vec<ContentBlock>>) -> (Vec<String>, Option<
                 ContentBlock::ToolResult { .. } => {
                     content_types.push("tool_result".to_string());
                 }
-                ContentBlock::Other => {
+                _ => {
                     content_types.push("other".to_string());
                 }
             }
@@ -215,7 +219,7 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
         let line = line_result.with_context(|| format!("failed to read line from {}", path.display()))?;
         quality.total_lines += 1;
 
-        // Stage 1: JSON parse
+        // Stage 1: JSON parse (via cc-session-jsonl)
         let entry = match parse_line(&line) {
             Some(e) => e,
             None => {
@@ -226,9 +230,9 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
 
         // Stage 2: Type filter
         let msg = match entry {
-            JournalEntry::Assistant(msg) => msg,
-            JournalEntry::User(user_msg) => {
-                if let Some(text) = extract_user_text(&user_msg) {
+            Entry::Assistant(msg) => msg,
+            Entry::User(user_entry) => {
+                if let Some(text) = extract_user_text(&user_entry) {
                     last_user_text = Some(text);
                 }
                 continue;
@@ -341,6 +345,7 @@ mod tests {
 
     #[test]
     fn non_assistant_types_not_counted_as_parse_error() {
+        // Note: "progress" is not a named variant in cc-session-jsonl, it maps to Unknown
         let progress = r#"{"type":"progress","data":{"type":"hook_progress"},"uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
         let system = r#"{"type":"system","subtype":"turn_duration","durationMs":1234,"uuid":"u2","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
         let last_prompt = r#"{"type":"last-prompt","lastPrompt":"hello","sessionId":"s1"}"#;
@@ -401,7 +406,6 @@ mod tests {
 
     #[test]
     fn extract_content_handles_all_types() {
-        use super::super::models::ContentBlock;
         let blocks = vec![
             ContentBlock::Text { text: Some("hello".into()) },
             ContentBlock::ToolUse { id: None, name: Some("Bash".into()), input: None },
