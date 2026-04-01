@@ -127,6 +127,7 @@ name = "cc-token-usage"
 version = "1.5.2"
 dependencies = [
  "anyhow",
+ "cc-session-jsonl",
  "chrono",
  "clap",
  "comfy-table",

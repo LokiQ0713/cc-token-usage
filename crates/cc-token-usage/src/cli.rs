@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub enum OutputFormat {
     Text,
     Html,
+    Json,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -52,7 +53,7 @@ pub enum Command {
     /// Analyze token usage for a specific project
     Project {
         /// Project name to analyze
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         name: Option<String>,
 
         /// Show top N sessions by token usage
@@ -96,5 +97,12 @@ pub enum Command {
         /// Group by: day or month
         #[arg(long, value_enum, default_value_t = GroupBy::Day)]
         group_by: GroupBy,
+    },
+
+    /// Generate a "Wrapped" annual summary of your Claude Code usage
+    Wrapped {
+        /// Year to summarize (default: current year)
+        #[arg(long)]
+        year: Option<i32>,
     },
 }

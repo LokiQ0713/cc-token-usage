@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::analysis::validate::ValidationReport;
+use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
 use crate::pricing::calculator::PricingCalculator;
 
@@ -117,6 +118,17 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         (cat.cache_write_5m_cost + cat.cache_write_1h_cost) / total * 100.0).unwrap();
     writeln!(out, "    Input:       {:>9}  ({:.0}%)", format_cost(cat.input_cost), cat.input_cost / total * 100.0).unwrap();
     writeln!(out, "    Cache Read:  {:>9}  ({:.0}%)", format_cost(cat.cache_read_cost), cat.cache_read_cost / total * 100.0).unwrap();
+
+    // Efficiency metrics
+    writeln!(out).unwrap();
+    writeln!(out, "  Efficiency").unwrap();
+    writeln!(out, "    Output ratio:       {:.2}% ({} output / {} input)",
+        result.output_ratio,
+        format_number(result.total_output_tokens),
+        format_number(result.total_context_tokens)).unwrap();
+    writeln!(out, "    Cost per turn:      ${:.3}/turn", result.cost_per_turn).unwrap();
+    writeln!(out, "    Output per turn:    {} tokens/turn avg",
+        format_number(result.tokens_per_output_turn)).unwrap();
 
     // Tool usage top 10
     if !result.tool_counts.is_empty() {
@@ -283,6 +295,103 @@ pub fn render_session(result: &SessionResult) -> String {
         result.compaction_count).unwrap();
     writeln!(out, "  Cost:      {}", format_cost(result.total_cost)).unwrap();
 
+    // ── Metadata section ──
+    let has_metadata = result.title.is_some()
+        || !result.tags.is_empty()
+        || result.mode.is_some()
+        || !result.git_branches.is_empty()
+        || !result.pr_links.is_empty();
+
+    if has_metadata {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Metadata ──────────────────────────────────").unwrap();
+        if let Some(ref title) = result.title {
+            writeln!(out, "  Title:        {}", truncate_str(title, 60)).unwrap();
+        }
+        if !result.tags.is_empty() {
+            writeln!(out, "  Tags:         {}", result.tags.join(", ")).unwrap();
+        }
+        if let Some(ref mode) = result.mode {
+            writeln!(out, "  Mode:         {}", mode).unwrap();
+        }
+        if !result.git_branches.is_empty() {
+            let mut branches: Vec<_> = result.git_branches.iter().collect();
+            branches.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = branches.iter()
+                .map(|(name, count)| format!("{} ({} turns)", name, count))
+                .collect();
+            writeln!(out, "  Branch:       {}", parts.join(", ")).unwrap();
+        }
+        for pr in &result.pr_links {
+            writeln!(out, "  PR:           {}#{}", pr.repository, pr.number).unwrap();
+        }
+    }
+
+    // ── Performance section ──
+    let has_performance = result.user_prompt_count > 0
+        || result.truncated_count > 0
+        || result.speculation_accepts > 0
+        || !result.service_tiers.is_empty()
+        || !result.speeds.is_empty()
+        || !result.inference_geos.is_empty()
+        || result.api_error_count > 0
+        || result.tool_error_count > 0;
+
+    if has_performance {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Performance ───────────────────────────────").unwrap();
+        if result.user_prompt_count > 0 {
+            let total_turns = result.turn_details.len();
+            writeln!(out, "  Autonomy:     1:{:.1} ({} turns / {} user prompts)",
+                result.autonomy_ratio, total_turns, result.user_prompt_count).unwrap();
+        }
+        if result.truncated_count > 0 {
+            writeln!(out, "  Truncated:    {} turns hit max_tokens", result.truncated_count).unwrap();
+        }
+        if result.api_error_count > 0 || result.tool_error_count > 0 {
+            let mut parts = Vec::new();
+            if result.api_error_count > 0 {
+                parts.push(format!("{} API errors", result.api_error_count));
+            }
+            if result.tool_error_count > 0 {
+                parts.push(format!("{} tool errors", result.tool_error_count));
+            }
+            writeln!(out, "  Errors:       {}", parts.join(", ")).unwrap();
+        }
+        if result.speculation_accepts > 0 {
+            let saved_secs = result.speculation_time_saved_ms / 1000.0;
+            writeln!(out, "  Speculation:  saved {:.1}s across {} accepts",
+                saved_secs, result.speculation_accepts).unwrap();
+        }
+        if !result.service_tiers.is_empty() {
+            let total: usize = result.service_tiers.values().sum();
+            let mut tiers: Vec<_> = result.service_tiers.iter().collect();
+            tiers.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = tiers.iter()
+                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+                .collect();
+            writeln!(out, "  Service:      {}", parts.join(", ")).unwrap();
+        }
+        if !result.speeds.is_empty() {
+            let total: usize = result.speeds.values().sum();
+            let mut spds: Vec<_> = result.speeds.iter().collect();
+            spds.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = spds.iter()
+                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+                .collect();
+            writeln!(out, "  Speed:        {}", parts.join(", ")).unwrap();
+        }
+        if !result.inference_geos.is_empty() {
+            let total: usize = result.inference_geos.values().sum();
+            let mut geos: Vec<_> = result.inference_geos.iter().collect();
+            geos.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = geos.iter()
+                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+                .collect();
+            writeln!(out, "  Geo:          {}", parts.join(", ")).unwrap();
+        }
+    }
+
     // Per-agent breakdown
     if !result.agent_summary.agents.is_empty() {
         writeln!(out).unwrap();
@@ -313,6 +422,47 @@ pub fn render_session(result: &SessionResult) -> String {
                 format_number(agent.output_tokens),
                 format_cost(agent.cost),
             ).unwrap();
+        }
+    }
+
+    // ── Context Collapse section ──
+    if result.collapse_count > 0 {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Context Collapse ──────────────────────────").unwrap();
+
+        let risk_warning = if result.collapse_max_risk > 0.5 { " \u{26a0}" } else { "" };
+        writeln!(out, "  Collapses:    {} (avg risk: {:.2}, max: {:.2}{})",
+            result.collapse_count, result.collapse_avg_risk, result.collapse_max_risk, risk_warning).unwrap();
+
+        if !result.collapse_summaries.is_empty() {
+            writeln!(out, "  Summaries:").unwrap();
+            for (i, summary) in result.collapse_summaries.iter().enumerate() {
+                // Determine per-summary risk from snapshot staged spans if available
+                // We don't have per-commit risk, so just show the summary text
+                // Mark if max_risk > 0.5 for the last entry (heuristic)
+                let display = truncate_str(summary, 60);
+                writeln!(out, "    {}. \"{}\"", i + 1, display).unwrap();
+            }
+        }
+    }
+
+    // ── Code Attribution section ──
+    if let Some(ref attr) = result.attribution {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Code Attribution ──────────────────────────").unwrap();
+        writeln!(out, "  Files touched:     {}", attr.file_count).unwrap();
+        writeln!(out, "  Claude wrote:      {} chars", format_number(attr.total_claude_contribution)).unwrap();
+        if let Some(prompts) = attr.prompt_count {
+            let escape_str = attr.escape_count
+                .filter(|&e| e > 0)
+                .map(|e| format!(" ({} escaped)", e))
+                .unwrap_or_default();
+            writeln!(out, "  Prompts:           {}{}", prompts, escape_str).unwrap();
+        }
+        if let Some(perms) = attr.permission_prompt_count {
+            if perms > 0 {
+                writeln!(out, "  Permissions:       {} prompts shown", perms).unwrap();
+            }
         }
     }
 
@@ -427,6 +577,149 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
         report.summary.total_checks,
         report.summary.sessions_validated,
     ).unwrap();
+
+    out
+}
+
+// ─── 5. Wrapped ────────────────────────────────────────────────────────────
+
+pub fn render_wrapped(result: &WrappedResult) -> String {
+    let mut out = String::new();
+    let w = 50; // inner width
+
+    // Top border
+    writeln!(out, "\u{2554}{}\u{2557}", "\u{2550}".repeat(w)).unwrap();
+    let title = format!("Your {} Claude Code Wrapped", result.year);
+    let pad = (w.saturating_sub(title.len())) / 2;
+    writeln!(out, "\u{2551}{}{}{}\u{2551}",
+        " ".repeat(pad),
+        title,
+        " ".repeat(w.saturating_sub(pad + title.len()))
+    ).unwrap();
+    writeln!(out, "\u{2560}{}\u{2563}", "\u{2550}".repeat(w)).unwrap();
+    writeln!(out).unwrap();
+
+    // Activity
+    let active_pct = if result.total_days > 0 {
+        result.active_days as f64 / result.total_days as f64 * 100.0
+    } else {
+        0.0
+    };
+    writeln!(out, "  Active Days:      {} / {} ({:.0}%)",
+        result.active_days, result.total_days, active_pct).unwrap();
+    writeln!(out, "  Longest Streak:   {} days", result.longest_streak).unwrap();
+    writeln!(out, "  Ghost Days:       {}", result.ghost_days).unwrap();
+    writeln!(out).unwrap();
+
+    // Volume
+    writeln!(out, "  {} sessions, {} turns",
+        format_number(result.total_sessions as u64),
+        format_number(result.total_turns as u64)).unwrap();
+    if result.total_agent_turns > 0 {
+        let agent_pct = result.total_agent_turns as f64 / result.total_turns.max(1) as f64 * 100.0;
+        writeln!(out, "  {} agent turns ({:.0}% autonomous)",
+            format_number(result.total_agent_turns as u64), agent_pct).unwrap();
+    }
+    writeln!(out, "  {} API equivalent", format_cost(result.total_cost)).unwrap();
+    writeln!(out).unwrap();
+
+    // Archetype
+    writeln!(out, "  Developer Archetype: \"{}\"", result.archetype.label()).unwrap();
+    writeln!(out, "  {}", result.archetype.description()).unwrap();
+    writeln!(out).unwrap();
+
+    // Peak patterns
+    writeln!(out, "  Peak Hour:    {:02}:00-{:02}:00",
+        result.peak_hour, (result.peak_hour + 1) % 24).unwrap();
+    writeln!(out, "  Peak Day:     {}", result.peak_weekday).unwrap();
+    writeln!(out).unwrap();
+
+    // Efficiency
+    if result.autonomy_ratio > 0.0 {
+        writeln!(out, "  Autonomy:     1:{:.1} (turns per user prompt)", result.autonomy_ratio).unwrap();
+    }
+    if result.avg_session_duration_min > 0.0 {
+        writeln!(out, "  Avg Session:  {}", format_duration(result.avg_session_duration_min)).unwrap();
+    }
+    writeln!(out, "  Avg Cost:     {}/session", format_cost(result.avg_cost_per_session)).unwrap();
+    writeln!(out).unwrap();
+
+    // Top Tools
+    if !result.top_tools.is_empty() {
+        writeln!(out, "  Top Tools").unwrap();
+        let max_count = result.top_tools.first().map(|(_, c)| *c).unwrap_or(1);
+        for (name, count) in &result.top_tools {
+            let bar_len = (*count as f64 / max_count.max(1) as f64 * 20.0).round() as usize;
+            writeln!(out, "    {:<18} {:>6}  {}",
+                name, format_number(*count as u64), "\u{2588}".repeat(bar_len)).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Top Projects
+    if !result.top_projects.is_empty() {
+        writeln!(out, "  Top Projects").unwrap();
+        for (name, cost) in &result.top_projects {
+            writeln!(out, "    {:<30} {}", truncate_str(name, 30), format_cost(*cost)).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Most Expensive Session
+    if let Some((ref id, cost, ref project)) = result.most_expensive_session {
+        writeln!(out, "  Most Expensive Session").unwrap();
+        let short_id = if id.len() > 8 { &id[..8] } else { id };
+        writeln!(out, "    {}  {}  {}", short_id, truncate_str(project, 25), format_cost(cost)).unwrap();
+        writeln!(out).unwrap();
+    }
+
+    // Longest Session
+    if let Some((ref id, dur_min, ref project)) = result.longest_session {
+        if dur_min > 0.0 {
+            writeln!(out, "  Longest Session").unwrap();
+            let short_id = if id.len() > 8 { &id[..8] } else { id };
+            writeln!(out, "    {}  {}  {}", short_id, truncate_str(project, 25), format_duration(dur_min)).unwrap();
+            writeln!(out).unwrap();
+        }
+    }
+
+    // Model distribution
+    if !result.model_distribution.is_empty() {
+        writeln!(out, "  Models").unwrap();
+        for (model, turns) in &result.model_distribution {
+            let short = short_model(model);
+            let pct = *turns as f64 / result.total_turns.max(1) as f64 * 100.0;
+            writeln!(out, "    {:<25} {:>6} turns ({:.0}%)",
+                short, format_number(*turns as u64), pct).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Metadata footer
+    let mut meta_lines: Vec<String> = Vec::new();
+    if result.total_speculation_time_saved_ms > 0.0 {
+        let saved_sec = result.total_speculation_time_saved_ms / 1000.0;
+        if saved_sec >= 60.0 {
+            meta_lines.push(format!("  Speculation saved you {:.1} minutes", saved_sec / 60.0));
+        } else {
+            meta_lines.push(format!("  Speculation saved you {:.1} seconds", saved_sec));
+        }
+    }
+    if result.total_pr_count > 0 {
+        meta_lines.push(format!("  {} PRs shipped via Claude Code", result.total_pr_count));
+    }
+    if result.total_collapse_count > 0 {
+        meta_lines.push(format!("  {} context collapses", result.total_collapse_count));
+    }
+    if !meta_lines.is_empty() {
+        for line in &meta_lines {
+            writeln!(out, "{}", line).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Bottom border
+    writeln!(out, "\u{255a}{}\u{255d}", "\u{2550}".repeat(w)).unwrap();
 
     out
 }

@@ -43,7 +43,7 @@ description: |
   </commentary>
   </example>
 
-model: inherit
+model: sonnet
 color: green
 tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
 ---

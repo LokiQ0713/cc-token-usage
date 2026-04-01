@@ -330,6 +330,7 @@ mod tests {
             server_tool_use: None,
             service_tier: None,
             speed: None,
+            inference_geo: None,
         }
     }
 

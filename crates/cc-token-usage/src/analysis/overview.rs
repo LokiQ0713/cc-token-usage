@@ -129,6 +129,23 @@ pub fn analyze_overview(
         }
     });
 
+    // Efficiency metrics
+    let output_ratio = if total_context_tokens > 0 {
+        total_output_tokens as f64 / total_context_tokens as f64 * 100.0
+    } else {
+        0.0
+    };
+    let cost_per_turn = if total_turns > 0 {
+        total_cost / total_turns as f64
+    } else {
+        0.0
+    };
+    let tokens_per_output_turn = if total_turns > 0 {
+        total_output_tokens / total_turns as u64
+    } else {
+        0
+    };
+
     OverviewResult {
         total_sessions: sessions.len(),
         total_turns,
@@ -147,6 +164,9 @@ pub fn analyze_overview(
         total_context_tokens,
         avg_cache_hit_rate,
         cache_savings,
+        output_ratio,
+        cost_per_turn,
+        tokens_per_output_turn,
     }
 }
 
@@ -300,6 +320,17 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         0.0
     };
 
+    let output_ratio = if context_tokens > 0 {
+        output_tokens as f64 / context_tokens as f64 * 100.0
+    } else {
+        0.0
+    };
+    let cost_per_turn = if turn_count > 0 {
+        total_cost / turn_count as f64
+    } else {
+        0.0
+    };
+
     SessionSummary {
         session_id,
         project_display_name,
@@ -323,6 +354,8 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
             tools
         },
         turn_details: None,
+        output_ratio,
+        cost_per_turn,
     }
 }
 

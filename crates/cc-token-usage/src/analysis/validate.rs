@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::data::models::{GlobalDataQuality, SessionData, SessionFile};
-use crate::data::scanner;
+use crate::data::scanner::{scan_claude_home, resolve_agent_parents};
 use crate::pricing::calculator::PricingCalculator;
 
 // ─── Result Types ──────────────────────────────────────────────────────────
@@ -249,8 +249,8 @@ pub fn validate_all(
     calc: &PricingCalculator,
 ) -> Result<ValidationReport> {
     // Re-scan files independently for structure validation
-    let mut files = scanner::scan_claude_home(claude_home)?;
-    scanner::resolve_agent_parents(&mut files)?;
+    let mut files = scan_claude_home(claude_home)?;
+    resolve_agent_parents(&mut files)?;
 
     let (main_files, agent_files): (Vec<&SessionFile>, Vec<&SessionFile>) =
         files.iter().partition(|f| !f.is_agent);
@@ -308,8 +308,8 @@ pub fn validate_all(
         let parent_file = main_files.iter()
             .find(|f| f.session_id == parent_id);
         if let Some(pf) = parent_file {
-            let parent_rids = collect_valid_request_ids(&pf.file_path, true).unwrap_or_default();
-            let agent_rids = collect_valid_request_ids(&agent.file_path, false).unwrap_or_default();
+            let parent_rids = collect_valid_request_ids(&pf.path, true).unwrap_or_default();
+            let agent_rids = collect_valid_request_ids(&agent.path, false).unwrap_or_default();
             cross_file_overlap += parent_rids.intersection(&agent_rids).count();
         }
     }
@@ -339,7 +339,7 @@ pub fn validate_all(
 
         // --- Token validation: raw counter vs pipeline ---
         if let Some(mf) = main_file_map.get(session.session_id.as_str()) {
-            let raw_main = count_raw_tokens(&mf.file_path, true)
+            let raw_main = count_raw_tokens(&mf.path, true)
                 .unwrap_or_default();
 
             // Pipeline's main turns
@@ -397,7 +397,7 @@ pub fn validate_all(
                 // Get main session's valid requestIds for cross-file dedup
                 let main_file = main_file_map.get(session.session_id.as_str());
                 let main_rids = main_file
-                    .map(|mf| collect_valid_request_ids(&mf.file_path, true).unwrap_or_default())
+                    .map(|mf| collect_valid_request_ids(&mf.path, true).unwrap_or_default())
                     .unwrap_or_default();
 
                 // Calculate expected per-file (matching pipeline's per-file merge logic)
@@ -405,16 +405,16 @@ pub fn validate_all(
                 let mut raw_agent_output: u64 = 0;
 
                 for af in afs {
-                    let raw = count_raw_tokens(&af.file_path, false)
+                    let raw = count_raw_tokens(&af.path, false)
                         .unwrap_or_default();
-                    let file_rids = collect_valid_request_ids(&af.file_path, false)
+                    let file_rids = collect_valid_request_ids(&af.path, false)
                         .unwrap_or_default();
                     let file_overlap = file_rids.intersection(&main_rids).count();
                     let unique_turns = raw.turn_count.saturating_sub(file_overlap);
                     expected_unique_agent_turns += unique_turns;
 
                     // Precise: count output tokens only for non-overlapping requestIds
-                    let (per_rid, no_rid_output) = count_tokens_by_request_id(&af.file_path, false)
+                    let (per_rid, no_rid_output) = count_tokens_by_request_id(&af.path, false)
                         .unwrap_or_default();
                     for (rid, output) in &per_rid {
                         if !main_rids.contains(rid) {
