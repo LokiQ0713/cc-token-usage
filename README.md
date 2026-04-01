@@ -26,7 +26,13 @@
 
 ## Install
 
-Recommended — just run it, no install needed, no permissions required:
+Quick install (macOS / Linux) — no dependencies required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LokiQ0713/cc-token-usage/master/install.sh | sh
+```
+
+Or via npm (zero-install, always latest):
 
 ```bash
 npx cc-token-usage
@@ -40,6 +46,13 @@ npm install -g cc-token-usage
 
 ```bash
 cargo install cc-token-usage
+```
+
+### Update
+
+```bash
+cc-token-usage update          # download and replace
+cc-token-usage update --check  # check only, don't download
 ```
 
 ### As a Claude Code Skill

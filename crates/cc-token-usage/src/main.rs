@@ -18,6 +18,24 @@ fn main() -> Result<()> {
     // 1. Parse CLI arguments
     let cli = Cli::parse();
 
+    // 1.5. Handle `update` early — no data loading needed
+    let command = cli.command.unwrap_or(Command::Overview);
+    if let Command::Update { check } = &command {
+        if *check {
+            let status = cc_token_usage::update::check_for_update()?;
+            eprintln!("Current version: v{}", status.current_version);
+            eprintln!("Latest version:  v{}", status.latest_version);
+            if status.update_available {
+                eprintln!("\nUpdate available! Run `cc-token-usage update` to upgrade.");
+            } else {
+                eprintln!("\nAlready up to date.");
+            }
+        } else {
+            cc_token_usage::update::perform_update()?;
+        }
+        return Ok(());
+    }
+
     // 2. Determine claude_home
     let claude_home = match cli.claude_home {
         Some(ref path) => path.clone(),
@@ -57,7 +75,6 @@ fn main() -> Result<()> {
         .with_context(|| format!("failed to load data from {}", claude_home.display()))?;
 
     // 7. Execute analysis + render output
-    let command = cli.command.unwrap_or(Command::Overview);
     match command {
         // ── Overview (default when no subcommand) ────────────────────────
         Command::Overview => {
@@ -176,6 +193,9 @@ fn main() -> Result<()> {
                 .context("validation failed")?;
             println!("{}", render_validation(&report, failures_only));
         }
+
+        // ── Update (already handled above, unreachable) ─────────────────────
+        Command::Update { .. } => unreachable!(),
 
         // ── Trend ───────────────────────────────────────────────────────────
         Command::Trend { days, group_by } => {

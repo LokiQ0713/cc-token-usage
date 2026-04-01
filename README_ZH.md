@@ -26,7 +26,13 @@
 
 ## 安装
 
-推荐 —— 直接跑，不用装，不要权限：
+一键安装（macOS / Linux）—— 无需任何依赖：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LokiQ0713/cc-token-usage/master/install.sh | sh
+```
+
+或通过 npm（免安装，始终最新）：
 
 ```bash
 npx cc-token-usage
@@ -40,6 +46,13 @@ npm install -g cc-token-usage
 
 ```bash
 cargo install cc-token-usage
+```
+
+### 升级
+
+```bash
+cc-token-usage update          # 下载并替换
+cc-token-usage update --check  # 仅检查，不下载
 ```
 
 ### 作为 Claude Code Skill 安装

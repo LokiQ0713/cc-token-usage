@@ -84,6 +84,13 @@ pub enum Command {
         failures_only: bool,
     },
 
+    /// Check for updates and self-update the binary
+    Update {
+        /// Only check for a new version, don't download
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Show usage trends over time
     Trend {
         /// Number of days to include (0 = all history)
