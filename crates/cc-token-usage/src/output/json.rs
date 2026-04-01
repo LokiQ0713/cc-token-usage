@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
 
 // ─── Overview JSON ──────────────────────────────────────────────────────────
@@ -357,4 +358,10 @@ pub fn render_trend_json(trend: &TrendResult) -> String {
     };
 
     serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+// ─── Wrapped JSON ──────────────────────────────────────────────────────────
+
+pub fn render_wrapped_json(result: &WrappedResult) -> String {
+    serde_json::to_string_pretty(result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }

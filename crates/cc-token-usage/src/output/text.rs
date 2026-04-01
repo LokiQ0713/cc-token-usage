@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use crate::analysis::validate::ValidationReport;
+use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
 use crate::pricing::calculator::PricingCalculator;
 
@@ -576,6 +577,149 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
         report.summary.total_checks,
         report.summary.sessions_validated,
     ).unwrap();
+
+    out
+}
+
+// ─── 5. Wrapped ────────────────────────────────────────────────────────────
+
+pub fn render_wrapped(result: &WrappedResult) -> String {
+    let mut out = String::new();
+    let w = 50; // inner width
+
+    // Top border
+    writeln!(out, "\u{2554}{}\u{2557}", "\u{2550}".repeat(w)).unwrap();
+    let title = format!("Your {} Claude Code Wrapped", result.year);
+    let pad = (w.saturating_sub(title.len())) / 2;
+    writeln!(out, "\u{2551}{}{}{}\u{2551}",
+        " ".repeat(pad),
+        title,
+        " ".repeat(w.saturating_sub(pad + title.len()))
+    ).unwrap();
+    writeln!(out, "\u{2560}{}\u{2563}", "\u{2550}".repeat(w)).unwrap();
+    writeln!(out).unwrap();
+
+    // Activity
+    let active_pct = if result.total_days > 0 {
+        result.active_days as f64 / result.total_days as f64 * 100.0
+    } else {
+        0.0
+    };
+    writeln!(out, "  Active Days:      {} / {} ({:.0}%)",
+        result.active_days, result.total_days, active_pct).unwrap();
+    writeln!(out, "  Longest Streak:   {} days", result.longest_streak).unwrap();
+    writeln!(out, "  Ghost Days:       {}", result.ghost_days).unwrap();
+    writeln!(out).unwrap();
+
+    // Volume
+    writeln!(out, "  {} sessions, {} turns",
+        format_number(result.total_sessions as u64),
+        format_number(result.total_turns as u64)).unwrap();
+    if result.total_agent_turns > 0 {
+        let agent_pct = result.total_agent_turns as f64 / result.total_turns.max(1) as f64 * 100.0;
+        writeln!(out, "  {} agent turns ({:.0}% autonomous)",
+            format_number(result.total_agent_turns as u64), agent_pct).unwrap();
+    }
+    writeln!(out, "  {} API equivalent", format_cost(result.total_cost)).unwrap();
+    writeln!(out).unwrap();
+
+    // Archetype
+    writeln!(out, "  Developer Archetype: \"{}\"", result.archetype.label()).unwrap();
+    writeln!(out, "  {}", result.archetype.description()).unwrap();
+    writeln!(out).unwrap();
+
+    // Peak patterns
+    writeln!(out, "  Peak Hour:    {:02}:00-{:02}:00",
+        result.peak_hour, (result.peak_hour + 1) % 24).unwrap();
+    writeln!(out, "  Peak Day:     {}", result.peak_weekday).unwrap();
+    writeln!(out).unwrap();
+
+    // Efficiency
+    if result.autonomy_ratio > 0.0 {
+        writeln!(out, "  Autonomy:     1:{:.1} (turns per user prompt)", result.autonomy_ratio).unwrap();
+    }
+    if result.avg_session_duration_min > 0.0 {
+        writeln!(out, "  Avg Session:  {}", format_duration(result.avg_session_duration_min)).unwrap();
+    }
+    writeln!(out, "  Avg Cost:     {}/session", format_cost(result.avg_cost_per_session)).unwrap();
+    writeln!(out).unwrap();
+
+    // Top Tools
+    if !result.top_tools.is_empty() {
+        writeln!(out, "  Top Tools").unwrap();
+        let max_count = result.top_tools.first().map(|(_, c)| *c).unwrap_or(1);
+        for (name, count) in &result.top_tools {
+            let bar_len = (*count as f64 / max_count.max(1) as f64 * 20.0).round() as usize;
+            writeln!(out, "    {:<18} {:>6}  {}",
+                name, format_number(*count as u64), "\u{2588}".repeat(bar_len)).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Top Projects
+    if !result.top_projects.is_empty() {
+        writeln!(out, "  Top Projects").unwrap();
+        for (name, cost) in &result.top_projects {
+            writeln!(out, "    {:<30} {}", truncate_str(name, 30), format_cost(*cost)).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Most Expensive Session
+    if let Some((ref id, cost, ref project)) = result.most_expensive_session {
+        writeln!(out, "  Most Expensive Session").unwrap();
+        let short_id = if id.len() > 8 { &id[..8] } else { id };
+        writeln!(out, "    {}  {}  {}", short_id, truncate_str(project, 25), format_cost(cost)).unwrap();
+        writeln!(out).unwrap();
+    }
+
+    // Longest Session
+    if let Some((ref id, dur_min, ref project)) = result.longest_session {
+        if dur_min > 0.0 {
+            writeln!(out, "  Longest Session").unwrap();
+            let short_id = if id.len() > 8 { &id[..8] } else { id };
+            writeln!(out, "    {}  {}  {}", short_id, truncate_str(project, 25), format_duration(dur_min)).unwrap();
+            writeln!(out).unwrap();
+        }
+    }
+
+    // Model distribution
+    if !result.model_distribution.is_empty() {
+        writeln!(out, "  Models").unwrap();
+        for (model, turns) in &result.model_distribution {
+            let short = short_model(model);
+            let pct = *turns as f64 / result.total_turns.max(1) as f64 * 100.0;
+            writeln!(out, "    {:<25} {:>6} turns ({:.0}%)",
+                short, format_number(*turns as u64), pct).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Metadata footer
+    let mut meta_lines: Vec<String> = Vec::new();
+    if result.total_speculation_time_saved_ms > 0.0 {
+        let saved_sec = result.total_speculation_time_saved_ms / 1000.0;
+        if saved_sec >= 60.0 {
+            meta_lines.push(format!("  Speculation saved you {:.1} minutes", saved_sec / 60.0));
+        } else {
+            meta_lines.push(format!("  Speculation saved you {:.1} seconds", saved_sec));
+        }
+    }
+    if result.total_pr_count > 0 {
+        meta_lines.push(format!("  {} PRs shipped via Claude Code", result.total_pr_count));
+    }
+    if result.total_collapse_count > 0 {
+        meta_lines.push(format!("  {} context collapses", result.total_collapse_count));
+    }
+    if !meta_lines.is_empty() {
+        for line in &meta_lines {
+            writeln!(out, "{}", line).unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Bottom border
+    writeln!(out, "\u{255a}{}\u{255d}", "\u{2550}".repeat(w)).unwrap();
 
     out
 }

@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use chrono::Datelike;
 use clap::Parser;
 
 use cc_token_usage::analysis::overview::analyze_overview;
@@ -6,13 +7,14 @@ use cc_token_usage::analysis::project::analyze_projects;
 use cc_token_usage::analysis::session::analyze_session;
 use cc_token_usage::analysis::trend::analyze_trend;
 use cc_token_usage::analysis::validate;
+use cc_token_usage::analysis::wrapped::analyze_wrapped;
 use cc_token_usage::cli::{Cli, Command, GroupBy, OutputFormat};
 use cc_token_usage::config::Config;
 use cc_token_usage::data::loader;
 use cc_token_usage::data::models::SessionData;
 use cc_token_usage::output::html::{render_full_report_html, render_session_html};
-use cc_token_usage::output::json::{render_overview_json, render_projects_json, render_session_json, render_trend_json};
-use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend, render_validation};
+use cc_token_usage::output::json::{render_overview_json, render_projects_json, render_session_json, render_trend_json, render_wrapped_json};
+use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend, render_validation, render_wrapped};
 use cc_token_usage::pricing::calculator::PricingCalculator;
 
 fn main() -> Result<()> {
@@ -182,6 +184,20 @@ fn main() -> Result<()> {
             let report = validate::validate_all(&target_sessions, &quality, &claude_home, &calc)
                 .context("validation failed")?;
             println!("{}", render_validation(&report, failures_only));
+        }
+
+        // ── Wrapped ──────────────────────────────────────────────────────────
+        Command::Wrapped { year } => {
+            let year = year.unwrap_or_else(|| chrono::Utc::now().year());
+            let result = analyze_wrapped(&sessions, &calc, year);
+
+            if want_json {
+                println!("{}", render_wrapped_json(&result));
+            }
+            if want_text {
+                println!("{}", render_wrapped(&result));
+            }
+            // HTML: future
         }
 
         // ── Update (already handled above, unreachable) ─────────────────────

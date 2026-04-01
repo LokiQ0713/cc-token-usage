@@ -98,4 +98,11 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = GroupBy::Day)]
         group_by: GroupBy,
     },
+
+    /// Generate a "Wrapped" annual summary of your Claude Code usage
+    Wrapped {
+        /// Year to summarize (default: current year)
+        #[arg(long)]
+        year: Option<i32>,
+    },
 }
