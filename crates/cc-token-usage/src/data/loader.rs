@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::models::{DataQuality, GlobalDataQuality, SessionData, SessionFile};
+use super::models::{DataQuality, GlobalDataQuality, SessionData, SessionFile, SessionMetadata};
 use super::parser::parse_session_file;
 use super::scanner::{resolve_agent_parents, scan_claude_home};
 
@@ -105,7 +105,7 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
     let mut sessions: HashMap<String, SessionData> = HashMap::new();
 
     for sf in &main_files {
-        let (turns, quality) = parse_session_file(&sf.path, false)
+        let (turns, quality, metadata) = parse_session_file(&sf.path, false)
             .with_context(|| format!("failed to parse session: {}", sf.path.display()))?;
 
         let version = extract_version(&sf.path);
@@ -124,12 +124,13 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
             last_timestamp: last_ts,
             version,
             quality,
+            metadata,
         });
     }
 
     // Process agent files and merge into parent sessions
     for sf in &agent_files {
-        let (agent_turns, quality) = parse_session_file(&sf.path, true)
+        let (agent_turns, quality, _agent_meta) = parse_session_file(&sf.path, true)
             .with_context(|| format!("failed to parse agent file: {}", sf.path.display()))?;
 
         global_quality.total_valid_turns += quality.valid_turns;
@@ -148,6 +149,7 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
                 last_timestamp: None,
                 version: None,
                 quality: DataQuality::default(),
+                metadata: SessionMetadata::default(),
             });
             global_quality.orphan_agents += 1;
         }

@@ -4,7 +4,7 @@ pub mod session;
 pub mod trend;
 pub mod validate;
 
-use crate::data::models::{GlobalDataQuality, TokenUsage};
+use crate::data::models::{GlobalDataQuality, PrLinkInfo, TokenUsage};
 use chrono::{DateTime, NaiveDate, Utc};
 use std::collections::HashMap;
 
@@ -136,6 +136,27 @@ pub struct SessionResult {
     pub cache_write_5m_pct: f64,  // 5m TTL 占比
     pub cache_write_1h_pct: f64,  // 1h TTL 占比
     pub model: String,             // 主力模型
+    // ── Phase 1: Data mining metadata ──
+    pub title: Option<String>,
+    pub tags: Vec<String>,
+    pub mode: Option<String>,
+    pub pr_links: Vec<PrLinkInfo>,
+    // Autonomy
+    pub user_prompt_count: usize,
+    pub autonomy_ratio: f64,          // total_turns / user_prompt_count
+    // Errors
+    pub api_error_count: usize,
+    pub tool_error_count: usize,
+    pub truncated_count: usize,       // stop_reason == "max_tokens"
+    // Speculation
+    pub speculation_accepts: usize,
+    pub speculation_time_saved_ms: f64,
+    // Service info
+    pub service_tiers: HashMap<String, usize>,
+    pub speeds: HashMap<String, usize>,
+    pub inference_geos: HashMap<String, usize>,
+    // Git
+    pub git_branches: HashMap<String, usize>,
 }
 
 #[derive(Debug)]

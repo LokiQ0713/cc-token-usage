@@ -283,6 +283,103 @@ pub fn render_session(result: &SessionResult) -> String {
         result.compaction_count).unwrap();
     writeln!(out, "  Cost:      {}", format_cost(result.total_cost)).unwrap();
 
+    // ── Metadata section ──
+    let has_metadata = result.title.is_some()
+        || !result.tags.is_empty()
+        || result.mode.is_some()
+        || !result.git_branches.is_empty()
+        || !result.pr_links.is_empty();
+
+    if has_metadata {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Metadata ──────────────────────────────────").unwrap();
+        if let Some(ref title) = result.title {
+            writeln!(out, "  Title:        {}", truncate_str(title, 60)).unwrap();
+        }
+        if !result.tags.is_empty() {
+            writeln!(out, "  Tags:         {}", result.tags.join(", ")).unwrap();
+        }
+        if let Some(ref mode) = result.mode {
+            writeln!(out, "  Mode:         {}", mode).unwrap();
+        }
+        if !result.git_branches.is_empty() {
+            let mut branches: Vec<_> = result.git_branches.iter().collect();
+            branches.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = branches.iter()
+                .map(|(name, count)| format!("{} ({} turns)", name, count))
+                .collect();
+            writeln!(out, "  Branch:       {}", parts.join(", ")).unwrap();
+        }
+        for pr in &result.pr_links {
+            writeln!(out, "  PR:           {}#{}", pr.repository, pr.number).unwrap();
+        }
+    }
+
+    // ── Performance section ──
+    let has_performance = result.user_prompt_count > 0
+        || result.truncated_count > 0
+        || result.speculation_accepts > 0
+        || !result.service_tiers.is_empty()
+        || !result.speeds.is_empty()
+        || !result.inference_geos.is_empty()
+        || result.api_error_count > 0
+        || result.tool_error_count > 0;
+
+    if has_performance {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Performance ───────────────────────────────").unwrap();
+        if result.user_prompt_count > 0 {
+            let total_turns = result.turn_details.len();
+            writeln!(out, "  Autonomy:     1:{:.1} ({} turns / {} user prompts)",
+                result.autonomy_ratio, total_turns, result.user_prompt_count).unwrap();
+        }
+        if result.truncated_count > 0 {
+            writeln!(out, "  Truncated:    {} turns hit max_tokens", result.truncated_count).unwrap();
+        }
+        if result.api_error_count > 0 || result.tool_error_count > 0 {
+            let mut parts = Vec::new();
+            if result.api_error_count > 0 {
+                parts.push(format!("{} API errors", result.api_error_count));
+            }
+            if result.tool_error_count > 0 {
+                parts.push(format!("{} tool errors", result.tool_error_count));
+            }
+            writeln!(out, "  Errors:       {}", parts.join(", ")).unwrap();
+        }
+        if result.speculation_accepts > 0 {
+            let saved_secs = result.speculation_time_saved_ms / 1000.0;
+            writeln!(out, "  Speculation:  saved {:.1}s across {} accepts",
+                saved_secs, result.speculation_accepts).unwrap();
+        }
+        if !result.service_tiers.is_empty() {
+            let total: usize = result.service_tiers.values().sum();
+            let mut tiers: Vec<_> = result.service_tiers.iter().collect();
+            tiers.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = tiers.iter()
+                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+                .collect();
+            writeln!(out, "  Service:      {}", parts.join(", ")).unwrap();
+        }
+        if !result.speeds.is_empty() {
+            let total: usize = result.speeds.values().sum();
+            let mut spds: Vec<_> = result.speeds.iter().collect();
+            spds.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = spds.iter()
+                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+                .collect();
+            writeln!(out, "  Speed:        {}", parts.join(", ")).unwrap();
+        }
+        if !result.inference_geos.is_empty() {
+            let total: usize = result.inference_geos.values().sum();
+            let mut geos: Vec<_> = result.inference_geos.iter().collect();
+            geos.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = geos.iter()
+                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+                .collect();
+            writeln!(out, "  Geo:          {}", parts.join(", ")).unwrap();
+        }
+    }
+
     // Per-agent breakdown
     if !result.agent_summary.agents.is_empty() {
         writeln!(out).unwrap();

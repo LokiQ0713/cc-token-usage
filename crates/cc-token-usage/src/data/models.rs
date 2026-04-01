@@ -22,6 +22,7 @@ pub struct TokenUsage {
     pub server_tool_use: Option<ServerToolUse>,
     pub service_tier: Option<String>,
     pub speed: Option<String>,
+    pub inference_geo: Option<String>,
 }
 
 /// Breakdown of cache creation tokens by TTL bucket.
@@ -56,6 +57,7 @@ impl From<cc_session_jsonl::types::Usage> for TokenUsage {
                 web_fetch_requests: s.web_fetch_requests,
             }),
             service_tier: u.service_tier,
+            inference_geo: u.inference_geo,
             speed: u.speed,
         }
     }
@@ -78,6 +80,11 @@ pub struct ValidatedTurn {
     pub user_text: Option<String>,       // 对应的用户消息文本（截断）
     pub assistant_text: Option<String>,  // assistant 回复文本（截断）
     pub tool_names: Vec<String>,         // 使用的工具名列表
+    pub service_tier: Option<String>,
+    pub speed: Option<String>,
+    pub inference_geo: Option<String>,
+    pub tool_error_count: usize,         // ToolResult blocks with is_error=true
+    pub git_branch: Option<String>,      // from the assistant entry's gitBranch field
 }
 
 /// Aggregated data from a single session.
@@ -91,6 +98,32 @@ pub struct SessionData {
     pub last_timestamp: Option<DateTime<Utc>>,
     pub version: Option<String>,
     pub quality: DataQuality,
+    pub metadata: SessionMetadata,
+}
+
+// ─── Session Metadata ───────────────────────────────────────────────────────
+
+/// PR link info extracted from pr-link entries.
+#[derive(Debug, Clone)]
+pub struct PrLinkInfo {
+    pub number: u64,
+    pub url: String,
+    pub repository: String,
+}
+
+/// Metadata collected from non-assistant/user entries during parsing.
+#[derive(Debug, Default)]
+pub struct SessionMetadata {
+    pub title: Option<String>,              // custom-title > ai-title
+    pub tags: Vec<String>,
+    pub mode: Option<String>,               // last-wins
+    pub pr_links: Vec<PrLinkInfo>,
+    pub speculation_accepts: usize,
+    pub speculation_time_saved_ms: f64,
+    pub queue_enqueues: usize,
+    pub queue_dequeues: usize,
+    pub api_error_count: usize,             // assistant entries with api_error/error
+    pub user_prompt_count: usize,           // count of user entries
 }
 
 impl SessionData {

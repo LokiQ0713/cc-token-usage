@@ -29,6 +29,14 @@ pub fn analyze_session(
     let mut prev_context_size: Option<u64> = None;
     let mut agent_acc: HashMap<String, (usize, u64, f64)> = HashMap::new();
 
+    // Phase 1: new accumulators
+    let mut tool_error_count: usize = 0;
+    let mut truncated_count: usize = 0;
+    let mut service_tiers: HashMap<String, usize> = HashMap::new();
+    let mut speeds: HashMap<String, usize> = HashMap::new();
+    let mut inference_geos: HashMap<String, usize> = HashMap::new();
+    let mut git_branches: HashMap<String, usize> = HashMap::new();
+
     for (i, turn) in all_turns.iter().enumerate() {
         let input = turn.usage.input_tokens.unwrap_or(0);
         let output = turn.usage.output_tokens.unwrap_or(0);
@@ -82,6 +90,32 @@ pub fn analyze_session(
         // Track stop reasons
         if let Some(ref reason) = turn.stop_reason {
             *stop_reason_counts.entry(reason.clone()).or_insert(0) += 1;
+            if reason == "max_tokens" {
+                truncated_count += 1;
+            }
+        }
+
+        // Phase 1: accumulate new metrics
+        tool_error_count += turn.tool_error_count;
+        if let Some(ref tier) = turn.service_tier {
+            if !tier.is_empty() {
+                *service_tiers.entry(tier.clone()).or_insert(0) += 1;
+            }
+        }
+        if let Some(ref spd) = turn.speed {
+            if !spd.is_empty() {
+                *speeds.entry(spd.clone()).or_insert(0) += 1;
+            }
+        }
+        if let Some(ref geo) = turn.inference_geo {
+            if !geo.is_empty() {
+                *inference_geos.entry(geo.clone()).or_insert(0) += 1;
+            }
+        }
+        if let Some(ref branch) = turn.git_branch {
+            if !branch.is_empty() {
+                *git_branches.entry(branch.clone()).or_insert(0) += 1;
+            }
         }
 
         // Aggregate tokens
@@ -177,6 +211,15 @@ pub fn analyze_session(
         .map(|(m, _)| m.to_string())
         .unwrap_or_default();
 
+    // Autonomy ratio
+    let total_turn_count = session.total_turn_count();
+    let user_prompt_count = session.metadata.user_prompt_count;
+    let autonomy_ratio = if user_prompt_count > 0 {
+        total_turn_count as f64 / user_prompt_count as f64
+    } else {
+        0.0
+    };
+
     SessionResult {
         session_id: session.session_id.clone(),
         project: session
@@ -194,5 +237,26 @@ pub fn analyze_session(
         cache_write_5m_pct,
         cache_write_1h_pct,
         model,
+        // Phase 1: metadata
+        title: session.metadata.title.clone(),
+        tags: session.metadata.tags.clone(),
+        mode: session.metadata.mode.clone(),
+        pr_links: session.metadata.pr_links.clone(),
+        // Autonomy
+        user_prompt_count,
+        autonomy_ratio,
+        // Errors
+        api_error_count: session.metadata.api_error_count,
+        tool_error_count,
+        truncated_count,
+        // Speculation
+        speculation_accepts: session.metadata.speculation_accepts,
+        speculation_time_saved_ms: session.metadata.speculation_time_saved_ms,
+        // Service info
+        service_tiers,
+        speeds,
+        inference_geos,
+        // Git
+        git_branches,
     }
 }
