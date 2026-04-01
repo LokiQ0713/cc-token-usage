@@ -70,6 +70,17 @@ fetch() {
 # ── Get latest version from GitHub API ───────────────────────────────────────
 
 get_latest_version() {
+    # Primary: follow GitHub's redirect (no API quota needed)
+    # https://github.com/REPO/releases/latest redirects to /releases/tag/vX.Y.Z
+    if command -v curl >/dev/null 2>&1; then
+        VERSION_URL=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null)
+        if [ -n "$VERSION_URL" ]; then
+            echo "$VERSION_URL" | sed -E 's|.*/v?||'
+            return
+        fi
+    fi
+
+    # Fallback: GitHub API (may be rate-limited for unauthenticated requests)
     fetch "https://api.github.com/repos/$REPO/releases/latest" |
         grep '"tag_name"' |
         sed -E 's/.*"v?([^"]+)".*/\1/'

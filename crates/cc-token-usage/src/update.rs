@@ -1,66 +1,40 @@
 use anyhow::{bail, Context, Result};
+use ureq::ResponseExt;
 
-const GITHUB_API_URL: &str =
-    "https://api.github.com/repos/LokiQ0713/cc-token-usage/releases/latest";
+const GITHUB_REPO: &str = "LokiQ0713/cc-token-usage";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct UpdateStatus {
     pub current_version: String,
     pub latest_version: String,
     pub update_available: bool,
-    pub download_url: Option<String>,
+    pub download_url: String,
 }
 
-/// Check for updates by querying GitHub Releases API.
+/// Check for updates by following GitHub's release redirect (no API quota needed).
 pub fn check_for_update() -> Result<UpdateStatus> {
     let target = target_triple();
     let asset_name = format!("cc-token-usage-{target}.tar.gz");
 
-    let mut req = ureq::get(GITHUB_API_URL)
+    // Follow redirect: github.com/REPO/releases/latest → github.com/REPO/releases/tag/vX.Y.Z
+    // This uses GitHub CDN, not the REST API, so it's never rate-limited.
+    let redirect_url = format!("https://github.com/{GITHUB_REPO}/releases/latest");
+    let response = ureq::get(&redirect_url)
         .header("User-Agent", concat!("cc-token-usage/", env!("CARGO_PKG_VERSION")))
-        .header("Accept", "application/vnd.github.v3+json");
+        .call()
+        .context("failed to check latest release — check your internet connection")?;
 
-    // Support GITHUB_TOKEN to avoid rate limiting (same pattern as mise)
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        req = req.header("Authorization", &format!("Bearer {token}"));
-    }
+    let final_url = response.get_uri().to_string();
+    let tag_segment = final_url
+        .rsplit('/')
+        .next()
+        .context("could not extract version from GitHub redirect")?;
+    let latest = tag_segment.strip_prefix('v').unwrap_or(tag_segment);
 
-    let response = req.call().map_err(|e| {
-            if let ureq::Error::StatusCode(403) = &e {
-                anyhow::anyhow!(
-                    "GitHub API rate limit exceeded.\n\
-                     Try again in a few minutes, or download from:\n\
-                     https://github.com/LokiQ0713/cc-token-usage/releases/latest"
-                )
-            } else {
-                anyhow::anyhow!("failed to query GitHub API — check your internet connection: {e}")
-            }
-        })?;
-
-    let body = response
-        .into_body()
-        .read_to_string()
-        .context("failed to read GitHub API response")?;
-
-    let resp: serde_json::Value =
-        serde_json::from_str(&body).context("failed to parse GitHub API response")?;
-
-    let tag = resp["tag_name"]
-        .as_str()
-        .context("GitHub API response missing tag_name")?;
-    let latest = tag.strip_prefix('v').unwrap_or(tag);
-
-    let download_url = resp["assets"]
-        .as_array()
-        .and_then(|assets| {
-            assets.iter().find_map(|a| {
-                if a["name"].as_str() == Some(asset_name.as_str()) {
-                    a["browser_download_url"].as_str().map(String::from)
-                } else {
-                    None
-                }
-            })
-        });
+    // Construct download URL directly (no API call needed)
+    let download_url = format!(
+        "https://github.com/{GITHUB_REPO}/releases/download/v{latest}/{asset_name}"
+    );
 
     Ok(UpdateStatus {
         current_version: CURRENT_VERSION.to_string(),
@@ -92,12 +66,6 @@ pub fn perform_update() -> Result<()> {
         return Ok(());
     }
 
-    let url = status.download_url.context(format!(
-        "No pre-built binary for this platform ({}).\n\
-         Use `cargo install cc-token-usage` instead.",
-        target_triple()
-    ))?;
-
     eprintln!(
         "Updating v{} → v{}",
         status.current_version, status.latest_version
@@ -105,7 +73,7 @@ pub fn perform_update() -> Result<()> {
     eprintln!("Downloading...");
 
     // Download tar.gz
-    let data = ureq::get(&url)
+    let data = ureq::get(&status.download_url)
         .header("User-Agent", concat!("cc-token-usage/", env!("CARGO_PKG_VERSION")))
         .call()
         .context("failed to download release")?
