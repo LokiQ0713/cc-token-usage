@@ -12,8 +12,9 @@ use cc_token_usage::cli::{Cli, Command, GroupBy, OutputFormat};
 use cc_token_usage::config::Config;
 use cc_token_usage::data::loader;
 use cc_token_usage::data::models::SessionData;
-use cc_token_usage::output::html::{render_full_report_html, render_session_html};
-use cc_token_usage::output::json::{render_overview_json, render_projects_json, render_session_json, render_trend_json, render_wrapped_json};
+use cc_token_usage::output::html::render_session_html;
+use cc_token_usage::output::html_new::render_vue_dashboard;
+use cc_token_usage::output::json::{render_html_payload, render_overview_json, render_projects_json, render_session_json, render_trend_json, render_wrapped_json};
 use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend, render_validation, render_wrapped};
 use cc_token_usage::pricing::calculator::PricingCalculator;
 
@@ -97,7 +98,10 @@ fn main() -> Result<()> {
             if want_html {
                 let projects = analyze_projects(&sessions, &calc, 20);
                 let trend = analyze_trend(&sessions, &calc, 0, false);
-                let html = render_full_report_html(&overview, &projects, &trend, &calc);
+                let year = chrono::Utc::now().year();
+                let wrapped = analyze_wrapped(&sessions, &calc, year);
+                let json_payload = render_html_payload(&overview, &projects, &trend, &sessions, &calc, Some(&wrapped));
+                let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }
@@ -123,7 +127,10 @@ fn main() -> Result<()> {
                 let overview =
                     analyze_overview(target_sessions, quality.clone(), &calc, subscription_price);
                 let trend = analyze_trend(target_sessions, &calc, 0, false);
-                let html = render_full_report_html(&overview, &projects, &trend, &calc);
+                let year = chrono::Utc::now().year();
+                let wrapped = analyze_wrapped(target_sessions, &calc, year);
+                let json_payload = render_html_payload(&overview, &projects, &trend, target_sessions, &calc, Some(&wrapped));
+                let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }
@@ -231,7 +238,10 @@ fn main() -> Result<()> {
                 let overview =
                     analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
                 let projects = analyze_projects(&sessions, &calc, 20);
-                let html = render_full_report_html(&overview, &projects, &trend, &calc);
+                let year = chrono::Utc::now().year();
+                let wrapped = analyze_wrapped(&sessions, &calc, year);
+                let json_payload = render_html_payload(&overview, &projects, &trend, &sessions, &calc, Some(&wrapped));
+                let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }

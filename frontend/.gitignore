@@ -1,2 +1,4 @@
 node_modules/
-dist/
+# dist/index.html is committed — Rust include_str! depends on it at compile time
+dist/*
+!dist/index.html
