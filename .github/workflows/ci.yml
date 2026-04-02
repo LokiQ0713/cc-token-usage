@@ -13,6 +13,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check -p cc-token-usage
-      - run: cargo test -p cc-token-usage
-      - run: cargo clippy -p cc-token-usage -- -D warnings
+      - run: cargo check --workspace
+      - run: cargo test --workspace --all-features
+      - run: cargo clippy --workspace --all-features -- -D warnings

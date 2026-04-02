@@ -22,19 +22,25 @@ This is a cargo workspace with two crates:
 # Build & run
 cargo build
 cargo run -p cc-token-usage
-cargo run -p cc-token-usage -- --format html
+cargo run -p cc-token-usage -- --format html        # Vue dashboard (real data)
 cargo run -p cc-token-usage -- --format json
 cargo run -p cc-token-usage -- session --latest
 cargo run -p cc-token-usage -- validate --failures-only
+cargo run -p cc-token-usage -- heatmap              # terminal heatmap ░▒▓█
+cargo run -p cc-token-usage -- wrapped              # annual summary
 
 # Test
-cargo test                                    # all workspace tests
-cargo test -p cc-session-jsonl --all-features  # parsing library (104 tests)
-cargo test -p cc-token-usage                   # analysis tool (44+ tests)
+cargo test --workspace --all-features               # all tests (164+)
+cargo test -p cc-session-jsonl --all-features        # parsing library
+cargo test -p cc-token-usage                         # analysis tool
 
 # Lint & format
 cargo clippy --workspace --all-features -- -D warnings
 cargo fmt
+
+# Frontend (Vue dashboard)
+cd frontend && npm install && npm run dev            # dev server with HMR
+cd frontend && npm run build                         # build single-file HTML
 ```
 
 ## Architecture
@@ -77,9 +83,20 @@ Each subcommand has its own module. All consume `Vec<SessionData>` + `PricingCal
 
 #### Output (src/output/)
 
-- `text.rs` — terminal tables (comfy-table)
-- `html.rs` — self-contained HTML with Chart.js, light/dark theme, i18n
-- `json.rs` — JSON export for tool integration
+- `text.rs` — terminal tables (comfy-table) + terminal heatmap (░▒▓█)
+- `html.rs` — legacy HTML renderer (Chart.js, preserved as fallback)
+- `html_new.rs` — Vue dashboard renderer: `include_str!` embeds `frontend/dist/index.html`, injects JSON via `__DATA_PLACEHOLDER__` replacement
+- `json.rs` — JSON export + `HtmlReportPayload` unified type for dashboard
+
+### Frontend (frontend/)
+
+Vue 3 + Vite + TailwindCSS + Chart.js dashboard. Builds to self-contained single-file HTML (370KB, zero network dependencies).
+
+- **Pages**: Overview, Trends, Projects, Sessions, Heatmap, Wrapped
+- **Build**: `npm run build` → `dist/index.html` (committed to git for `include_str!`)
+- **Data flow**: Rust serializes `HtmlReportPayload` JSON → replaces `__DATA_PLACEHOLDER__` in template → self-contained HTML
+- **Themes**: Dark/light via CSS variables
+- **i18n**: EN/ZH via `useI18n()` composable
 
 ## Release Workflow
 
@@ -92,5 +109,5 @@ Each subcommand has its own module. All consume `Vec<SessionData>` + `PricingCal
 
 ## CI/CD
 
-- **CI** (`ci.yml`): `cargo check` + `cargo test` + `cargo clippy` on push/PR to master
-- **Release** (`release.yml`): Triggered by `v*` tags, cross-compiles for Linux/macOS/Windows, publishes npm
+- **CI** (`ci.yml`): `cargo check` + `cargo test` + `cargo clippy` (full workspace) on push/PR to master
+- **Release** (`release.yml`): Triggered by `v*` tags, cross-compiles for Linux/macOS/Windows, publishes cc-session-jsonl then cc-token-usage to crates.io, publishes npm
