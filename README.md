@@ -2,21 +2,32 @@
 
 [![Release](https://github.com/LokiQ0713/cc-token-usage/actions/workflows/release.yml/badge.svg)](https://github.com/LokiQ0713/cc-token-usage/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/cc-token-usage)](https://www.npmjs.com/package/cc-token-usage)
+[![crates.io](https://img.shields.io/crates/v/cc-token-usage)](https://crates.io/crates/cc-token-usage)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Ever wonder how many tokens Claude has been munching through?** This tool digs into your local Claude Code session data and tells you exactly where every token went — no API calls, no cloud, just your local `.jsonl` files.
+CLI tool that analyzes your Claude Code session data locally -- token usage, costs, efficiency, and coding patterns. No API calls, no cloud, just your local `.jsonl` files.
 
 [中文文档](README_ZH.md)
 
+<!-- screenshot -->
 ![Overview Dashboard](assets/preview1.png)
 
-## What You Get
+## Features
 
-- **The big picture** — sessions, turns, tokens read/written, cache savings, API-equivalent cost
-- **Project drill-down** — which project is burning the most tokens? Click to see sessions, click again to see every single turn
-- **Monthly trends** — daily cost chart, month-over-month comparison
-- **Cache analysis** — 90% of your "reads" are free thanks to caching. We show you exactly how much that saved
-- **Message preview** — see what you asked and what Claude replied, turn by turn
+- **Interactive HTML Dashboard** -- Vue 3 single-file app with 6 pages (Overview, Trends, Projects, Sessions, Heatmap, Wrapped), dark/light theme, EN/ZH i18n
+- **Terminal Reports** -- rich tables via comfy-table, works anywhere
+- **Heatmap** -- GitHub-style terminal activity heatmap (`░▒▓█`)
+- **Wrapped** -- Spotify-style annual summary with developer archetypes
+- **Project Drill-Down** -- rank projects by cost, filter by name, drill into sessions and turns
+- **Trend Analysis** -- daily/monthly cost trends, month-over-month comparison
+- **Context Collapse Detection** -- identify sessions where context was compacted and assess risk
+- **Code Attribution** -- track Claude's code contributions per session
+- **Efficiency Metrics** -- output ratio, cost per turn, cache savings analysis
+- **Session Metadata Mining** -- titles, tags, mode, branch, errors, speculation accepts
+- **Dual-Path Validation** -- independent raw JSON counter cross-checks the pipeline
+- **JSON Export** -- all subcommands support `--format json` for tool integration
+- **Parallel Processing** -- rayon-powered parallel parsing (3.9x speedup on large datasets)
+- **164+ Tests** -- comprehensive coverage across both crates
 
 ### Monthly Trends
 ![Monthly](assets/preview2.png)
@@ -26,23 +37,20 @@
 
 ## Install
 
-Quick install (macOS / Linux) — no dependencies required:
+Quick install (macOS / Linux):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LokiQ0713/cc-token-usage/master/install.sh | sh
 ```
 
-Or via npm (zero-install, always latest):
+Via npm:
 
 ```bash
-npx cc-token-usage
+npx cc-token-usage            # zero-install, always latest
+npm install -g cc-token-usage  # global install
 ```
 
-Or install globally:
-
-```bash
-npm install -g cc-token-usage
-```
+Via cargo:
 
 ```bash
 cargo install cc-token-usage
@@ -63,44 +71,65 @@ Install as a skill so Claude can run it for you when you ask "how much have I sp
 npx skills add LokiQ0713/cc-token-usage -g -y
 ```
 
-After installing, just ask Claude about your token usage — it will invoke the skill automatically.
-
 ## Usage
 
-Just run it — prints summary to terminal, generates HTML dashboard, opens in browser:
+Default: prints terminal summary + opens HTML dashboard in browser:
 
 ```bash
 cc-token-usage
 ```
 
-HTML dashboard only:
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `overview` | Overall usage summary across all projects |
+| `project` | Project-level breakdown, ranked by cost |
+| `session` | Single session detail with turn-by-turn analysis |
+| `trend` | Daily/monthly usage trends |
+| `heatmap` | GitHub-style terminal activity heatmap |
+| `wrapped` | Annual "Wrapped" summary with developer archetype |
+| `validate` | Cross-validate token counts against raw JSONL |
+| `update` | Self-update the binary |
+
+### Examples
 
 ```bash
+# HTML dashboard only
 cc-token-usage --format html
-```
 
-All projects ranked by cost:
+# JSON export
+cc-token-usage --format json
 
-```bash
+# All projects ranked by cost
 cc-token-usage project --top 0
-```
 
-Latest session details:
+# Filter a specific project
+cc-token-usage project --name "my-project"
 
-```bash
+# Latest session details
 cc-token-usage session --latest
-```
 
-Monthly breakdown:
-
-```bash
+# Monthly breakdown
 cc-token-usage trend --group-by month
-```
 
-Daily trend (last 30 days):
-
-```bash
+# Daily trend (last 30 days)
 cc-token-usage trend --days 30
+
+# Terminal heatmap (last year)
+cc-token-usage heatmap
+
+# Heatmap for all history
+cc-token-usage heatmap --days 0
+
+# Annual wrapped summary
+cc-token-usage wrapped
+
+# Wrapped for a specific year
+cc-token-usage wrapped --year 2025
+
+# Validate token counting accuracy
+cc-token-usage validate --failures-only
 ```
 
 ### Example Output
@@ -129,9 +158,24 @@ Claude Code Token Report
   ~/Desktop/claude/statusline/config           2    5603   $439.16
 ```
 
+## HTML Dashboard
+
+The `--format html` flag generates a self-contained single-file HTML dashboard (370KB, zero network dependencies). It includes:
+
+- **Overview** -- aggregate stats, model breakdown, per-agent costs, usage insights
+- **Trends** -- daily cost chart with month-over-month comparison
+- **Projects** -- all projects ranked by cost, click to drill into sessions
+- **Sessions** -- session list with metadata (title, tags, mode, branch)
+- **Heatmap** -- interactive activity heatmap
+- **Wrapped** -- annual summary with developer archetype classification
+
+Built with Vue 3 + TailwindCSS + Chart.js. Supports dark/light theme toggle and EN/ZH language switching.
+
 ## How It Works
 
-Reads `~/.claude/projects/` directly. Parses every JSONL session file, including subagent files (both old flat-style and new nested-style). Validates data, deduplicates, attributes orphan agents, detects context compactions.
+Reads `~/.claude/projects/` directly. Parses every JSONL session file, including subagent files (both legacy flat-style and new nested-style). Validates data, deduplicates by `requestId`, attributes orphan agents, detects context compactions.
+
+**Parsing library:** The `cc-session-jsonl` crate handles all JSONL parsing independently -- 23 entry types, 3 file layout formats, forward-compatible with `Unknown` variant. Available as a standalone crate on [crates.io](https://crates.io/crates/cc-session-jsonl).
 
 **Pricing:** Uses official Anthropic rates from [platform.claude.com](https://platform.claude.com/docs/en/about-claude/pricing). Distinguishes 5-minute vs 1-hour cache TTL for accurate cost calculation.
 
@@ -148,9 +192,41 @@ cache_read = 0.50
 output = 25.0
 ```
 
+## Development
+
+### Workspace Structure
+
+```
+crates/
+  cc-session-jsonl/   # Pure JSONL parsing library (98 tests)
+  cc-token-usage/     # Analysis CLI (61+ tests)
+frontend/             # Vue 3 + Vite + TailwindCSS dashboard
+npm-package/          # npm binary wrapper
+```
+
+### Build & Test
+
+```bash
+cargo build
+cargo test --workspace --all-features    # 164+ tests
+cargo clippy --workspace --all-features -- -D warnings
+cargo fmt
+```
+
+### Frontend Development
+
+```bash
+cd frontend
+npm install
+npm run dev      # dev server with HMR
+npm run build    # build single-file HTML → dist/index.html
+```
+
+After building, the Rust binary embeds `frontend/dist/index.html` via `include_str!` -- no separate file needed at runtime.
+
 ## Tech Stack
 
-Rust (serde, clap, chrono, comfy-table) + Chart.js
+Rust (serde, clap, chrono, comfy-table, rayon) + Vue 3 + TailwindCSS + Chart.js
 
 ## License
 

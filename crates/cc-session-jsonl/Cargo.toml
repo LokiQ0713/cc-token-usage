@@ -2,10 +2,10 @@
 name = "cc-session-jsonl"
 version = "0.1.0"
 edition = "2021"
-description = "Parse and structure Claude Code session JSONL files"
+description = "Parse and structure Claude Code session JSONL files — 23 entry types, 3 file layouts, forward-compatible"
 license = "MIT"
 repository = "https://github.com/LokiQ0713/cc-token-usage"
-keywords = ["claude", "session", "jsonl", "parser"]
+keywords = ["claude", "claude-code", "session", "jsonl", "parser"]
 categories = ["parser-implementations"]
 
 [features]

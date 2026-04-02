@@ -27,12 +27,15 @@ cargo run -p cc-token-usage -- --format json
 cargo run -p cc-token-usage -- session --latest
 cargo run -p cc-token-usage -- validate --failures-only
 cargo run -p cc-token-usage -- heatmap              # terminal heatmap ░▒▓█
+cargo run -p cc-token-usage -- heatmap --days 0     # all history
 cargo run -p cc-token-usage -- wrapped              # annual summary
+cargo run -p cc-token-usage -- wrapped --year 2025  # specific year
+cargo run -p cc-token-usage -- project --name foo   # filter by project name
 
 # Test
-cargo test --workspace --all-features               # all tests (164+)
-cargo test -p cc-session-jsonl --all-features        # parsing library
-cargo test -p cc-token-usage                         # analysis tool
+cargo test --workspace --all-features               # all tests (164+: 98 parsing + 61 analysis + 5 integration)
+cargo test -p cc-session-jsonl --all-features        # parsing library (98 tests)
+cargo test -p cc-token-usage                         # analysis tool (61+ tests)
 
 # Lint & format
 cargo clippy --workspace --all-features -- -D warnings
@@ -40,7 +43,8 @@ cargo fmt
 
 # Frontend (Vue dashboard)
 cd frontend && npm install && npm run dev            # dev server with HMR
-cd frontend && npm run build                         # build single-file HTML
+cd frontend && npm run build                         # build → dist/index.html (single-file, ~370KB)
+# After build: dist/index.html is committed to git, embedded via include_str! in html_new.rs
 ```
 
 ## Architecture
@@ -79,7 +83,13 @@ Key design decisions:
 
 Each subcommand has its own module. All consume `Vec<SessionData>` + `PricingCalculator`.
 
-`validate.rs` — **dual-path cross-validation**: independent raw JSON counter (serde_json::Value) re-counts tokens separately from the pipeline. Must stay independent of cc-session-jsonl to preserve verification integrity.
+- `overview.rs` — aggregate stats, model breakdown, per-agent costs, usage insights
+- `project.rs` — project ranking by cost, `--name` filtering, session drill-down
+- `session.rs` — single session detail with metadata, context collapse detection, attribution
+- `trend.rs` — daily/monthly trends with month-over-month comparison
+- `heatmap.rs` — GitHub-style activity heatmap for terminal (░▒▓█ blocks), `--days` control
+- `wrapped.rs` — Spotify-style annual summary with developer archetype classification (e.g., Night Owl, Weekend Warrior)
+- `validate.rs` — **dual-path cross-validation**: independent raw JSON counter (serde_json::Value) re-counts tokens separately from the pipeline. Must stay independent of cc-session-jsonl to preserve verification integrity.
 
 #### Output (src/output/)
 
@@ -97,6 +107,8 @@ Vue 3 + Vite + TailwindCSS + Chart.js dashboard. Builds to self-contained single
 - **Data flow**: Rust serializes `HtmlReportPayload` JSON → replaces `__DATA_PLACEHOLDER__` in template → self-contained HTML
 - **Themes**: Dark/light via CSS variables
 - **i18n**: EN/ZH via `useI18n()` composable
+
+**Template update workflow**: When modifying the frontend, run `cd frontend && npm run build`, then the updated `dist/index.html` is automatically picked up by `include_str!` in `html_new.rs` on next `cargo build`. The built file must be committed to git.
 
 ## Release Workflow
 
