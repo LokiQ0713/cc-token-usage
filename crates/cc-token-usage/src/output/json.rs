@@ -158,13 +158,14 @@ pub fn render_overview_json(overview: &OverviewResult) -> String {
             total_saved: overview.cache_savings.total_saved,
             savings_pct: overview.cache_savings.savings_pct,
         },
-        subscription_value: overview.subscription_value.as_ref().map(|sv| {
-            SubscriptionValueJson {
+        subscription_value: overview
+            .subscription_value
+            .as_ref()
+            .map(|sv| SubscriptionValueJson {
                 monthly_price: sv.monthly_price,
                 api_equivalent: sv.api_equivalent,
                 value_multiplier: sv.value_multiplier,
-            }
-        }),
+            }),
         cost_by_category: CostByCategoryJson {
             input_cost: cat.input_cost,
             output_cost: cat.output_cost,
@@ -439,12 +440,12 @@ pub fn render_html_payload(
     active_session_id: Option<&str>,
 ) -> String {
     // Reuse existing JSON renderers and parse back into serde_json::Value
-    let overview_json: serde_json::Value = serde_json::from_str(&render_overview_json(overview))
-        .unwrap_or(serde_json::Value::Null);
-    let projects_json: serde_json::Value = serde_json::from_str(&render_projects_json(projects))
-        .unwrap_or(serde_json::Value::Null);
-    let trends_json: serde_json::Value = serde_json::from_str(&render_trend_json(trend))
-        .unwrap_or(serde_json::Value::Null);
+    let overview_json: serde_json::Value =
+        serde_json::from_str(&render_overview_json(overview)).unwrap_or(serde_json::Value::Null);
+    let projects_json: serde_json::Value =
+        serde_json::from_str(&render_projects_json(projects)).unwrap_or(serde_json::Value::Null);
+    let trends_json: serde_json::Value =
+        serde_json::from_str(&render_trend_json(trend)).unwrap_or(serde_json::Value::Null);
 
     // Build per-session summaries
     let session_summaries: Vec<HtmlSessionSummary> = sessions
@@ -456,9 +457,8 @@ pub fn render_html_payload(
     let heatmap = build_heatmap(sessions, calc);
 
     // Build wrapped data if available
-    let wrapped_json: Option<serde_json::Value> = wrapped.and_then(|w| {
-        serde_json::from_str(&render_wrapped_json(w)).ok()
-    });
+    let wrapped_json: Option<serde_json::Value> =
+        wrapped.and_then(|w| serde_json::from_str(&render_wrapped_json(w)).ok());
 
     let payload = HtmlReportPayload {
         overview: overview_json,
@@ -474,7 +474,10 @@ pub fn render_html_payload(
 }
 
 /// Build an `HtmlSessionSummary` from a single `SessionData`.
-fn build_html_session_summary(session: &SessionData, calc: &PricingCalculator) -> HtmlSessionSummary {
+fn build_html_session_summary(
+    session: &SessionData,
+    calc: &PricingCalculator,
+) -> HtmlSessionSummary {
     let all = session.all_responses();
     let turn_count = all.len();
     let agent_turn_count = session.agent_turn_count();
@@ -542,7 +545,12 @@ fn build_heatmap(sessions: &[SessionData], calc: &PricingCalculator) -> HeatmapP
         let date_key = match session.first_timestamp {
             Some(ts) => {
                 let local = ts.with_timezone(&chrono::Local);
-                format!("{:04}-{:02}-{:02}", local.year(), local.month(), local.day())
+                format!(
+                    "{:04}-{:02}-{:02}",
+                    local.year(),
+                    local.month(),
+                    local.day()
+                )
             }
             None => continue,
         };

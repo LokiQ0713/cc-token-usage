@@ -6,8 +6,8 @@ use crate::pricing::calculator::PricingCalculator;
 // ─── Chart Colors ────────────────────────────────────────────────────────────
 
 const COLORS: &[&str] = &[
-    "#3b82f6", "#8b5cf6", "#06b6d4", "#22c55e", "#f59e0b",
-    "#ef4444", "#ec4899", "#a78bfa", "#2dd4bf", "#fb923c",
+    "#3b82f6", "#8b5cf6", "#06b6d4", "#22c55e", "#f59e0b", "#ef4444", "#ec4899", "#a78bfa",
+    "#2dd4bf", "#fb923c",
 ];
 
 // ─── ReportData ──────────────────────────────────────────────────────────────
@@ -607,17 +607,32 @@ fn render_source_tabs(
     writeln!(out, "</nav>").unwrap();
 
     // Tab 1: Overview
-    writeln!(out, r#"<div id="{pfx}-tab-overview" class="sub-tab-content active">"#, pfx = pfx).unwrap();
+    writeln!(
+        out,
+        r#"<div id="{pfx}-tab-overview" class="sub-tab-content active">"#,
+        pfx = pfx
+    )
+    .unwrap();
     render_overview_tab(out, overview, pfx);
     writeln!(out, "</div>").unwrap();
 
     // Tab 2: Monthly
-    writeln!(out, r#"<div id="{pfx}-tab-monthly" class="sub-tab-content">"#, pfx = pfx).unwrap();
+    writeln!(
+        out,
+        r#"<div id="{pfx}-tab-monthly" class="sub-tab-content">"#,
+        pfx = pfx
+    )
+    .unwrap();
     render_monthly_tab(out, overview, trend, pfx);
     writeln!(out, "</div>").unwrap();
 
     // Tab 3: Projects
-    writeln!(out, r#"<div id="{pfx}-tab-projects" class="sub-tab-content">"#, pfx = pfx).unwrap();
+    writeln!(
+        out,
+        r#"<div id="{pfx}-tab-projects" class="sub-tab-content">"#,
+        pfx = pfx
+    )
+    .unwrap();
     render_projects_tab(out, projects, &overview.session_summaries, pfx);
     writeln!(out, "</div>").unwrap();
 
@@ -656,8 +671,13 @@ pub fn render_full_report_html(
     writeln!(out, r#"<div class="header-row">"#).unwrap();
     writeln!(out, r#"<h1>Claude Code Token Analyzer</h1>"#).unwrap();
     if let Some((start, end)) = &overview.quality.time_range {
-        writeln!(out, r#"<span class="subtitle">{} ~ {}</span>"#,
-            start.format("%Y-%m-%d"), end.format("%Y-%m-%d")).unwrap();
+        writeln!(
+            out,
+            r#"<span class="subtitle">{} ~ {}</span>"#,
+            start.format("%Y-%m-%d"),
+            end.format("%Y-%m-%d")
+        )
+        .unwrap();
     }
     writeln!(out, r#"<button class="theme-btn" onclick="toggleTheme()" style="margin-left:auto;">&#x2600;&#xFE0F;</button>"#).unwrap();
     writeln!(out, r#"<button id="lang-btn" onclick="toggleLang()" style="padding:4px 12px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);cursor:pointer;font-size:13px;">中文</button>"#).unwrap();
@@ -668,7 +688,12 @@ pub fn render_full_report_html(
 
     // ── Single source: use sub-nav directly (no top-nav) ─────────────────────
     let pfx = "s1";
-    writeln!(out, r#"<div id="source-{pfx}" class="source-content active">"#, pfx = pfx).unwrap();
+    writeln!(
+        out,
+        r#"<div id="source-{pfx}" class="source-content active">"#,
+        pfx = pfx
+    )
+    .unwrap();
     render_source_tabs(&mut out, pfx, overview, projects, trend, calc);
     writeln!(out, "</div>").unwrap();
 
@@ -717,8 +742,10 @@ pub fn render_dual_report_html(
         let mut global_max = None;
         for q in [&source1.overview.quality, &source2.overview.quality] {
             if let Some((s, e)) = &q.time_range {
-                global_min = Some(global_min.map_or(*s, |m: chrono::DateTime<chrono::Utc>| m.min(*s)));
-                global_max = Some(global_max.map_or(*e, |m: chrono::DateTime<chrono::Utc>| m.max(*e)));
+                global_min =
+                    Some(global_min.map_or(*s, |m: chrono::DateTime<chrono::Utc>| m.min(*s)));
+                global_max =
+                    Some(global_max.map_or(*e, |m: chrono::DateTime<chrono::Utc>| m.max(*e)));
             }
         }
         match (global_min, global_max) {
@@ -740,20 +767,44 @@ pub fn render_dual_report_html(
     let s1_sessions = source1.overview.total_sessions;
     let s2_sessions = source2.overview.total_sessions;
     writeln!(out, r#"<nav class="top-nav">"#).unwrap();
-    writeln!(out, r#"<button class="active" onclick="switchSource('s1')">{} ({} sessions)</button>"#,
-        escape_html(source1_name), s1_sessions).unwrap();
-    writeln!(out, r#"<button onclick="switchSource('s2')">{} ({} sessions)</button>"#,
-        escape_html(source2_name), s2_sessions).unwrap();
+    writeln!(
+        out,
+        r#"<button class="active" onclick="switchSource('s1')">{} ({} sessions)</button>"#,
+        escape_html(source1_name),
+        s1_sessions
+    )
+    .unwrap();
+    writeln!(
+        out,
+        r#"<button onclick="switchSource('s2')">{} ({} sessions)</button>"#,
+        escape_html(source2_name),
+        s2_sessions
+    )
+    .unwrap();
     writeln!(out, "</nav>").unwrap();
 
     // ── Source 1 ─────────────────────────────────────────────────────────────
     writeln!(out, r#"<div id="source-s1" class="source-content active">"#).unwrap();
-    render_source_tabs(&mut out, "s1", &source1.overview, &source1.projects, &source1.trend, calc);
+    render_source_tabs(
+        &mut out,
+        "s1",
+        &source1.overview,
+        &source1.projects,
+        &source1.trend,
+        calc,
+    );
     writeln!(out, "</div>").unwrap();
 
     // ── Source 2 ─────────────────────────────────────────────────────────────
     writeln!(out, r#"<div id="source-s2" class="source-content">"#).unwrap();
-    render_source_tabs(&mut out, "s2", &source2.overview, &source2.projects, &source2.trend, calc);
+    render_source_tabs(
+        &mut out,
+        "s2",
+        &source2.overview,
+        &source2.projects,
+        &source2.trend,
+        calc,
+    );
     writeln!(out, "</div>").unwrap();
 
     // ── JavaScript ───────────────────────────────────────────────────────────
@@ -768,16 +819,49 @@ pub fn render_dual_report_html(
 fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     // KPI cards
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
-    write_kpi_i18n(out, &format_number(overview.total_sessions as u64), "Sessions", "会话数");
-    write_kpi_i18n(out, &format_number(overview.total_turns as u64), "Turns", "响应数");
-    write_kpi_i18n(out, &format_compact(overview.total_output_tokens), "Claude Wrote", "Claude 写了");
-    write_kpi_i18n(out, &format_compact(overview.total_context_tokens), "Claude Read", "Claude 读了");
-    write_kpi_i18n(out, &format!("{:.1}%", overview.avg_cache_hit_rate), "Avg Cache Hit Rate", "平均缓存命中率");
-    write_kpi_i18n(out, &format_cost_int(overview.total_cost), "Token Value (API Rate)", "Token 价值 (API 费率)");
+    write_kpi_i18n(
+        out,
+        &format_number(overview.total_sessions as u64),
+        "Sessions",
+        "会话数",
+    );
+    write_kpi_i18n(
+        out,
+        &format_number(overview.total_turns as u64),
+        "Turns",
+        "响应数",
+    );
+    write_kpi_i18n(
+        out,
+        &format_compact(overview.total_output_tokens),
+        "Claude Wrote",
+        "Claude 写了",
+    );
+    write_kpi_i18n(
+        out,
+        &format_compact(overview.total_context_tokens),
+        "Claude Read",
+        "Claude 读了",
+    );
+    write_kpi_i18n(
+        out,
+        &format!("{:.1}%", overview.avg_cache_hit_rate),
+        "Avg Cache Hit Rate",
+        "平均缓存命中率",
+    );
+    write_kpi_i18n(
+        out,
+        &format_cost_int(overview.total_cost),
+        "Token Value (API Rate)",
+        "Token 价值 (API 费率)",
+    );
     if overview.cache_savings.total_saved > 0.0 {
-        write_kpi_i18n(out, &format_cost_int(overview.cache_savings.total_saved),
+        write_kpi_i18n(
+            out,
+            &format_cost_int(overview.cache_savings.total_saved),
             &format!("Cache Savings ({:.0}%)", overview.cache_savings.savings_pct),
-            &format!("缓存节省 ({:.0}%)", overview.cache_savings.savings_pct));
+            &format!("缓存节省 ({:.0}%)", overview.cache_savings.savings_pct),
+        );
     }
     writeln!(out, "</div>").unwrap();
 
@@ -798,29 +882,39 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
         let max_ctx = summaries.iter().map(|s| s.max_context).max().unwrap_or(0);
 
         // Average session duration
-        let durations: Vec<f64> = summaries.iter()
-            .map(|s| s.duration_minutes).filter(|d| *d > 0.0).collect();
-        let avg_dur = if !durations.is_empty() { durations.iter().sum::<f64>() / durations.len() as f64 } else { 0.0 };
+        let durations: Vec<f64> = summaries
+            .iter()
+            .map(|s| s.duration_minutes)
+            .filter(|d| *d > 0.0)
+            .collect();
+        let avg_dur = if !durations.is_empty() {
+            durations.iter().sum::<f64>() / durations.len() as f64
+        } else {
+            0.0
+        };
 
         writeln!(out, r#"<div class="grid-4">"#).unwrap();
         if let Some((avg, days)) = daily_avg {
-            write_kpi_i18n(out,
+            write_kpi_i18n(
+                out,
                 &format!("{}/day", format_cost_int(avg)),
                 &format!("Daily Avg ({} days)", days),
-                &format!("日均费用（{} 天）", days));
+                &format!("日均费用（{} 天）", days),
+            );
         }
-        write_kpi_i18n(out,
-            &format_compact(max_ctx),
-            "Peak Context",
-            "峰值上下文");
-        write_kpi_i18n(out,
+        write_kpi_i18n(out, &format_compact(max_ctx), "Peak Context", "峰值上下文");
+        write_kpi_i18n(
+            out,
             &format_number(total_compactions as u64),
             "Compactions",
-            "上下文压缩次数");
-        write_kpi_i18n(out,
+            "上下文压缩次数",
+        );
+        write_kpi_i18n(
+            out,
             &format_duration(avg_dur),
             "Avg Session",
-            "平均会话时长");
+            "平均会话时长",
+        );
         writeln!(out, "</div>").unwrap();
     }
 
@@ -831,18 +925,26 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
     {
         let summaries = &overview.session_summaries;
         let mut by_cost: Vec<&crate::analysis::SessionSummary> = summaries.iter().collect();
-        by_cost.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+        by_cost.sort_by(|a, b| {
+            b.cost
+                .partial_cmp(&a.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         let top5 = &by_cost[..by_cost.len().min(5)];
         if !top5.is_empty() {
             writeln!(out, r#"<div class="card">"#).unwrap();
             writeln!(out, r#"<h2 data-en="Most Expensive Sessions Top 5" data-zh="最贵会话 Top 5">Most Expensive Sessions Top 5</h2>"#).unwrap();
             writeln!(out, r#"<div class="table-wrap">"#).unwrap();
-            writeln!(out, r#"<table class="data-table"><thead><tr>
+            writeln!(
+                out,
+                r#"<table class="data-table"><thead><tr>
                 <th class="text-left" data-en="Session" data-zh="会话">Session</th>
                 <th class="text-left" data-en="Project" data-zh="项目">Project</th>
                 <th style="text-align:right;" data-en="Turns" data-zh="响应数">Turns</th>
                 <th style="text-align:right;" data-en="Cost" data-zh="费用">Cost</th>
-            </tr></thead><tbody>"#).unwrap();
+            </tr></thead><tbody>"#
+            )
+            .unwrap();
             for s in top5 {
                 writeln!(out, "<tr><td class=\"text-left\">{}</td><td class=\"text-left\">{}</td><td style=\"text-align:right;\">{}</td><td style=\"text-align:right;font-weight:600;\">{}</td></tr>",
                     escape_html(&s.session_id[..s.session_id.len().min(8)]),
@@ -860,26 +962,42 @@ fn render_overview_tab(out: &mut String, overview: &OverviewResult, pfx: &str) {
         let canvas_id = format!("heatmap-{}", pfx);
         writeln!(out, r#"<div class="card">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Activity Heatmap (Local Time)" data-zh="活跃热力图（本地时间）">Activity Heatmap (Local Time)</h2>"#).unwrap();
-        writeln!(out, r#"<div class="heatmap-wrap"><canvas id="{}"></canvas></div>"#, canvas_id).unwrap();
+        writeln!(
+            out,
+            r#"<div class="heatmap-wrap"><canvas id="{}"></canvas></div>"#,
+            canvas_id
+        )
+        .unwrap();
 
         let mut matrix_js = String::from("[");
         for d in 0..7 {
-            if d > 0 { matrix_js.push(','); }
+            if d > 0 {
+                matrix_js.push(',');
+            }
             matrix_js.push('[');
             for h in 0..24 {
-                if h > 0 { matrix_js.push(','); }
+                if h > 0 {
+                    matrix_js.push(',');
+                }
                 write!(matrix_js, "{}", overview.weekday_hour_matrix[d][h]).unwrap();
             }
             matrix_js.push(']');
         }
         matrix_js.push(']');
 
-        writeln!(out, r#"<script>
+        writeln!(
+            out,
+            r#"<script>
 window._heatmapData_{pfx} = {matrix};
 document.addEventListener('DOMContentLoaded', function() {{
   drawHeatmap('{canvas_id}', window._heatmapData_{pfx});
 }});
-</script>"#, pfx = pfx, matrix = matrix_js, canvas_id = canvas_id).unwrap();
+</script>"#,
+            pfx = pfx,
+            matrix = matrix_js,
+            canvas_id = canvas_id
+        )
+        .unwrap();
         writeln!(out, "</div>").unwrap();
     }
 
@@ -891,17 +1009,40 @@ document.addEventListener('DOMContentLoaded', function() {{
         writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Session Efficiency (Turns vs Cost)" data-zh="会话效率（Turns vs 费用）">Session Efficiency (Turns vs Cost)</h2>"#).unwrap();
         writeln!(out, r#"<p style="color:var(--text-secondary);font-size:12px;margin-bottom:8px;" data-en="Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions." data-zh="每个气泡 = 一个会话。X = turn 数，Y = 费用。气泡大小 = 输出 token。右上角 = 昂贵的长会话。">Each bubble = one session. X = turns, Y = cost. Bubble size = output tokens. Top-right = expensive long sessions.</p>"#).unwrap();
-        writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
+        writeln!(
+            out,
+            r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#,
+            chart_id
+        )
+        .unwrap();
 
-        let max_output: u64 = overview.session_summaries.iter().map(|s| s.output_tokens).max().unwrap_or(1);
+        let max_output: u64 = overview
+            .session_summaries
+            .iter()
+            .map(|s| s.output_tokens)
+            .max()
+            .unwrap_or(1);
         let mut scatter_data = String::from("[");
         for (i, s) in overview.session_summaries.iter().enumerate() {
-            if i > 0 { scatter_data.push(','); }
+            if i > 0 {
+                scatter_data.push(',');
+            }
             let radius = if max_output > 0 {
                 3.0 + (s.output_tokens as f64 / max_output as f64) * 20.0
-            } else { 3.0 };
-            let cpt = if s.turn_count > 0 { s.cost / s.turn_count as f64 } else { 0.0 };
-            write!(scatter_data, "{{x:{},y:{:.4},r:{:.1},cpt:{:.4},out:{}}}", s.turn_count, s.cost, radius, cpt, s.output_tokens).unwrap();
+            } else {
+                3.0
+            };
+            let cpt = if s.turn_count > 0 {
+                s.cost / s.turn_count as f64
+            } else {
+                0.0
+            };
+            write!(
+                scatter_data,
+                "{{x:{},y:{:.4},r:{:.1},cpt:{:.4},out:{}}}",
+                s.turn_count, s.cost, radius, cpt, s.output_tokens
+            )
+            .unwrap();
         }
         scatter_data.push(']');
 
@@ -941,7 +1082,12 @@ new Chart(document.getElementById('{chart_id}'), {{
 
 // ─── Tab 2: Monthly ──────────────────────────────────────────────────────────
 
-fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &TrendResult, pfx: &str) {
+fn render_monthly_tab(
+    out: &mut String,
+    _overview: &OverviewResult,
+    trend: &TrendResult,
+    pfx: &str,
+) {
     if trend.entries.is_empty() {
         writeln!(out, r#"<div class="card"><p style="color:var(--text-secondary);">No trend data available.</p></div>"#).unwrap();
         return;
@@ -965,20 +1111,46 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
             month_turns += entry.turn_count;
             month_sessions += entry.session_count;
             month_output += entry.tokens.output_tokens;
-            month_input += entry.tokens.input_tokens + entry.tokens.cache_creation_tokens + entry.tokens.cache_read_tokens;
+            month_input += entry.tokens.input_tokens
+                + entry.tokens.cache_creation_tokens
+                + entry.tokens.cache_read_tokens;
             daily_entries.push(entry);
         }
     }
 
-    let _avg_cost_per_turn = if month_turns > 0 { month_cost / month_turns as f64 } else { 0.0 };
+    let _avg_cost_per_turn = if month_turns > 0 {
+        month_cost / month_turns as f64
+    } else {
+        0.0
+    };
 
     // KPI cards for current month
-    writeln!(out, r#"<h2 data-en="Current Period: {m}" data-zh="当前周期：{m}">Current Period: {m}</h2>"#, m = escape_html(latest_month)).unwrap();
+    writeln!(
+        out,
+        r#"<h2 data-en="Current Period: {m}" data-zh="当前周期：{m}">Current Period: {m}</h2>"#,
+        m = escape_html(latest_month)
+    )
+    .unwrap();
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
-    write_kpi_i18n(out, &format_number(month_sessions as u64), "Sessions", "会话数");
+    write_kpi_i18n(
+        out,
+        &format_number(month_sessions as u64),
+        "Sessions",
+        "会话数",
+    );
     write_kpi_i18n(out, &format_number(month_turns as u64), "Turns", "响应数");
-    write_kpi_i18n(out, &format_compact(month_input), "Input Tokens", "输入 Token");
-    write_kpi_i18n(out, &format_compact(month_output), "Output Tokens", "输出 Token");
+    write_kpi_i18n(
+        out,
+        &format_compact(month_input),
+        "Input Tokens",
+        "输入 Token",
+    );
+    write_kpi_i18n(
+        out,
+        &format_compact(month_output),
+        "Output Tokens",
+        "输出 Token",
+    );
     write_kpi_i18n(out, &format_cost(month_cost), "Cost", "费用");
     writeln!(out, "</div>").unwrap();
 
@@ -988,14 +1160,35 @@ fn render_monthly_tab(out: &mut String, _overview: &OverviewResult, trend: &Tren
         writeln!(out, r#"<div class="card">"#).unwrap();
         writeln!(out, r#"<h2 data-en="Daily Cost &amp; Cost/Turn ({})" data-zh="每日费用 &amp; 每 Turn 费用 ({})">Daily Cost &amp; Cost/Turn ({})</h2>"#,
             escape_html(latest_month), escape_html(latest_month), escape_html(latest_month)).unwrap();
-        writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
+        writeln!(
+            out,
+            r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#,
+            chart_id
+        )
+        .unwrap();
 
-        let labels: Vec<String> = daily_entries.iter().map(|e| format!("\"{}\"", &e.label[5..])).collect();
-        let cost_data: Vec<String> = daily_entries.iter().map(|e| format!("{:.2}", e.cost)).collect();
-        let cpt_data: Vec<String> = daily_entries.iter().map(|e| {
-            if e.turn_count > 0 { format!("{:.4}", e.cost / e.turn_count as f64) } else { "0".to_string() }
-        }).collect();
-        let turn_data: Vec<String> = daily_entries.iter().map(|e| e.turn_count.to_string()).collect();
+        let labels: Vec<String> = daily_entries
+            .iter()
+            .map(|e| format!("\"{}\"", &e.label[5..]))
+            .collect();
+        let cost_data: Vec<String> = daily_entries
+            .iter()
+            .map(|e| format!("{:.2}", e.cost))
+            .collect();
+        let cpt_data: Vec<String> = daily_entries
+            .iter()
+            .map(|e| {
+                if e.turn_count > 0 {
+                    format!("{:.4}", e.cost / e.turn_count as f64)
+                } else {
+                    "0".to_string()
+                }
+            })
+            .collect();
+        let turn_data: Vec<String> = daily_entries
+            .iter()
+            .map(|e| e.turn_count.to_string())
+            .collect();
 
         writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
@@ -1071,11 +1264,25 @@ new Chart(document.getElementById('{chart_id}'), {{
             let chart_id = format!("{}-dailyTurnsCostChart", pfx);
             writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
             writeln!(out, r#"<h2 data-en="Daily Turns &amp; Cost" data-zh="每日响应数与费用">Daily Turns &amp; Cost</h2>"#).unwrap();
-            writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
+            writeln!(
+                out,
+                r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#,
+                chart_id
+            )
+            .unwrap();
 
-            let labels: Vec<String> = daily_entries.iter().map(|e| format!("\"{}\"", &e.label[5..])).collect();
-            let turns_data: Vec<String> = daily_entries.iter().map(|e| e.turn_count.to_string()).collect();
-            let cost_data: Vec<String> = daily_entries.iter().map(|e| format!("{:.2}", e.cost)).collect();
+            let labels: Vec<String> = daily_entries
+                .iter()
+                .map(|e| format!("\"{}\"", &e.label[5..]))
+                .collect();
+            let turns_data: Vec<String> = daily_entries
+                .iter()
+                .map(|e| e.turn_count.to_string())
+                .collect();
+            let cost_data: Vec<String> = daily_entries
+                .iter()
+                .map(|e| format!("{:.2}", e.cost))
+                .collect();
 
             writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
@@ -1106,7 +1313,10 @@ new Chart(document.getElementById('{chart_id}'), {{
     {
         // Group trend entries by month
         #[allow(clippy::type_complexity)]
-        let mut months: std::collections::BTreeMap<String, (usize, usize, u64, u64, u64, f64, u64)> = std::collections::BTreeMap::new();
+        let mut months: std::collections::BTreeMap<
+            String,
+            (usize, usize, u64, u64, u64, f64, u64),
+        > = std::collections::BTreeMap::new();
         for entry in &trend.entries {
             let month_key = entry.label[..7].to_string();
             let e = months.entry(month_key).or_insert((0, 0, 0, 0, 0, 0.0, 0));
@@ -1116,13 +1326,19 @@ new Chart(document.getElementById('{chart_id}'), {{
             e.3 += entry.tokens.cache_creation_tokens;
             e.4 += entry.tokens.cache_read_tokens;
             e.5 += entry.cost;
-            e.6 += entry.tokens.input_tokens + entry.tokens.cache_creation_tokens + entry.tokens.cache_read_tokens;
+            e.6 += entry.tokens.input_tokens
+                + entry.tokens.cache_creation_tokens
+                + entry.tokens.cache_read_tokens;
         }
 
         if months.len() > 1 {
             let tbl_id = format!("{}-tbl-monthly", pfx);
             writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-            writeln!(out, r#"<h2 data-en="Monthly Summary" data-zh="月度汇总">Monthly Summary</h2>"#).unwrap();
+            writeln!(
+                out,
+                r#"<h2 data-en="Monthly Summary" data-zh="月度汇总">Monthly Summary</h2>"#
+            )
+            .unwrap();
             writeln!(out, r#"<div class="table-wrap">"#).unwrap();
             writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
             writeln!(out, "<thead><tr>\
@@ -1135,8 +1351,12 @@ new Chart(document.getElementById('{chart_id}'), {{
             </tr></thead>", id = tbl_id).unwrap();
             writeln!(out, "<tbody>").unwrap();
 
-            for (month, (sessions, turns, output, _cache_write, _cache_read, cost, input_ctx)) in &months {
-                writeln!(out, "<tr>\
+            for (month, (sessions, turns, output, _cache_write, _cache_read, cost, input_ctx)) in
+                &months
+            {
+                writeln!(
+                    out,
+                    "<tr>\
                     <td class=\"text-left\" data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{}\">{}</td>\
@@ -1144,13 +1364,20 @@ new Chart(document.getElementById('{chart_id}'), {{
                     <td data-value=\"{}\">{}</td>\
                     <td data-value=\"{:.4}\">{}</td>\
                 </tr>",
-                    escape_html(month), escape_html(month),
-                    sessions, format_number(*sessions as u64),
-                    turns, format_number(*turns as u64),
-                    input_ctx, format_compact(*input_ctx),
-                    output, format_compact(*output),
-                    cost, format_cost(*cost),
-                ).unwrap();
+                    escape_html(month),
+                    escape_html(month),
+                    sessions,
+                    format_number(*sessions as u64),
+                    turns,
+                    format_number(*turns as u64),
+                    input_ctx,
+                    format_compact(*input_ctx),
+                    output,
+                    format_compact(*output),
+                    cost,
+                    format_cost(*cost),
+                )
+                .unwrap();
             }
 
             writeln!(out, "</tbody></table></div></div>").unwrap();
@@ -1173,8 +1400,14 @@ new Chart(document.getElementById('{chart_id}'), {{
             other => other,
         };
         writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-        writeln!(out, r#"<h2 data-en="{} Breakdown" data-zh="{}明细">{} Breakdown</h2>"#,
-            escape_html(&trend.group_label), escape_html(group_zh), escape_html(&trend.group_label)).unwrap();
+        writeln!(
+            out,
+            r#"<h2 data-en="{} Breakdown" data-zh="{}明细">{} Breakdown</h2>"#,
+            escape_html(&trend.group_label),
+            escape_html(group_zh),
+            escape_html(&trend.group_label)
+        )
+        .unwrap();
         writeln!(out, r#"<div class="table-wrap">"#).unwrap();
         writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
         writeln!(out, "<thead><tr>\
@@ -1189,16 +1422,28 @@ new Chart(document.getElementById('{chart_id}'), {{
         writeln!(out, "<tbody>").unwrap();
 
         for entry in &trend.entries {
-            let input_tokens = entry.tokens.input_tokens + entry.tokens.cache_creation_tokens + entry.tokens.cache_read_tokens;
+            let input_tokens = entry.tokens.input_tokens
+                + entry.tokens.cache_creation_tokens
+                + entry.tokens.cache_read_tokens;
             // Model summary for this day
             let mut model_list: Vec<(&String, &u64)> = entry.models.iter().collect();
             model_list.sort_by(|a, b| b.1.cmp(a.1));
-            let models_html: String = model_list.iter().take(3).map(|(m, tokens)| {
-                format!("<span class=\"tool-tag\">{} <span class=\"tool-count\">{}</span></span>",
-                    escape_html(&short_model(m)), format_compact(**tokens))
-            }).collect::<Vec<_>>().join("");
+            let models_html: String = model_list
+                .iter()
+                .take(3)
+                .map(|(m, tokens)| {
+                    format!(
+                        "<span class=\"tool-tag\">{} <span class=\"tool-count\">{}</span></span>",
+                        escape_html(&short_model(m)),
+                        format_compact(**tokens)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
 
-            writeln!(out, "<tr>\
+            writeln!(
+                out,
+                "<tr>\
                 <td class=\"text-left\" data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
                 <td data-value=\"{}\">{}</td>\
@@ -1207,14 +1452,21 @@ new Chart(document.getElementById('{chart_id}'), {{
                 <td data-value=\"{:.4}\">{}</td>\
                 <td class=\"text-left\">{}</td>\
             </tr>",
-                escape_html(&entry.label), escape_html(&entry.label),
-                entry.session_count, format_number(entry.session_count as u64),
-                entry.turn_count, format_number(entry.turn_count as u64),
-                input_tokens, format_compact(input_tokens),
-                entry.tokens.output_tokens, format_compact(entry.tokens.output_tokens),
-                entry.cost, format_cost(entry.cost),
+                escape_html(&entry.label),
+                escape_html(&entry.label),
+                entry.session_count,
+                format_number(entry.session_count as u64),
+                entry.turn_count,
+                format_number(entry.turn_count as u64),
+                input_tokens,
+                format_compact(input_tokens),
+                entry.tokens.output_tokens,
+                format_compact(entry.tokens.output_tokens),
+                entry.cost,
+                format_cost(entry.cost),
                 models_html,
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         writeln!(out, "</tbody></table></div></div>").unwrap();
@@ -1223,7 +1475,12 @@ new Chart(document.getElementById('{chart_id}'), {{
 
 // ─── Tab 3: Projects ─────────────────────────────────────────────────────────
 
-fn render_projects_tab(out: &mut String, projects: &ProjectResult, sessions: &[crate::analysis::SessionSummary], pfx: &str) {
+fn render_projects_tab(
+    out: &mut String,
+    projects: &ProjectResult,
+    sessions: &[crate::analysis::SessionSummary],
+    pfx: &str,
+) {
     // Chart: Project Cost Top 10
     {
         let top_n = projects.projects.iter().take(10).collect::<Vec<_>>();
@@ -1231,11 +1488,21 @@ fn render_projects_tab(out: &mut String, projects: &ProjectResult, sessions: &[c
             let chart_id = format!("{}-projectCostChart", pfx);
             writeln!(out, r#"<div class="card">"#).unwrap();
             writeln!(out, r#"<h2 data-en="Project Cost Top 10" data-zh="项目费用 Top 10">Project Cost Top 10</h2>"#).unwrap();
-            writeln!(out, r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#, chart_id).unwrap();
+            writeln!(
+                out,
+                r#"<div class="chart-container"><canvas id="{}"></canvas></div>"#,
+                chart_id
+            )
+            .unwrap();
 
-            let labels: Vec<String> = top_n.iter().map(|p| format!("\"{}\"", escape_html(&p.display_name))).collect();
+            let labels: Vec<String> = top_n
+                .iter()
+                .map(|p| format!("\"{}\"", escape_html(&p.display_name)))
+                .collect();
             let data: Vec<String> = top_n.iter().map(|p| format!("{:.2}", p.cost)).collect();
-            let colors_list: Vec<String> = (0..top_n.len()).map(|i| format!("\"{}\"", color(i))).collect();
+            let colors_list: Vec<String> = (0..top_n.len())
+                .map(|i| format!("\"{}\"", color(i)))
+                .collect();
 
             writeln!(out, r#"<script>
 new Chart(document.getElementById('{chart_id}'), {{
@@ -1261,7 +1528,11 @@ new Chart(document.getElementById('{chart_id}'), {{
     // Three-level drill-down table: Project → Session → Turn
     let tbl_id = format!("{}-tbl-projects-drill", pfx);
     writeln!(out, r#"<div class="card" style="margin-top:16px;">"#).unwrap();
-    writeln!(out, r#"<h2 data-en="Project Drill-Down" data-zh="项目钻取">Project Drill-Down</h2>"#).unwrap();
+    writeln!(
+        out,
+        r#"<h2 data-en="Project Drill-Down" data-zh="项目钻取">Project Drill-Down</h2>"#
+    )
+    .unwrap();
     writeln!(out, r#"<div class="table-wrap">"#).unwrap();
     writeln!(out, r#"<table id="{}">"#, tbl_id).unwrap();
     writeln!(out, "<thead><tr>\
@@ -1277,29 +1548,42 @@ new Chart(document.getElementById('{chart_id}'), {{
     writeln!(out, "<tbody>").unwrap();
 
     // Group sessions by project_display_name
-    let mut sessions_by_project: std::collections::HashMap<String, Vec<&crate::analysis::SessionSummary>> = std::collections::HashMap::new();
+    let mut sessions_by_project: std::collections::HashMap<
+        String,
+        Vec<&crate::analysis::SessionSummary>,
+    > = std::collections::HashMap::new();
     for s in sessions {
-        sessions_by_project.entry(s.project_display_name.clone()).or_default().push(s);
+        sessions_by_project
+            .entry(s.project_display_name.clone())
+            .or_default()
+            .push(s);
     }
 
     for (i, proj) in projects.projects.iter().enumerate() {
         let cache_hit = if proj.tokens.context_tokens() > 0 {
             proj.tokens.cache_read_tokens as f64 / proj.tokens.context_tokens() as f64 * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let pid = format!("{}-p{}", pfx, i);
 
         // Level 1: Project row (expandable)
         let hit_bar = html_progress(cache_hit);
         let turns_display = if proj.agent_turns > 0 {
-            format!("{} <span class=\"agent-badge\">+{} agent</span>",
-                format_number(proj.total_turns as u64), proj.agent_turns)
+            format!(
+                "{} <span class=\"agent-badge\">+{} agent</span>",
+                format_number(proj.total_turns as u64),
+                proj.agent_turns
+            )
         } else {
             format_number(proj.total_turns as u64)
         };
         writeln!(out, r#"<tr class="project-row expandable">"#).unwrap();
         writeln!(out, r#"<td class="text-left"><button class="expand-btn" onclick="toggleProject(this,'{pid}')">{arrow}</button></td>"#,
             pid = pid, arrow = "\u{25b6}").unwrap();
-        writeln!(out, "\
+        writeln!(
+            out,
+            "\
             <td class=\"text-left\"><strong>{name}</strong></td>\
             <td data-value=\"{sess}\">{sess_fmt}</td>\
             <td class=\"turn-count-cell\" data-value=\"{turns}\">{turns_display}</td>\
@@ -1308,22 +1592,38 @@ new Chart(document.getElementById('{chart_id}'), {{
             <td class=\"text-left\"></td>\
             <td data-value=\"{cost:.4}\">{cost_fmt}</td>",
             name = escape_html(&proj.display_name),
-            sess = proj.session_count, sess_fmt = format_number(proj.session_count as u64),
-            turns = proj.total_turns, turns_display = turns_display,
-            out = proj.tokens.output_tokens, out_fmt = format_compact(proj.tokens.output_tokens),
-            hit = cache_hit, hit_bar = hit_bar,
-            cost = proj.cost, cost_fmt = format_cost(proj.cost),
-        ).unwrap();
+            sess = proj.session_count,
+            sess_fmt = format_number(proj.session_count as u64),
+            turns = proj.total_turns,
+            turns_display = turns_display,
+            out = proj.tokens.output_tokens,
+            out_fmt = format_compact(proj.tokens.output_tokens),
+            hit = cache_hit,
+            hit_bar = hit_bar,
+            cost = proj.cost,
+            cost_fmt = format_cost(proj.cost),
+        )
+        .unwrap();
         writeln!(out, "</tr>").unwrap();
 
         // Level 2: Session rows (hidden by default, belong to this project)
         if let Some(proj_sessions) = sessions_by_project.get(&proj.display_name) {
             let mut sorted = proj_sessions.clone();
-            sorted.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+            sorted.sort_by(|a, b| {
+                b.cost
+                    .partial_cmp(&a.cost)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             for s in sorted.iter().filter(|s| s.turn_count > 0) {
-                let utc_iso = s.first_timestamp.map(|t| t.to_rfc3339()).unwrap_or_default();
-                let date_fallback = s.first_timestamp.map(|t| t.format("%m-%d %H:%M").to_string()).unwrap_or_default();
+                let utc_iso = s
+                    .first_timestamp
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default();
+                let date_fallback = s
+                    .first_timestamp
+                    .map(|t| t.format("%m-%d %H:%M").to_string())
+                    .unwrap_or_default();
                 let s_hit = html_progress(s.cache_hit_rate);
 
                 // Session summary row
@@ -1339,8 +1639,11 @@ new Chart(document.getElementById('{chart_id}'), {{
 
                 // Turns with agent badge
                 let s_turns_display = if s.agent_turn_count > 0 {
-                    format!("{} <span class=\"agent-badge\">+{} agent</span>",
-                        format_number(s.turn_count as u64), s.agent_turn_count)
+                    format!(
+                        "{} <span class=\"agent-badge\">+{} agent</span>",
+                        format_number(s.turn_count as u64),
+                        s.agent_turn_count
+                    )
                 } else {
                     format_number(s.turn_count as u64)
                 };
@@ -1378,7 +1681,11 @@ new Chart(document.getElementById('{chart_id}'), {{
                 if let Some(ref details) = s.turn_details {
                     writeln!(out, r#"<tr class="session-detail project-sessions-{pid}" style="display:none"><td colspan="8"><div class="detail-content">"#,
                         pid = pid).unwrap();
-                    render_turn_detail_table(out, details, &format!("{}-detail-proj-{}", pfx, escape_html(&s.session_id)));
+                    render_turn_detail_table(
+                        out,
+                        details,
+                        &format!("{}-detail-proj-{}", pfx, escape_html(&s.session_id)),
+                    );
                     writeln!(out, "</div></td></tr>").unwrap();
                 }
             }
@@ -1390,7 +1697,11 @@ new Chart(document.getElementById('{chart_id}'), {{
 
 // ─── Turn Detail Sub-table ───────────────────────────────────────────────────
 
-fn render_turn_detail_table(out: &mut String, turns: &[crate::analysis::TurnDetail], table_id: &str) {
+fn render_turn_detail_table(
+    out: &mut String,
+    turns: &[crate::analysis::TurnDetail],
+    table_id: &str,
+) {
     render_turn_table_impl(out, turns, table_id);
 }
 
@@ -1409,9 +1720,17 @@ fn write_kpi_i18n(out: &mut String, value: &str, en: &str, zh: &str) {
 
 /// Render a progress bar inline for table cells.
 fn html_progress(pct: f64) -> String {
-    let bar_color = if pct >= 90.0 { "#22c55e" } else if pct >= 70.0 { "#f59e0b" } else { "#ef4444" };
-    format!(r#"<div class="progress-bar"><div class="progress-fill" style="width:{:.1}%;background:{};"></div></div><span class="progress-text">{:.1}%</span>"#,
-        pct, bar_color, pct)
+    let bar_color = if pct >= 90.0 {
+        "#22c55e"
+    } else if pct >= 70.0 {
+        "#f59e0b"
+    } else {
+        "#ef4444"
+    };
+    format!(
+        r#"<div class="progress-bar"><div class="progress-fill" style="width:{:.1}%;background:{};"></div></div><span class="progress-text">{:.1}%</span>"#,
+        pct, bar_color, pct
+    )
 }
 
 // ─── 2. Session Report ───────────────────────────────────────────────────────
@@ -1442,8 +1761,13 @@ pub fn render_session_html(result: &SessionResult) -> String {
     writeln!(out, r#"<div class="header-row">"#).unwrap();
     writeln!(out, "<h1>Session Analysis</h1>").unwrap();
     writeln!(out, r#"<button class="theme-btn" onclick="toggleTheme()" style="margin-left:auto;">&#x2600;&#xFE0F;</button>"#).unwrap();
-    writeln!(out, r#"<span class="subtitle">{} &middot; {}</span>"#,
-        escape_html(&result.session_id), escape_html(&result.project)).unwrap();
+    writeln!(
+        out,
+        r#"<span class="subtitle">{} &middot; {}</span>"#,
+        escape_html(&result.session_id),
+        escape_html(&result.project)
+    )
+    .unwrap();
     writeln!(out, "</div>").unwrap();
 
     // ── KPI cards ────────────────────────────────────────────────────────────
@@ -1451,15 +1775,29 @@ pub fn render_session_html(result: &SessionResult) -> String {
         let total_ctx = result.total_tokens.context_tokens();
         if total_ctx > 0 {
             result.total_tokens.cache_read_tokens as f64 / total_ctx as f64 * 100.0
-        } else { 0.0 }
+        } else {
+            0.0
+        }
     };
 
     writeln!(out, r#"<div class="kpi-grid">"#).unwrap();
-    write_kpi(&mut out, &format_duration(result.duration_minutes), "Duration");
+    write_kpi(
+        &mut out,
+        &format_duration(result.duration_minutes),
+        "Duration",
+    );
     write_kpi(&mut out, &short_model(&result.model), "Model");
     write_kpi(&mut out, &format_number(result.max_context), "Max Context");
-    write_kpi(&mut out, &format!("{:.1}%", cache_hit_rate), "Cache Hit Rate");
-    write_kpi(&mut out, &format_number(result.compaction_count as u64), "Compactions");
+    write_kpi(
+        &mut out,
+        &format!("{:.1}%", cache_hit_rate),
+        "Cache Hit Rate",
+    );
+    write_kpi(
+        &mut out,
+        &format_number(result.compaction_count as u64),
+        "Compactions",
+    );
     write_kpi(&mut out, &format_cost(result.total_cost), "Total Cost");
     writeln!(out, "</div>").unwrap();
 
@@ -1471,10 +1809,22 @@ pub fn render_session_html(result: &SessionResult) -> String {
         {
             writeln!(out, r#"<div class="card">"#).unwrap();
             writeln!(out, "<h2>Context Growth</h2>").unwrap();
-            writeln!(out, r#"<div class="chart-container"><canvas id="contextChart"></canvas></div>"#).unwrap();
+            writeln!(
+                out,
+                r#"<div class="chart-container"><canvas id="contextChart"></canvas></div>"#
+            )
+            .unwrap();
 
-            let turn_nums: Vec<String> = result.turn_details.iter().map(|t| t.turn_number.to_string()).collect();
-            let ctx_sizes: Vec<String> = result.turn_details.iter().map(|t| t.context_size.to_string()).collect();
+            let turn_nums: Vec<String> = result
+                .turn_details
+                .iter()
+                .map(|t| t.turn_number.to_string())
+                .collect();
+            let ctx_sizes: Vec<String> = result
+                .turn_details
+                .iter()
+                .map(|t| t.context_size.to_string())
+                .collect();
             let pr = if result.turn_details.len() > 50 { 0 } else { 3 };
 
             writeln!(out, r#"<script>
@@ -1511,10 +1861,22 @@ new Chart(document.getElementById('contextChart'), {{
         {
             writeln!(out, r#"<div class="card">"#).unwrap();
             writeln!(out, "<h2>Cache Hit Rate</h2>").unwrap();
-            writeln!(out, r#"<div class="chart-container"><canvas id="cacheChart"></canvas></div>"#).unwrap();
+            writeln!(
+                out,
+                r#"<div class="chart-container"><canvas id="cacheChart"></canvas></div>"#
+            )
+            .unwrap();
 
-            let turn_nums: Vec<String> = result.turn_details.iter().map(|t| t.turn_number.to_string()).collect();
-            let cache_rates: Vec<String> = result.turn_details.iter().map(|t| format!("{:.2}", t.cache_hit_rate)).collect();
+            let turn_nums: Vec<String> = result
+                .turn_details
+                .iter()
+                .map(|t| t.turn_number.to_string())
+                .collect();
+            let cache_rates: Vec<String> = result
+                .turn_details
+                .iter()
+                .map(|t| format!("{:.2}", t.cache_hit_rate))
+                .collect();
             let pr = if result.turn_details.len() > 50 { 0 } else { 3 };
 
             writeln!(out, r#"<script>
@@ -1559,11 +1921,18 @@ new Chart(document.getElementById('cacheChart'), {{
         let mut reasons: Vec<(&String, &usize)> = result.stop_reason_counts.iter().collect();
         reasons.sort_by(|a, b| b.1.cmp(a.1));
 
-        let labels: Vec<String> = reasons.iter().map(|(r, _)| format!("\"{}\"", escape_html(r))).collect();
+        let labels: Vec<String> = reasons
+            .iter()
+            .map(|(r, _)| format!("\"{}\"", escape_html(r)))
+            .collect();
         let data: Vec<String> = reasons.iter().map(|(_, c)| c.to_string()).collect();
-        let colors_list: Vec<String> = (0..reasons.len()).map(|i| format!("\"{}\"", color(i))).collect();
+        let colors_list: Vec<String> = (0..reasons.len())
+            .map(|i| format!("\"{}\"", color(i)))
+            .collect();
 
-        writeln!(out, r#"<script>
+        writeln!(
+            out,
+            r#"<script>
 new Chart(document.getElementById('stopReasonChart'), {{
   type: 'doughnut',
   data: {{
@@ -1576,7 +1945,11 @@ new Chart(document.getElementById('stopReasonChart'), {{
   }}
 }});
 </script>"#,
-            labels = labels.join(","), data = data.join(","), colors = colors_list.join(",")).unwrap();
+            labels = labels.join(","),
+            data = data.join(","),
+            colors = colors_list.join(",")
+        )
+        .unwrap();
         writeln!(out, "</div>").unwrap();
     }
 
@@ -1622,7 +1995,13 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
             ""
         };
         let stop = t.stop_reason.as_deref().unwrap_or("-");
-        let compact_mark = if t.is_compaction { "\u{26a1}" } else if t.is_agent { "\u{1f916}" } else { "" };
+        let compact_mark = if t.is_compaction {
+            "\u{26a1}"
+        } else if t.is_agent {
+            "\u{1f916}"
+        } else {
+            ""
+        };
 
         let user_text = t.user_text.as_deref().unwrap_or("");
         let user_preview = if user_text.len() > 80 {
@@ -1641,9 +2020,11 @@ fn render_turn_table_impl(out: &mut String, turns: &[crate::analysis::TurnDetail
         let tools_html: String = if t.tool_names.is_empty() {
             String::new()
         } else {
-            t.tool_names.iter().map(|name| {
-                format!("<span class=\"tool-tag\">{}</span>", escape_html(name))
-            }).collect::<Vec<_>>().join("")
+            t.tool_names
+                .iter()
+                .map(|name| format!("<span class=\"tool-tag\">{}</span>", escape_html(name)))
+                .collect::<Vec<_>>()
+                .join("")
         };
         let hit_bar = html_progress(t.cache_hit_rate);
 

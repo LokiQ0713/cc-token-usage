@@ -49,7 +49,9 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     let mut out = String::new();
     let _ = calc;
 
-    let range = result.quality.time_range
+    let range = result
+        .quality
+        .time_range
         .map(|(s, e)| {
             let ls = s.with_timezone(&chrono::Local);
             let le = e.with_timezone(&chrono::Local);
@@ -61,40 +63,78 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     writeln!(out, "{}", range).unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "  {} conversations, {} rounds of back-and-forth",
+    writeln!(
+        out,
+        "  {} conversations, {} rounds of back-and-forth",
         format_number(result.total_sessions as u64),
-        format_number(result.total_turns as u64)).unwrap();
+        format_number(result.total_turns as u64)
+    )
+    .unwrap();
     if result.total_agent_turns > 0 {
-        writeln!(out, "  ({} agent turns, {:.0}% of total)",
+        writeln!(
+            out,
+            "  ({} agent turns, {:.0}% of total)",
             format_number(result.total_agent_turns as u64),
-            result.total_agent_turns as f64 / result.total_turns.max(1) as f64 * 100.0).unwrap();
+            result.total_agent_turns as f64 / result.total_turns.max(1) as f64 * 100.0
+        )
+        .unwrap();
     }
     writeln!(out).unwrap();
 
-    writeln!(out, "  Claude read  {} tokens",
-        format_number(result.total_context_tokens)).unwrap();
-    writeln!(out, "  Claude wrote {} tokens",
-        format_number(result.total_output_tokens)).unwrap();
+    writeln!(
+        out,
+        "  Claude read  {} tokens",
+        format_number(result.total_context_tokens)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  Claude wrote {} tokens",
+        format_number(result.total_output_tokens)
+    )
+    .unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "  Cache saved you {} ({:.0}% of reads were free)",
+    writeln!(
+        out,
+        "  Cache saved you {} ({:.0}% of reads were free)",
         format_cost(result.cache_savings.total_saved),
-        result.cache_savings.savings_pct).unwrap();
-    writeln!(out, "  All that would cost {} at API rates",
-        format_cost(result.total_cost)).unwrap();
+        result.cache_savings.savings_pct
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  All that would cost {} at API rates",
+        format_cost(result.total_cost)
+    )
+    .unwrap();
 
     // Subscription value
     if let Some(ref sub) = result.subscription_value {
-        writeln!(out, "  Subscription: {}/mo -> {:.1}x value multiplier",
-            format_cost(sub.monthly_price), sub.value_multiplier).unwrap();
+        writeln!(
+            out,
+            "  Subscription: {}/mo -> {:.1}x value multiplier",
+            format_cost(sub.monthly_price),
+            sub.value_multiplier
+        )
+        .unwrap();
     }
 
     // Model breakdown
     writeln!(out).unwrap();
-    writeln!(out, "  Model                      Wrote        Rounds     Cost").unwrap();
-    writeln!(out, "  ---------------------------------------------------------").unwrap();
+    writeln!(
+        out,
+        "  Model                      Wrote        Rounds     Cost"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  ---------------------------------------------------------"
+    )
+    .unwrap();
 
-    let mut models: Vec<(&String, &crate::analysis::AggregatedTokens)> = result.tokens_by_model.iter().collect();
+    let mut models: Vec<(&String, &crate::analysis::AggregatedTokens)> =
+        result.tokens_by_model.iter().collect();
     models.sort_by(|a, b| {
         let ca = result.cost_by_model.get(a.0).unwrap_or(&0.0);
         let cb = result.cost_by_model.get(b.0).unwrap_or(&0.0);
@@ -104,11 +144,15 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     for (model, tokens) in &models {
         let cost = result.cost_by_model.get(*model).unwrap_or(&0.0);
         let short = short_model(model);
-        writeln!(out, "  {:<25} {:>10} {:>9} {:>9}",
+        writeln!(
+            out,
+            "  {:<25} {:>10} {:>9} {:>9}",
             short,
             format_number(tokens.output_tokens),
             format_number(tokens.turns as u64),
-            format_cost(*cost)).unwrap();
+            format_cost(*cost)
+        )
+        .unwrap();
     }
 
     // Cost by category
@@ -116,40 +160,93 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
     let cat = &result.cost_by_category;
     let total = result.total_cost.max(0.001);
     writeln!(out, "  Cost Breakdown").unwrap();
-    writeln!(out, "    Output:      {:>9}  ({:.0}%)", format_cost(cat.output_cost), cat.output_cost / total * 100.0).unwrap();
-    writeln!(out, "    Cache Write: {:>9}  ({:.0}%)", format_cost(cat.cache_write_5m_cost + cat.cache_write_1h_cost),
-        (cat.cache_write_5m_cost + cat.cache_write_1h_cost) / total * 100.0).unwrap();
-    writeln!(out, "    Input:       {:>9}  ({:.0}%)", format_cost(cat.input_cost), cat.input_cost / total * 100.0).unwrap();
-    writeln!(out, "    Cache Read:  {:>9}  ({:.0}%)", format_cost(cat.cache_read_cost), cat.cache_read_cost / total * 100.0).unwrap();
+    writeln!(
+        out,
+        "    Output:      {:>9}  ({:.0}%)",
+        format_cost(cat.output_cost),
+        cat.output_cost / total * 100.0
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    Cache Write: {:>9}  ({:.0}%)",
+        format_cost(cat.cache_write_5m_cost + cat.cache_write_1h_cost),
+        (cat.cache_write_5m_cost + cat.cache_write_1h_cost) / total * 100.0
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    Input:       {:>9}  ({:.0}%)",
+        format_cost(cat.input_cost),
+        cat.input_cost / total * 100.0
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    Cache Read:  {:>9}  ({:.0}%)",
+        format_cost(cat.cache_read_cost),
+        cat.cache_read_cost / total * 100.0
+    )
+    .unwrap();
 
     // Efficiency metrics
     writeln!(out).unwrap();
     writeln!(out, "  Efficiency").unwrap();
-    writeln!(out, "    Output ratio:       {:.2}% ({} output / {} input)",
+    writeln!(
+        out,
+        "    Output ratio:       {:.2}% ({} output / {} input)",
         result.output_ratio,
         format_number(result.total_output_tokens),
-        format_number(result.total_context_tokens)).unwrap();
-    writeln!(out, "    Cost per turn:      ${:.3}/turn", result.cost_per_turn).unwrap();
-    writeln!(out, "    Output per turn:    {} tokens/turn avg",
-        format_number(result.tokens_per_output_turn)).unwrap();
+        format_number(result.total_context_tokens)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    Cost per turn:      ${:.3}/turn",
+        result.cost_per_turn
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    Output per turn:    {} tokens/turn avg",
+        format_number(result.tokens_per_output_turn)
+    )
+    .unwrap();
 
     // Tool usage top 10
     if !result.tool_counts.is_empty() {
         writeln!(out).unwrap();
         writeln!(out, "  Top Tools").unwrap();
         for (name, count) in result.tool_counts.iter().take(10) {
-            let bar_len = (*count as f64 / result.tool_counts[0].1.max(1) as f64 * 20.0).round() as usize;
-            writeln!(out, "    {:<18} {:>6}  {}", name, format_number(*count as u64), "█".repeat(bar_len)).unwrap();
+            let bar_len =
+                (*count as f64 / result.tool_counts[0].1.max(1) as f64 * 20.0).round() as usize;
+            writeln!(
+                out,
+                "    {:<18} {:>6}  {}",
+                name,
+                format_number(*count as u64),
+                "█".repeat(bar_len)
+            )
+            .unwrap();
         }
     }
 
     // Top 5 projects
     if !result.session_summaries.is_empty() {
         writeln!(out).unwrap();
-        writeln!(out, "  Top Projects                              Sessions   Turns    Cost").unwrap();
-        writeln!(out, "  -------------------------------------------------------------------").unwrap();
+        writeln!(
+            out,
+            "  Top Projects                              Sessions   Turns    Cost"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "  -------------------------------------------------------------------"
+        )
+        .unwrap();
 
-        let mut project_map: std::collections::HashMap<&str, (usize, usize, f64)> = std::collections::HashMap::new();
+        let mut project_map: std::collections::HashMap<&str, (usize, usize, f64)> =
+            std::collections::HashMap::new();
         for s in &result.session_summaries {
             let e = project_map.entry(&s.project_display_name).or_default();
             e.0 += 1;
@@ -157,11 +254,22 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
             e.2 += s.cost;
         }
         let mut projects: Vec<_> = project_map.into_iter().collect();
-        projects.sort_by(|a, b| b.1.2.partial_cmp(&a.1.2).unwrap_or(std::cmp::Ordering::Equal));
+        projects.sort_by(|a, b| {
+            b.1 .2
+                .partial_cmp(&a.1 .2)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         for (name, (sessions, turns, cost)) in projects.iter().take(5) {
-            writeln!(out, "  {:<40} {:>5} {:>7} {:>9}",
-                name, sessions, turns, format_cost(*cost)).unwrap();
+            writeln!(
+                out,
+                "  {:<40} {:>5} {:>7} {:>9}",
+                name,
+                sessions,
+                turns,
+                format_cost(*cost)
+            )
+            .unwrap();
         }
     }
 
@@ -173,16 +281,25 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         if let Some((start, end)) = result.quality.time_range {
             let days = (end - start).num_days().max(1) as f64;
             writeln!(out).unwrap();
-            writeln!(out, "  Daily avg: {} / day  ({} days)",
-                format_cost(result.total_cost / days), days as u64).unwrap();
+            writeln!(
+                out,
+                "  Daily avg: {} / day  ({} days)",
+                format_cost(result.total_cost / days),
+                days as u64
+            )
+            .unwrap();
         }
 
         // Compaction stats
         let total_compactions: usize = summaries.iter().map(|s| s.compaction_count).sum();
         let sessions_with_compaction = summaries.iter().filter(|s| s.compaction_count > 0).count();
         if total_compactions > 0 {
-            writeln!(out, "  Compactions: {} total across {} sessions",
-                total_compactions, sessions_with_compaction).unwrap();
+            writeln!(
+                out,
+                "  Compactions: {} total across {} sessions",
+                total_compactions, sessions_with_compaction
+            )
+            .unwrap();
         }
 
         // Max context
@@ -192,7 +309,8 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         }
 
         // Average session duration
-        let durations: Vec<f64> = summaries.iter()
+        let durations: Vec<f64> = summaries
+            .iter()
             .map(|s| s.duration_minutes)
             .filter(|d| *d > 0.0)
             .collect();
@@ -203,27 +321,43 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
 
         // Top 3 most expensive sessions
         let mut by_cost: Vec<&crate::analysis::SessionSummary> = summaries.iter().collect();
-        by_cost.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+        by_cost.sort_by(|a, b| {
+            b.cost
+                .partial_cmp(&a.cost)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         writeln!(out).unwrap();
         writeln!(out, "  Most Expensive Sessions").unwrap();
         for s in by_cost.iter().take(3) {
             let dur = format_duration(s.duration_minutes);
-            writeln!(out, "    {} {} {:>5} turns  {}  {}",
+            writeln!(
+                out,
+                "    {} {} {:>5} turns  {}  {}",
                 &s.session_id[..s.session_id.len().min(8)],
                 truncate_str(&s.project_display_name, 25),
                 s.turn_count,
                 dur,
                 format_cost(s.cost),
-            ).unwrap();
+            )
+            .unwrap();
         }
     }
 
     // Data quality summary
     writeln!(out).unwrap();
-    writeln!(out, "  Data: {} session files, {} agent files",
-        result.quality.total_session_files, result.quality.total_agent_files).unwrap();
+    writeln!(
+        out,
+        "  Data: {} session files, {} agent files",
+        result.quality.total_session_files, result.quality.total_agent_files
+    )
+    .unwrap();
     if result.quality.orphan_agents > 0 {
-        writeln!(out, "  ({} orphan agents without parent session)", result.quality.orphan_agents).unwrap();
+        writeln!(
+            out,
+            "  ({} orphan agents without parent session)",
+            result.quality.orphan_agents
+        )
+        .unwrap();
     }
 
     writeln!(out).unwrap();
@@ -255,9 +389,15 @@ pub fn render_projects(result: &ProjectResult) -> String {
     writeln!(out, "  ─────────────────────────────────────────────────────────────────────────────────────────").unwrap();
 
     for (i, proj) in result.projects.iter().enumerate() {
-        let avg_cost = if proj.session_count > 0 { proj.cost / proj.session_count as f64 } else { 0.0 };
+        let avg_cost = if proj.session_count > 0 {
+            proj.cost / proj.session_count as f64
+        } else {
+            0.0
+        };
         let model_short = short_model(&proj.primary_model);
-        writeln!(out, "  {:>2}. {:<30} {:>5}  {:>6}  {:>5}  {:>6}  {:<12}  {:>9}",
+        writeln!(
+            out,
+            "  {:>2}. {:<30} {:>5}  {:>6}  {:>5}  {:>6}  {:<12}  {:>9}",
             i + 1,
             truncate_str(&proj.display_name, 30),
             proj.session_count,
@@ -266,18 +406,28 @@ pub fn render_projects(result: &ProjectResult) -> String {
             format_cost(avg_cost),
             truncate_str(&model_short, 12),
             format_cost(proj.cost),
-        ).unwrap();
+        )
+        .unwrap();
         total_cost += proj.cost;
     }
 
     writeln!(out).unwrap();
-    writeln!(out, "  Total: {} projects, {}", result.projects.len(), format_cost(total_cost)).unwrap();
+    writeln!(
+        out,
+        "  Total: {} projects, {}",
+        result.projects.len(),
+        format_cost(total_cost)
+    )
+    .unwrap();
     out
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() }
-    else { format!("{}...", &s[..s.floor_char_boundary(max.saturating_sub(3))]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..s.floor_char_boundary(max.saturating_sub(3))])
+    }
 }
 
 // ─── 3. Session ─────────────────────────────────────────────────────────────
@@ -287,15 +437,38 @@ pub fn render_session(result: &SessionResult) -> String {
 
     let main_turns = result.turn_details.iter().filter(|t| !t.is_agent).count();
 
-    writeln!(out, "Session {}  {}", &result.session_id[..result.session_id.len().min(8)], result.project).unwrap();
+    writeln!(
+        out,
+        "Session {}  {}",
+        &result.session_id[..result.session_id.len().min(8)],
+        result.project
+    )
+    .unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "  Turns:     {:>6} (+ {} agent)   Duration: {}",
-        main_turns, result.agent_summary.total_agent_turns, format_duration(result.duration_minutes)).unwrap();
-    writeln!(out, "  Model:     {:<20}  MaxCtx:   {}",
-        result.model, format_number(result.max_context)).unwrap();
-    writeln!(out, "  CacheHit:  {:>5.1}%                Compacts: {}",
-        result.total_tokens.cache_read_tokens as f64 / result.total_tokens.context_tokens().max(1) as f64 * 100.0,
-        result.compaction_count).unwrap();
+    writeln!(
+        out,
+        "  Turns:     {:>6} (+ {} agent)   Duration: {}",
+        main_turns,
+        result.agent_summary.total_agent_turns,
+        format_duration(result.duration_minutes)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  Model:     {:<20}  MaxCtx:   {}",
+        result.model,
+        format_number(result.max_context)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  CacheHit:  {:>5.1}%                Compacts: {}",
+        result.total_tokens.cache_read_tokens as f64
+            / result.total_tokens.context_tokens().max(1) as f64
+            * 100.0,
+        result.compaction_count
+    )
+    .unwrap();
     writeln!(out, "  Cost:      {}", format_cost(result.total_cost)).unwrap();
 
     // ── Metadata section ──
@@ -320,7 +493,8 @@ pub fn render_session(result: &SessionResult) -> String {
         if !result.git_branches.is_empty() {
             let mut branches: Vec<_> = result.git_branches.iter().collect();
             branches.sort_by(|a, b| b.1.cmp(a.1));
-            let parts: Vec<String> = branches.iter()
+            let parts: Vec<String> = branches
+                .iter()
                 .map(|(name, count)| format!("{} ({} turns)", name, count))
                 .collect();
             writeln!(out, "  Branch:       {}", parts.join(", ")).unwrap();
@@ -345,11 +519,20 @@ pub fn render_session(result: &SessionResult) -> String {
         writeln!(out, "  ── Performance ───────────────────────────────").unwrap();
         if result.user_prompt_count > 0 {
             let total_turns = result.turn_details.len();
-            writeln!(out, "  Autonomy:     1:{:.1} ({} turns / {} user prompts)",
-                result.autonomy_ratio, total_turns, result.user_prompt_count).unwrap();
+            writeln!(
+                out,
+                "  Autonomy:     1:{:.1} ({} turns / {} user prompts)",
+                result.autonomy_ratio, total_turns, result.user_prompt_count
+            )
+            .unwrap();
         }
         if result.truncated_count > 0 {
-            writeln!(out, "  Truncated:    {} turns hit max_tokens", result.truncated_count).unwrap();
+            writeln!(
+                out,
+                "  Truncated:    {} turns hit max_tokens",
+                result.truncated_count
+            )
+            .unwrap();
         }
         if result.api_error_count > 0 || result.tool_error_count > 0 {
             let mut parts = Vec::new();
@@ -363,15 +546,22 @@ pub fn render_session(result: &SessionResult) -> String {
         }
         if result.speculation_accepts > 0 {
             let saved_secs = result.speculation_time_saved_ms / 1000.0;
-            writeln!(out, "  Speculation:  saved {:.1}s across {} accepts",
-                saved_secs, result.speculation_accepts).unwrap();
+            writeln!(
+                out,
+                "  Speculation:  saved {:.1}s across {} accepts",
+                saved_secs, result.speculation_accepts
+            )
+            .unwrap();
         }
         if !result.service_tiers.is_empty() {
             let total: usize = result.service_tiers.values().sum();
             let mut tiers: Vec<_> = result.service_tiers.iter().collect();
             tiers.sort_by(|a, b| b.1.cmp(a.1));
-            let parts: Vec<String> = tiers.iter()
-                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+            let parts: Vec<String> = tiers
+                .iter()
+                .map(|(name, count)| {
+                    format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0)
+                })
                 .collect();
             writeln!(out, "  Service:      {}", parts.join(", ")).unwrap();
         }
@@ -379,8 +569,11 @@ pub fn render_session(result: &SessionResult) -> String {
             let total: usize = result.speeds.values().sum();
             let mut spds: Vec<_> = result.speeds.iter().collect();
             spds.sort_by(|a, b| b.1.cmp(a.1));
-            let parts: Vec<String> = spds.iter()
-                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+            let parts: Vec<String> = spds
+                .iter()
+                .map(|(name, count)| {
+                    format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0)
+                })
                 .collect();
             writeln!(out, "  Speed:        {}", parts.join(", ")).unwrap();
         }
@@ -388,8 +581,11 @@ pub fn render_session(result: &SessionResult) -> String {
             let total: usize = result.inference_geos.values().sum();
             let mut geos: Vec<_> = result.inference_geos.iter().collect();
             geos.sort_by(|a, b| b.1.cmp(a.1));
-            let parts: Vec<String> = geos.iter()
-                .map(|(name, count)| format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0))
+            let parts: Vec<String> = geos
+                .iter()
+                .map(|(name, count)| {
+                    format!("{} ({:.0}%)", name, **count as f64 / total as f64 * 100.0)
+                })
                 .collect();
             writeln!(out, "  Geo:          {}", parts.join(", ")).unwrap();
         }
@@ -399,32 +595,53 @@ pub fn render_session(result: &SessionResult) -> String {
     if !result.agent_summary.agents.is_empty() {
         writeln!(out).unwrap();
         writeln!(out, "  Agent Breakdown").unwrap();
-        writeln!(out, "  {:<14} {:<40} {:>6} {:>10} {:>9}",
-            "Type", "Description", "Turns", "Output", "Cost").unwrap();
+        writeln!(
+            out,
+            "  {:<14} {:<40} {:>6} {:>10} {:>9}",
+            "Type", "Description", "Turns", "Output", "Cost"
+        )
+        .unwrap();
         writeln!(out, "  {}", "-".repeat(83)).unwrap();
 
         // Main agent line
         let main_turns = result.turn_details.iter().filter(|t| !t.is_agent).count();
-        let main_output: u64 = result.turn_details.iter()
-            .filter(|t| !t.is_agent).map(|t| t.output_tokens).sum();
+        let main_output: u64 = result
+            .turn_details
+            .iter()
+            .filter(|t| !t.is_agent)
+            .map(|t| t.output_tokens)
+            .sum();
         let main_cost = result.total_cost - result.agent_summary.agent_cost;
-        writeln!(out, "  {:<14} {:<40} {:>6} {:>10} {:>9}",
-            "main", "(this conversation)",
-            main_turns, format_number(main_output), format_cost(main_cost)).unwrap();
+        writeln!(
+            out,
+            "  {:<14} {:<40} {:>6} {:>10} {:>9}",
+            "main",
+            "(this conversation)",
+            main_turns,
+            format_number(main_output),
+            format_cost(main_cost)
+        )
+        .unwrap();
 
         for agent in &result.agent_summary.agents {
             let desc = if agent.description.len() > 40 {
-                format!("{}...", &agent.description[..agent.description.floor_char_boundary(37)])
+                format!(
+                    "{}...",
+                    &agent.description[..agent.description.floor_char_boundary(37)]
+                )
             } else {
                 agent.description.clone()
             };
-            writeln!(out, "  {:<14} {:<40} {:>6} {:>10} {:>9}",
+            writeln!(
+                out,
+                "  {:<14} {:<40} {:>6} {:>10} {:>9}",
                 agent.agent_type,
                 desc,
                 agent.turns,
                 format_number(agent.output_tokens),
                 format_cost(agent.cost),
-            ).unwrap();
+            )
+            .unwrap();
         }
     }
 
@@ -433,9 +650,17 @@ pub fn render_session(result: &SessionResult) -> String {
         writeln!(out).unwrap();
         writeln!(out, "  ── Context Collapse ──────────────────────────").unwrap();
 
-        let risk_warning = if result.collapse_max_risk > 0.5 { " \u{26a0}" } else { "" };
-        writeln!(out, "  Collapses:    {} (avg risk: {:.2}, max: {:.2}{})",
-            result.collapse_count, result.collapse_avg_risk, result.collapse_max_risk, risk_warning).unwrap();
+        let risk_warning = if result.collapse_max_risk > 0.5 {
+            " \u{26a0}"
+        } else {
+            ""
+        };
+        writeln!(
+            out,
+            "  Collapses:    {} (avg risk: {:.2}, max: {:.2}{})",
+            result.collapse_count, result.collapse_avg_risk, result.collapse_max_risk, risk_warning
+        )
+        .unwrap();
 
         if !result.collapse_summaries.is_empty() {
             writeln!(out, "  Summaries:").unwrap();
@@ -454,9 +679,15 @@ pub fn render_session(result: &SessionResult) -> String {
         writeln!(out).unwrap();
         writeln!(out, "  ── Code Attribution ──────────────────────────").unwrap();
         writeln!(out, "  Files touched:     {}", attr.file_count).unwrap();
-        writeln!(out, "  Claude wrote:      {} chars", format_number(attr.total_claude_contribution)).unwrap();
+        writeln!(
+            out,
+            "  Claude wrote:      {} chars",
+            format_number(attr.total_claude_contribution)
+        )
+        .unwrap();
         if let Some(prompts) = attr.prompt_count {
-            let escape_str = attr.escape_count
+            let escape_str = attr
+                .escape_count
                 .filter(|&e| e > 0)
                 .map(|e| format!(" ({} escaped)", e))
                 .unwrap_or_default();
@@ -487,31 +718,58 @@ pub fn render_trend(result: &TrendResult) -> String {
 
     for entry in &result.entries {
         // Sparkline bar
-        let bar_len = if max_cost > 0.0 { (entry.cost / max_cost * 16.0).round() as usize } else { 0 };
+        let bar_len = if max_cost > 0.0 {
+            (entry.cost / max_cost * 16.0).round() as usize
+        } else {
+            0
+        };
         let bar = "▇".repeat(bar_len);
 
         // Primary model for this period
-        let top_model = entry.models.iter()
+        let top_model = entry
+            .models
+            .iter()
             .max_by_key(|(_, tokens)| *tokens)
             .map(|(m, _)| short_model(m))
             .unwrap_or_default();
 
         // Cost per turn
-        let cpt = if entry.turn_count > 0 { entry.cost / entry.turn_count as f64 } else { 0.0 };
+        let cpt = if entry.turn_count > 0 {
+            entry.cost / entry.turn_count as f64
+        } else {
+            0.0
+        };
 
-        writeln!(out, "  {:<10}  {:>4} sess  {:>6} turns  {:>9}  ${:.3}/t  {:<12} {}",
-            entry.label, entry.session_count, entry.turn_count,
-            format_cost(entry.cost), cpt,
+        writeln!(
+            out,
+            "  {:<10}  {:>4} sess  {:>6} turns  {:>9}  ${:.3}/t  {:<12} {}",
+            entry.label,
+            entry.session_count,
+            entry.turn_count,
+            format_cost(entry.cost),
+            cpt,
             truncate_str(&top_model, 12),
             bar,
-        ).unwrap();
+        )
+        .unwrap();
         total_cost += entry.cost;
         total_turns += entry.turn_count;
     }
 
     writeln!(out).unwrap();
-    let avg_cpt = if total_turns > 0 { total_cost / total_turns as f64 } else { 0.0 };
-    writeln!(out, "  Total: {}  ({} turns, avg ${:.3}/turn)", format_cost(total_cost), format_number(total_turns as u64), avg_cpt).unwrap();
+    let avg_cpt = if total_turns > 0 {
+        total_cost / total_turns as f64
+    } else {
+        0.0
+    };
+    writeln!(
+        out,
+        "  Total: {}  ({} turns, avg ${:.3}/turn)",
+        format_cost(total_cost),
+        format_number(total_turns as u64),
+        avg_cpt
+    )
+    .unwrap();
     out
 }
 
@@ -525,12 +783,19 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
     // Structure checks
     writeln!(out, "Structure Checks:").unwrap();
     for check in &report.structure_checks {
-        if failures_only && check.passed { continue; }
+        if failures_only && check.passed {
+            continue;
+        }
         let status = if check.passed { "OK" } else { "FAIL" };
         if check.passed {
             writeln!(out, "  [{:>4}] {}: {}", status, check.name, check.actual).unwrap();
         } else {
-            writeln!(out, "  [{:>4}] {}: expected={}, actual={}", status, check.name, check.expected, check.actual).unwrap();
+            writeln!(
+                out,
+                "  [{:>4}] {}: expected={}, actual={}",
+                status, check.name, check.expected, check.actual
+            )
+            .unwrap();
         }
     }
     writeln!(out).unwrap();
@@ -538,10 +803,16 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
     // Per-session results
     let mut fail_sessions = Vec::new();
     for sv in &report.session_results {
-        let all_checks: Vec<_> = sv.token_checks.iter().chain(sv.agent_checks.iter()).collect();
+        let all_checks: Vec<_> = sv
+            .token_checks
+            .iter()
+            .chain(sv.agent_checks.iter())
+            .collect();
         let has_failures = all_checks.iter().any(|c| !c.passed);
 
-        if failures_only && !has_failures { continue; }
+        if failures_only && !has_failures {
+            continue;
+        }
 
         if has_failures {
             fail_sessions.push(sv);
@@ -549,7 +820,12 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
     }
 
     if !failures_only {
-        writeln!(out, "Session Validation: {} sessions checked", report.session_results.len()).unwrap();
+        writeln!(
+            out,
+            "Session Validation: {} sessions checked",
+            report.session_results.len()
+        )
+        .unwrap();
         let sessions_ok = report.summary.sessions_passed;
         let sessions_fail = report.summary.sessions_validated - sessions_ok;
         writeln!(out, "  {} PASS, {} FAIL", sessions_ok, sessions_fail).unwrap();
@@ -562,10 +838,21 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
         writeln!(out).unwrap();
     }
     for sv in &fail_sessions {
-        writeln!(out, "  Session {}  {}", &sv.session_id[..8.min(sv.session_id.len())], sv.project).unwrap();
+        writeln!(
+            out,
+            "  Session {}  {}",
+            &sv.session_id[..8.min(sv.session_id.len())],
+            sv.project
+        )
+        .unwrap();
         for check in sv.token_checks.iter().chain(sv.agent_checks.iter()) {
             if !check.passed {
-                writeln!(out, "    [FAIL] {}: expected={}, actual={}", check.name, check.expected, check.actual).unwrap();
+                writeln!(
+                    out,
+                    "    [FAIL] {}: expected={}, actual={}",
+                    check.name, check.expected, check.actual
+                )
+                .unwrap();
             }
         }
         writeln!(out).unwrap();
@@ -573,13 +860,20 @@ pub fn render_validation(report: &ValidationReport, failures_only: bool) -> Stri
 
     // Summary
     writeln!(out, "{}", "━".repeat(60)).unwrap();
-    let result_text = if report.summary.failed == 0 { "PASS" } else { "FAIL" };
-    writeln!(out, "Result: {} ({}/{} checks passed, {} sessions validated)",
+    let result_text = if report.summary.failed == 0 {
+        "PASS"
+    } else {
+        "FAIL"
+    };
+    writeln!(
+        out,
+        "Result: {} ({}/{} checks passed, {} sessions validated)",
         result_text,
         report.summary.passed,
         report.summary.total_checks,
         report.summary.sessions_validated,
-    ).unwrap();
+    )
+    .unwrap();
 
     out
 }
@@ -594,11 +888,14 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
     writeln!(out, "\u{2554}{}\u{2557}", "\u{2550}".repeat(w)).unwrap();
     let title = format!("Your {} Claude Code Wrapped", result.year);
     let pad = (w.saturating_sub(title.len())) / 2;
-    writeln!(out, "\u{2551}{}{}{}\u{2551}",
+    writeln!(
+        out,
+        "\u{2551}{}{}{}\u{2551}",
         " ".repeat(pad),
         title,
         " ".repeat(w.saturating_sub(pad + title.len()))
-    ).unwrap();
+    )
+    .unwrap();
     writeln!(out, "\u{2560}{}\u{2563}", "\u{2550}".repeat(w)).unwrap();
     writeln!(out).unwrap();
 
@@ -608,43 +905,81 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
     } else {
         0.0
     };
-    writeln!(out, "  Active Days:      {} / {} ({:.0}%)",
-        result.active_days, result.total_days, active_pct).unwrap();
+    writeln!(
+        out,
+        "  Active Days:      {} / {} ({:.0}%)",
+        result.active_days, result.total_days, active_pct
+    )
+    .unwrap();
     writeln!(out, "  Longest Streak:   {} days", result.longest_streak).unwrap();
     writeln!(out, "  Ghost Days:       {}", result.ghost_days).unwrap();
     writeln!(out).unwrap();
 
     // Volume
-    writeln!(out, "  {} sessions, {} turns",
+    writeln!(
+        out,
+        "  {} sessions, {} turns",
         format_number(result.total_sessions as u64),
-        format_number(result.total_turns as u64)).unwrap();
+        format_number(result.total_turns as u64)
+    )
+    .unwrap();
     if result.total_agent_turns > 0 {
         let agent_pct = result.total_agent_turns as f64 / result.total_turns.max(1) as f64 * 100.0;
-        writeln!(out, "  {} agent turns ({:.0}% autonomous)",
-            format_number(result.total_agent_turns as u64), agent_pct).unwrap();
+        writeln!(
+            out,
+            "  {} agent turns ({:.0}% autonomous)",
+            format_number(result.total_agent_turns as u64),
+            agent_pct
+        )
+        .unwrap();
     }
     writeln!(out, "  {} API equivalent", format_cost(result.total_cost)).unwrap();
     writeln!(out).unwrap();
 
     // Archetype
-    writeln!(out, "  Developer Archetype: \"{}\"", result.archetype.label()).unwrap();
+    writeln!(
+        out,
+        "  Developer Archetype: \"{}\"",
+        result.archetype.label()
+    )
+    .unwrap();
     writeln!(out, "  {}", result.archetype.description()).unwrap();
     writeln!(out).unwrap();
 
     // Peak patterns
-    writeln!(out, "  Peak Hour:    {:02}:00-{:02}:00",
-        result.peak_hour, (result.peak_hour + 1) % 24).unwrap();
+    writeln!(
+        out,
+        "  Peak Hour:    {:02}:00-{:02}:00",
+        result.peak_hour,
+        (result.peak_hour + 1) % 24
+    )
+    .unwrap();
     writeln!(out, "  Peak Day:     {}", result.peak_weekday).unwrap();
     writeln!(out).unwrap();
 
     // Efficiency
     if result.autonomy_ratio > 0.0 {
-        writeln!(out, "  Autonomy:     1:{:.1} (turns per user prompt)", result.autonomy_ratio).unwrap();
+        writeln!(
+            out,
+            "  Autonomy:     1:{:.1} (turns per user prompt)",
+            result.autonomy_ratio
+        )
+        .unwrap();
     }
     if result.avg_session_duration_min > 0.0 {
-        writeln!(out, "  Avg Session:  {}", format_duration(result.avg_session_duration_min)).unwrap();
+        writeln!(
+            out,
+            "  Avg Session:  {}",
+            format_duration(result.avg_session_duration_min)
+        )
+        .unwrap();
     }
-    writeln!(out, "  Avg Cost:     {}/session", format_cost(result.avg_cost_per_session)).unwrap();
+    writeln!(
+        out,
+        "  Avg Cost:     {}/session",
+        format_cost(result.avg_cost_per_session)
+    )
+    .unwrap();
     writeln!(out).unwrap();
 
     // Top Tools
@@ -653,8 +988,14 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
         let max_count = result.top_tools.first().map(|(_, c)| *c).unwrap_or(1);
         for (name, count) in &result.top_tools {
             let bar_len = (*count as f64 / max_count.max(1) as f64 * 20.0).round() as usize;
-            writeln!(out, "    {:<18} {:>6}  {}",
-                name, format_number(*count as u64), "\u{2588}".repeat(bar_len)).unwrap();
+            writeln!(
+                out,
+                "    {:<18} {:>6}  {}",
+                name,
+                format_number(*count as u64),
+                "\u{2588}".repeat(bar_len)
+            )
+            .unwrap();
         }
         writeln!(out).unwrap();
     }
@@ -663,7 +1004,13 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
     if !result.top_projects.is_empty() {
         writeln!(out, "  Top Projects").unwrap();
         for (name, cost) in &result.top_projects {
-            writeln!(out, "    {:<30} {}", truncate_str(name, 30), format_cost(*cost)).unwrap();
+            writeln!(
+                out,
+                "    {:<30} {}",
+                truncate_str(name, 30),
+                format_cost(*cost)
+            )
+            .unwrap();
         }
         writeln!(out).unwrap();
     }
@@ -672,7 +1019,14 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
     if let Some((ref id, cost, ref project)) = result.most_expensive_session {
         writeln!(out, "  Most Expensive Session").unwrap();
         let short_id = if id.len() > 8 { &id[..8] } else { id };
-        writeln!(out, "    {}  {}  {}", short_id, truncate_str(project, 25), format_cost(cost)).unwrap();
+        writeln!(
+            out,
+            "    {}  {}  {}",
+            short_id,
+            truncate_str(project, 25),
+            format_cost(cost)
+        )
+        .unwrap();
         writeln!(out).unwrap();
     }
 
@@ -681,7 +1035,14 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
         if dur_min > 0.0 {
             writeln!(out, "  Longest Session").unwrap();
             let short_id = if id.len() > 8 { &id[..8] } else { id };
-            writeln!(out, "    {}  {}  {}", short_id, truncate_str(project, 25), format_duration(dur_min)).unwrap();
+            writeln!(
+                out,
+                "    {}  {}  {}",
+                short_id,
+                truncate_str(project, 25),
+                format_duration(dur_min)
+            )
+            .unwrap();
             writeln!(out).unwrap();
         }
     }
@@ -692,8 +1053,14 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
         for (model, turns) in &result.model_distribution {
             let short = short_model(model);
             let pct = *turns as f64 / result.total_turns.max(1) as f64 * 100.0;
-            writeln!(out, "    {:<25} {:>6} turns ({:.0}%)",
-                short, format_number(*turns as u64), pct).unwrap();
+            writeln!(
+                out,
+                "    {:<25} {:>6} turns ({:.0}%)",
+                short,
+                format_number(*turns as u64),
+                pct
+            )
+            .unwrap();
         }
         writeln!(out).unwrap();
     }
@@ -703,16 +1070,25 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
     if result.total_speculation_time_saved_ms > 0.0 {
         let saved_sec = result.total_speculation_time_saved_ms / 1000.0;
         if saved_sec >= 60.0 {
-            meta_lines.push(format!("  Speculation saved you {:.1} minutes", saved_sec / 60.0));
+            meta_lines.push(format!(
+                "  Speculation saved you {:.1} minutes",
+                saved_sec / 60.0
+            ));
         } else {
             meta_lines.push(format!("  Speculation saved you {:.1} seconds", saved_sec));
         }
     }
     if result.total_pr_count > 0 {
-        meta_lines.push(format!("  {} PRs shipped via Claude Code", result.total_pr_count));
+        meta_lines.push(format!(
+            "  {} PRs shipped via Claude Code",
+            result.total_pr_count
+        ));
     }
     if result.total_collapse_count > 0 {
-        meta_lines.push(format!("  {} context collapses", result.total_collapse_count));
+        meta_lines.push(format!(
+            "  {} context collapses",
+            result.total_collapse_count
+        ));
     }
     if !meta_lines.is_empty() {
         for line in &meta_lines {

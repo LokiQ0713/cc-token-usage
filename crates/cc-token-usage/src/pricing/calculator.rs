@@ -257,8 +257,7 @@ impl PricingCalculator {
             ),
             None => {
                 // No breakdown available – treat everything as 5m (conservative estimate)
-                let total_cw =
-                    usage.cache_creation_input_tokens.unwrap_or(0) as f64 / 1_000_000.0;
+                let total_cw = usage.cache_creation_input_tokens.unwrap_or(0) as f64 / 1_000_000.0;
                 (total_cw, 0.0)
             }
         };
@@ -269,7 +268,8 @@ impl PricingCalculator {
         let cache_read_cost = cache_read_mtok * price.cache_read;
         let output_cost = output_mtok * price.output;
 
-        let total = input_cost + cache_write_5m_cost + cache_write_1h_cost + cache_read_cost + output_cost;
+        let total =
+            input_cost + cache_write_5m_cost + cache_write_1h_cost + cache_read_cost + output_cost;
 
         CostBreakdown {
             input_cost,
@@ -366,11 +366,7 @@ mod tests {
             "output_cost: {}",
             cost.output_cost
         );
-        assert!(
-            (cost.total - 36.75).abs() < 1e-9,
-            "total: {}",
-            cost.total
-        );
+        assert!((cost.total - 36.75).abs() < 1e-9, "total: {}", cost.total);
         assert_eq!(cost.price_source, PriceSource::Builtin);
     }
 
@@ -393,11 +389,7 @@ mod tests {
             "cache_write_1h_cost: {}",
             cost.cache_write_1h_cost
         );
-        assert!(
-            (cost.total - 8.125).abs() < 1e-9,
-            "total: {}",
-            cost.total
-        );
+        assert!((cost.total - 8.125).abs() < 1e-9, "total: {}", cost.total);
     }
 
     #[test]

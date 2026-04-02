@@ -20,7 +20,10 @@ pub fn check_for_update() -> Result<UpdateStatus> {
     // This uses GitHub CDN, not the REST API, so it's never rate-limited.
     let redirect_url = format!("https://github.com/{GITHUB_REPO}/releases/latest");
     let response = ureq::get(&redirect_url)
-        .header("User-Agent", concat!("cc-token-usage/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("cc-token-usage/", env!("CARGO_PKG_VERSION")),
+        )
         .call()
         .context("failed to check latest release — check your internet connection")?;
 
@@ -32,9 +35,8 @@ pub fn check_for_update() -> Result<UpdateStatus> {
     let latest = tag_segment.strip_prefix('v').unwrap_or(tag_segment);
 
     // Construct download URL directly (no API call needed)
-    let download_url = format!(
-        "https://github.com/{GITHUB_REPO}/releases/download/v{latest}/{asset_name}"
-    );
+    let download_url =
+        format!("https://github.com/{GITHUB_REPO}/releases/download/v{latest}/{asset_name}");
 
     Ok(UpdateStatus {
         current_version: CURRENT_VERSION.to_string(),
@@ -74,7 +76,10 @@ pub fn perform_update() -> Result<()> {
 
     // Download tar.gz
     let data = ureq::get(&status.download_url)
-        .header("User-Agent", concat!("cc-token-usage/", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            concat!("cc-token-usage/", env!("CARGO_PKG_VERSION")),
+        )
         .call()
         .context("failed to download release")?
         .into_body()
@@ -85,7 +90,8 @@ pub fn perform_update() -> Result<()> {
     let decoder = flate2::read::GzDecoder::new(&data[..]);
     let mut archive = tar::Archive::new(decoder);
 
-    let current_exe = std::env::current_exe().context("cannot determine current executable path")?;
+    let current_exe =
+        std::env::current_exe().context("cannot determine current executable path")?;
     let parent = current_exe
         .parent()
         .context("current executable has no parent directory")?;

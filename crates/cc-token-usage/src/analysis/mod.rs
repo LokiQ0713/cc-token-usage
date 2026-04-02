@@ -17,9 +17,9 @@ use std::collections::HashMap;
 pub struct AggregatedTokens {
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cache_creation_tokens: u64,     // 保留总量
-    pub cache_write_5m_tokens: u64,     // 5分钟TTL缓存写入
-    pub cache_write_1h_tokens: u64,     // 1小时TTL缓存写入
+    pub cache_creation_tokens: u64, // 保留总量
+    pub cache_write_5m_tokens: u64, // 5分钟TTL缓存写入
+    pub cache_write_1h_tokens: u64, // 1小时TTL缓存写入
     pub cache_read_tokens: u64,
     pub turns: usize,
 }
@@ -79,27 +79,27 @@ pub struct OverviewResult {
     pub quality: GlobalDataQuality,
     pub subscription_value: Option<SubscriptionValue>,
     // 新增
-    pub weekday_hour_matrix: [[usize; 24]; 7],  // [weekday][hour] -> turn count
-    pub tool_counts: Vec<(String, usize)>,       // 工具名 -> 使用次数，排序
-    pub cost_by_category: CostByCategory,        // 费用按类别分拆
-    pub session_summaries: Vec<SessionSummary>,   // 所有 session 的汇总
+    pub weekday_hour_matrix: [[usize; 24]; 7], // [weekday][hour] -> turn count
+    pub tool_counts: Vec<(String, usize)>,     // 工具名 -> 使用次数，排序
+    pub cost_by_category: CostByCategory,      // 费用按类别分拆
+    pub session_summaries: Vec<SessionSummary>, // 所有 session 的汇总
     pub total_output_tokens: u64,
     pub total_context_tokens: u64,
     pub avg_cache_hit_rate: f64,
     pub cache_savings: CacheSavings,
     // Efficiency metrics
-    pub output_ratio: f64,              // output / total input (as percentage)
-    pub cost_per_turn: f64,             // $/turn
-    pub tokens_per_output_turn: u64,    // avg output tokens per turn
+    pub output_ratio: f64,           // output / total input (as percentage)
+    pub cost_per_turn: f64,          // $/turn
+    pub tokens_per_output_turn: u64, // avg output tokens per turn
 }
 
 /// How much money was saved by cache hits vs paying full input price.
 #[derive(Debug, Default, Serialize)]
 pub struct CacheSavings {
-    pub total_saved: f64,           // $ saved by cache reads
-    pub without_cache_cost: f64,    // hypothetical cost if all cache_read charged at base_input
-    pub with_cache_cost: f64,       // actual cache_read cost
-    pub savings_pct: f64,           // percentage saved
+    pub total_saved: f64,             // $ saved by cache reads
+    pub without_cache_cost: f64,      // hypothetical cost if all cache_read charged at base_input
+    pub with_cache_cost: f64,         // actual cache_read cost
+    pub savings_pct: f64,             // percentage saved
     pub by_model: Vec<(String, f64)>, // model -> savings, sorted desc
 }
 
@@ -144,9 +144,9 @@ pub struct SessionResult {
     pub duration_minutes: f64,
     pub max_context: u64,
     pub compaction_count: usize,
-    pub cache_write_5m_pct: f64,  // 5m TTL 占比
-    pub cache_write_1h_pct: f64,  // 1h TTL 占比
-    pub model: String,             // 主力模型
+    pub cache_write_5m_pct: f64, // 5m TTL 占比
+    pub cache_write_1h_pct: f64, // 1h TTL 占比
+    pub model: String,           // 主力模型
     // ── Phase 1: Data mining metadata ──
     pub title: Option<String>,
     pub tags: Vec<String>,
@@ -154,11 +154,11 @@ pub struct SessionResult {
     pub pr_links: Vec<PrLinkInfo>,
     // Autonomy
     pub user_prompt_count: usize,
-    pub autonomy_ratio: f64,          // total_turns / user_prompt_count
+    pub autonomy_ratio: f64, // total_turns / user_prompt_count
     // Errors
     pub api_error_count: usize,
     pub tool_error_count: usize,
-    pub truncated_count: usize,       // stop_reason == "max_tokens"
+    pub truncated_count: usize, // stop_reason == "max_tokens"
     // Speculation
     pub speculation_accepts: usize,
     pub speculation_time_saved_ms: f64,
@@ -184,8 +184,8 @@ pub struct TurnDetail {
     pub model: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cache_write_5m_tokens: u64,   // 5分钟TTL缓存写入
-    pub cache_write_1h_tokens: u64,   // 1小时TTL缓存写入
+    pub cache_write_5m_tokens: u64, // 5分钟TTL缓存写入
+    pub cache_write_1h_tokens: u64, // 1小时TTL缓存写入
     pub cache_read_tokens: u64,
     pub context_size: u64,
     pub cache_hit_rate: f64,
@@ -193,11 +193,11 @@ pub struct TurnDetail {
     pub cost_breakdown: TurnCostBreakdown, // 费用分拆
     pub stop_reason: Option<String>,
     pub is_agent: bool,
-    pub is_compaction: bool,          // 是否是 compaction 事件
-    pub context_delta: i64,           // 与上一 turn 的 context 变化
-    pub user_text: Option<String>,    // 用户消息文本
+    pub is_compaction: bool,            // 是否是 compaction 事件
+    pub context_delta: i64,             // 与上一 turn 的 context 变化
+    pub user_text: Option<String>,      // 用户消息文本
     pub assistant_text: Option<String>, // 模型回复文本
-    pub tool_names: Vec<String>,      // 使用的工具名
+    pub tool_names: Vec<String>,        // 使用的工具名
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -227,22 +227,22 @@ pub struct SessionSummary {
     pub project_display_name: String,
     pub first_timestamp: Option<DateTime<Utc>>,
     pub duration_minutes: f64,
-    pub model: String,              // 主要使用的模型
+    pub model: String, // 主要使用的模型
     pub turn_count: usize,
     pub agent_turn_count: usize,
     pub output_tokens: u64,
     pub context_tokens: u64,
     pub max_context: u64,
-    pub cache_hit_rate: f64,        // 平均
-    pub cache_write_5m_pct: f64,    // 5m TTL 占比
+    pub cache_hit_rate: f64,     // 平均
+    pub cache_write_5m_pct: f64, // 5m TTL 占比
     pub compaction_count: usize,
     pub cost: f64,
-    pub tool_use_count: usize,      // tool_use stop_reason 的次数
+    pub tool_use_count: usize,           // tool_use stop_reason 的次数
     pub top_tools: Vec<(String, usize)>, // 工具名 -> 使用次数，前5
     pub turn_details: Option<Vec<TurnDetail>>, // 仅 top sessions 有详情
     // Efficiency metrics
-    pub output_ratio: f64,              // output / total context (as percentage)
-    pub cost_per_turn: f64,             // $/turn
+    pub output_ratio: f64,  // output / total context (as percentage)
+    pub cost_per_turn: f64, // $/turn
 }
 
 // ─── Trend ───────────────────────────────────────────────────────────────────

@@ -184,11 +184,7 @@ mod tests {
 {{"type":"mode","sessionId":"{session_id}","mode":"code"}}"#
         );
 
-        fs::write(
-            project_dir.join(format!("{session_id}.jsonl")),
-            &content,
-        )
-        .unwrap();
+        fs::write(project_dir.join(format!("{session_id}.jsonl")), &content).unwrap();
 
         let sessions = load_all_sessions(tmp.path()).unwrap();
         assert_eq!(sessions.len(), 1);

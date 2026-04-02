@@ -112,7 +112,11 @@ pub fn analyze_heatmap(
 }
 
 fn compute_thresholds(daily: &[DailyActivity]) -> (usize, usize, usize) {
-    let mut non_zero: Vec<usize> = daily.iter().filter(|d| d.turns > 0).map(|d| d.turns).collect();
+    let mut non_zero: Vec<usize> = daily
+        .iter()
+        .filter(|d| d.turns > 0)
+        .map(|d| d.turns)
+        .collect();
     if non_zero.is_empty() {
         return (1, 2, 3);
     }
@@ -188,7 +192,9 @@ fn compute_stats(daily: &[DailyActivity], today: NaiveDate) -> HeatmapStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::models::{DataQuality, SessionData, SessionMetadata, ValidatedTurn, TokenUsage};
+    use crate::data::models::{
+        DataQuality, SessionData, SessionMetadata, TokenUsage, ValidatedTurn,
+    };
     use chrono::Utc;
 
     fn make_turn(ts: &str) -> ValidatedTurn {
@@ -306,13 +312,14 @@ mod tests {
     #[test]
     fn test_analyze_with_sessions() {
         let calc = PricingCalculator::new();
-        let sessions = vec![
-            make_session("s1", vec![
+        let sessions = vec![make_session(
+            "s1",
+            vec![
                 make_turn("2026-03-20T10:00:00Z"),
                 make_turn("2026-03-20T11:00:00Z"),
                 make_turn("2026-03-21T09:00:00Z"),
-            ]),
-        ];
+            ],
+        )];
 
         let result = analyze_heatmap(&sessions, &calc, 30);
         assert!(result.daily.len() <= 30);
@@ -323,9 +330,24 @@ mod tests {
     fn test_busiest_day() {
         let today = Local::now().date_naive();
         let daily = vec![
-            DailyActivity { date: today - chrono::Duration::days(2), turns: 3, cost: 0.0, sessions: 1 },
-            DailyActivity { date: today - chrono::Duration::days(1), turns: 10, cost: 0.0, sessions: 2 },
-            DailyActivity { date: today, turns: 1, cost: 0.0, sessions: 1 },
+            DailyActivity {
+                date: today - chrono::Duration::days(2),
+                turns: 3,
+                cost: 0.0,
+                sessions: 1,
+            },
+            DailyActivity {
+                date: today - chrono::Duration::days(1),
+                turns: 10,
+                cost: 0.0,
+                sessions: 2,
+            },
+            DailyActivity {
+                date: today,
+                turns: 1,
+                cost: 0.0,
+                sessions: 1,
+            },
         ];
 
         let stats = compute_stats(&daily, today);

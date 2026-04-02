@@ -205,7 +205,9 @@ pub fn load_agent_meta(session_id: &str, claude_home: &Path) -> HashMap<String, 
             }
 
             // Extract agent ID: "agent-xyz.meta.json" -> "xyz"
-            let agent_id = name.trim_start_matches("agent-").trim_end_matches(".meta.json");
+            let agent_id = name
+                .trim_start_matches("agent-")
+                .trim_end_matches(".meta.json");
 
             if let Ok(content) = fs::read_to_string(sub_entry.path()) {
                 if let Ok(meta) = serde_json::from_str::<AgentMeta>(&content) {
@@ -234,7 +236,10 @@ mod tests {
     #[test]
     fn scan_finds_all_session_types() {
         let tmp = setup_claude_home();
-        let project_dir = tmp.path().join("projects").join("-Users-testuser-myproject");
+        let project_dir = tmp
+            .path()
+            .join("projects")
+            .join("-Users-testuser-myproject");
         fs::create_dir_all(&project_dir).unwrap();
 
         // Type 1: main session
@@ -263,7 +268,11 @@ mod tests {
 
         let files = scan_sessions(tmp.path()).unwrap();
 
-        assert_eq!(files.len(), 3, "should find 3 session files, found: {files:?}");
+        assert_eq!(
+            files.len(),
+            3,
+            "should find 3 session files, found: {files:?}"
+        );
 
         let main = files.iter().find(|f| f.session_id == main_uuid).unwrap();
         assert!(!main.is_agent);
@@ -281,10 +290,7 @@ mod tests {
             .find(|f| f.session_id == "agent-long-id-abcdef1234567890")
             .unwrap();
         assert!(new_agent.is_agent);
-        assert_eq!(
-            new_agent.parent_session_id.as_deref(),
-            Some(main_uuid),
-        );
+        assert_eq!(new_agent.parent_session_id.as_deref(), Some(main_uuid),);
     }
 
     #[test]

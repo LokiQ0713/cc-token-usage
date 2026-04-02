@@ -239,7 +239,10 @@ mod tests {
                 assert_eq!(repls.len(), 1);
                 assert_eq!(repls[0].kind.as_deref(), Some("tool-result"));
                 assert_eq!(repls[0].tool_use_id.as_deref(), Some("toolu_123"));
-                assert_eq!(repls[0].replacement.as_deref(), Some("[content stored externally]"));
+                assert_eq!(
+                    repls[0].replacement.as_deref(),
+                    Some("[content stored externally]")
+                );
             }
             other => panic!("Expected ContentReplacement, got: {other:?}"),
         }

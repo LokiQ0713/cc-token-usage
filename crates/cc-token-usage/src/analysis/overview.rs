@@ -39,7 +39,9 @@ pub fn analyze_overview(
                 &mut cost_by_category,
             );
             total_turns += 1;
-            if turn.is_agent { total_agent_turns += 1; }
+            if turn.is_agent {
+                total_agent_turns += 1;
+            }
 
             // Aggregate tool usage
             for name in &turn.tool_names {
@@ -358,4 +360,3 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         cost_per_turn,
     }
 }
-

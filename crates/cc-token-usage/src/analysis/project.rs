@@ -35,7 +35,9 @@ pub fn analyze_projects(
         for turn in session.all_responses() {
             acc.tokens.add_usage(&turn.usage);
             acc.total_turns += 1;
-            if turn.is_agent { acc.agent_turns += 1; }
+            if turn.is_agent {
+                acc.agent_turns += 1;
+            }
             *acc.model_counts.entry(turn.model.clone()).or_insert(0) += 1;
             let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
             acc.cost += cost.total;
@@ -45,7 +47,9 @@ pub fn analyze_projects(
     let mut projects: Vec<ProjectSummary> = project_map
         .into_values()
         .map(|acc| {
-            let primary_model = acc.model_counts.into_iter()
+            let primary_model = acc
+                .model_counts
+                .into_iter()
                 .max_by_key(|(_, c)| *c)
                 .map(|(m, _)| m)
                 .unwrap_or_default();
@@ -63,7 +67,11 @@ pub fn analyze_projects(
         .collect();
 
     // Sort by cost descending
-    projects.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+    projects.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Take top_n (0 means no limit)
     if top_n > 0 {
@@ -108,10 +116,7 @@ mod tests {
 
     #[test]
     fn test_project_display_name() {
-        assert_eq!(
-            project_display_name("-Users-testuser-cc-web3"),
-            "~/cc/web3"
-        );
+        assert_eq!(project_display_name("-Users-testuser-cc-web3"), "~/cc/web3");
         assert_eq!(
             project_display_name("-Users-alice-projects-my-app"),
             "~/projects/my/app"

@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use crate::data::models::SessionData;
 use crate::pricing::calculator::PricingCalculator;
 
-use super::{AgentDetail, AgentSummary, AggregatedTokens, SessionResult, TurnCostBreakdown, TurnDetail};
+use super::{
+    AgentDetail, AgentSummary, AggregatedTokens, SessionResult, TurnCostBreakdown, TurnDetail,
+};
 
 /// Agent metadata loaded from .meta.json files.
 #[derive(Debug, Clone, Default)]
@@ -190,18 +192,25 @@ pub fn analyze_session(
     };
 
     // Per-agent details
-    let mut agents: Vec<AgentDetail> = agent_acc.into_iter().map(|(aid, (turns, output, cost))| {
-        let meta = agent_meta.get(&aid);
-        AgentDetail {
-            agent_id: aid,
-            agent_type: meta.map_or_else(|| "unknown".into(), |m| m.agent_type.clone()),
-            description: meta.map_or_else(|| "".into(), |m| m.description.clone()),
-            turns,
-            output_tokens: output,
-            cost,
-        }
-    }).collect();
-    agents.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+    let mut agents: Vec<AgentDetail> = agent_acc
+        .into_iter()
+        .map(|(aid, (turns, output, cost))| {
+            let meta = agent_meta.get(&aid);
+            AgentDetail {
+                agent_id: aid,
+                agent_type: meta.map_or_else(|| "unknown".into(), |m| m.agent_type.clone()),
+                description: meta.map_or_else(|| "".into(), |m| m.description.clone()),
+                turns,
+                output_tokens: output,
+                cost,
+            }
+        })
+        .collect();
+    agents.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     agent_summary.agents = agents;
 
     // Primary model
@@ -260,9 +269,22 @@ pub fn analyze_session(
         git_branches,
         // Context Collapse
         collapse_count: session.metadata.collapse_commits.len(),
-        collapse_summaries: session.metadata.collapse_commits.iter().map(|c| c.summary.clone()).collect(),
-        collapse_avg_risk: session.metadata.collapse_snapshot.as_ref().map_or(0.0, |s| s.avg_risk),
-        collapse_max_risk: session.metadata.collapse_snapshot.as_ref().map_or(0.0, |s| s.max_risk),
+        collapse_summaries: session
+            .metadata
+            .collapse_commits
+            .iter()
+            .map(|c| c.summary.clone())
+            .collect(),
+        collapse_avg_risk: session
+            .metadata
+            .collapse_snapshot
+            .as_ref()
+            .map_or(0.0, |s| s.avg_risk),
+        collapse_max_risk: session
+            .metadata
+            .collapse_snapshot
+            .as_ref()
+            .map_or(0.0, |s| s.max_risk),
         // Attribution
         attribution: session.metadata.attribution.clone(),
     }

@@ -307,7 +307,10 @@ GARBAGE LINE
         let error_ratio = lenient.errors_skipped() as f64 / total as f64;
         assert_eq!(entries.len(), 10);
         assert_eq!(lenient.errors_skipped(), 1);
-        assert!(error_ratio < 0.1, "Error ratio {error_ratio} should be < 10%");
+        assert!(
+            error_ratio < 0.1,
+            "Error ratio {error_ratio} should be < 10%"
+        );
     }
 
     // ── ParseError Display ──

@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::data::models::{GlobalDataQuality, SessionData, SessionFile};
-use crate::data::scanner::{scan_claude_home, resolve_agent_parents};
+use crate::data::scanner::{resolve_agent_parents, scan_claude_home};
 use crate::pricing::calculator::PricingCalculator;
 
 // ─── Result Types ──────────────────────────────────────────────────────────
@@ -37,14 +37,28 @@ pub struct Check {
 impl Check {
     fn pass(name: impl Into<String>, value: impl fmt::Display) -> Self {
         let v = value.to_string();
-        Self { name: name.into(), expected: v.clone(), actual: v, passed: true }
+        Self {
+            name: name.into(),
+            expected: v.clone(),
+            actual: v,
+            passed: true,
+        }
     }
 
-    fn compare(name: impl Into<String>, expected: impl fmt::Display, actual: impl fmt::Display) -> Self {
+    fn compare(
+        name: impl Into<String>,
+        expected: impl fmt::Display,
+        actual: impl fmt::Display,
+    ) -> Self {
         let e = expected.to_string();
         let a = actual.to_string();
         let passed = e == a;
-        Self { name: name.into(), expected: e, actual: a, passed }
+        Self {
+            name: name.into(),
+            expected: e,
+            actual: a,
+            passed,
+        }
     }
 
     #[allow(dead_code)]
@@ -87,7 +101,11 @@ struct RawTokenCount {
 /// - not synthetic, model exists
 /// - usage exists with non-zero tokens
 /// - valid timestamp <= now
-fn is_valid_assistant(val: &serde_json::Value, skip_sidechain: bool, now: &chrono::DateTime<chrono::Utc>) -> bool {
+fn is_valid_assistant(
+    val: &serde_json::Value,
+    skip_sidechain: bool,
+    now: &chrono::DateTime<chrono::Utc>,
+) -> bool {
     if val.get("type").and_then(|t| t.as_str()) != Some("assistant") {
         return false;
     }
@@ -102,10 +120,22 @@ fn is_valid_assistant(val: &serde_json::Value, skip_sidechain: bool, now: &chron
     if val.pointer("/message/usage").is_none() {
         return false;
     }
-    let input = val.pointer("/message/usage/input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let output = val.pointer("/message/usage/output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cache_creation = val.pointer("/message/usage/cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-    let cache_read = val.pointer("/message/usage/cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+    let input = val
+        .pointer("/message/usage/input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output = val
+        .pointer("/message/usage/output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_creation = val
+        .pointer("/message/usage/cache_creation_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let cache_read = val
+        .pointer("/message/usage/cache_read_input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     if input + output + cache_creation + cache_read == 0 {
         return false;
     }
@@ -147,10 +177,22 @@ fn count_raw_tokens(path: &Path, skip_sidechain: bool) -> Result<RawTokenCount> 
             continue;
         }
 
-        let input = val.pointer("/message/usage/input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let output = val.pointer("/message/usage/output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cache_creation = val.pointer("/message/usage/cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-        let cache_read = val.pointer("/message/usage/cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+        let input = val
+            .pointer("/message/usage/input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let output = val
+            .pointer("/message/usage/output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_creation = val
+            .pointer("/message/usage/cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let cache_read = val
+            .pointer("/message/usage/cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
 
         let request_id = val.get("requestId").and_then(|r| r.as_str());
 
@@ -183,7 +225,10 @@ fn count_raw_tokens(path: &Path, skip_sidechain: bool) -> Result<RawTokenCount> 
 /// Count output tokens per requestId (for precise cross-file dedup token verification).
 /// Returns (HashMap<requestId, output_tokens>, no_rid_output_total).
 /// Streaming dedup: last entry per requestId wins.
-fn count_tokens_by_request_id(path: &Path, skip_sidechain: bool) -> Result<(HashMap<String, u64>, u64)> {
+fn count_tokens_by_request_id(
+    path: &Path,
+    skip_sidechain: bool,
+) -> Result<(HashMap<String, u64>, u64)> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let now = chrono::Utc::now();
@@ -199,8 +244,10 @@ fn count_tokens_by_request_id(path: &Path, skip_sidechain: bool) -> Result<(Hash
         if !is_valid_assistant(&val, skip_sidechain, &now) {
             continue;
         }
-        let output = val.pointer("/message/usage/output_tokens")
-            .and_then(|v| v.as_u64()).unwrap_or(0);
+        let output = val
+            .pointer("/message/usage/output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         match val.get("requestId").and_then(|r| r.as_str()) {
             Some(rid) if !rid.is_empty() => {
                 by_rid.insert(rid.to_string(), output);
@@ -275,13 +322,12 @@ pub fn validate_all(
     ));
 
     // Check 3: Orphan agent count (agents without a matching main session file)
-    let main_session_ids: HashSet<&str> = main_files.iter()
-        .map(|f| f.session_id.as_str())
-        .collect();
-    let orphan_count = agent_files.iter()
+    let main_session_ids: HashSet<&str> =
+        main_files.iter().map(|f| f.session_id.as_str()).collect();
+    let orphan_count = agent_files
+        .iter()
         .filter(|f| {
-            let parent = f.parent_session_id.as_deref()
-                .unwrap_or(&f.session_id);
+            let parent = f.parent_session_id.as_deref().unwrap_or(&f.session_id);
             !main_session_ids.contains(parent)
         })
         .count();
@@ -291,22 +337,26 @@ pub fn validate_all(
     ));
 
     // Check 4: Report duplicate session IDs in main files (pipeline deduplicates by HashMap)
-    let unique_main_ids: HashSet<&str> = main_files.iter()
-        .map(|f| f.session_id.as_str())
-        .collect();
+    let unique_main_ids: HashSet<&str> = main_files.iter().map(|f| f.session_id.as_str()).collect();
     let dup_count = main_files.len() - unique_main_ids.len();
     structure_checks.push(Check::pass(
-        format!("main_session_files: {} files, {} unique IDs ({} duplicates)", main_files.len(), unique_main_ids.len(), dup_count),
+        format!(
+            "main_session_files: {} files, {} unique IDs ({} duplicates)",
+            main_files.len(),
+            unique_main_ids.len(),
+            dup_count
+        ),
         main_files.len(),
     ));
 
     // Check 5: Cross-file dedup — agent turns in main session should not be double-counted
     let mut cross_file_overlap = 0usize;
     for agent in &agent_files {
-        let parent_id = agent.parent_session_id.as_deref()
+        let parent_id = agent
+            .parent_session_id
+            .as_deref()
             .unwrap_or(&agent.session_id);
-        let parent_file = main_files.iter()
-            .find(|f| f.session_id == parent_id);
+        let parent_file = main_files.iter().find(|f| f.session_id == parent_id);
         if let Some(pf) = parent_file {
             let parent_rids = collect_valid_request_ids(&pf.path, true).unwrap_or_default();
             let agent_rids = collect_valid_request_ids(&agent.path, false).unwrap_or_default();
@@ -314,7 +364,10 @@ pub fn validate_all(
         }
     }
     structure_checks.push(Check::pass(
-        format!("cross_file_overlapping_request_ids (deduped: {})", cross_file_overlap),
+        format!(
+            "cross_file_overlapping_request_ids (deduped: {})",
+            cross_file_overlap
+        ),
         cross_file_overlap,
     ));
 
@@ -323,13 +376,13 @@ pub fn validate_all(
     // Build lookup: session_id -> Vec<agent SessionFile>
     let mut agents_by_parent: HashMap<&str, Vec<&SessionFile>> = HashMap::new();
     for af in &agent_files {
-        let parent_id = af.parent_session_id.as_deref()
-            .unwrap_or(&af.session_id);
+        let parent_id = af.parent_session_id.as_deref().unwrap_or(&af.session_id);
         agents_by_parent.entry(parent_id).or_default().push(af);
     }
 
     // Build lookup: session_id -> main SessionFile
-    let main_file_map: HashMap<&str, &SessionFile> = main_files.iter()
+    let main_file_map: HashMap<&str, &SessionFile> = main_files
+        .iter()
         .map(|f| (f.session_id.as_str(), *f))
         .collect();
 
@@ -339,18 +392,29 @@ pub fn validate_all(
 
         // --- Token validation: raw counter vs pipeline ---
         if let Some(mf) = main_file_map.get(session.session_id.as_str()) {
-            let raw_main = count_raw_tokens(&mf.path, true)
-                .unwrap_or_default();
+            let raw_main = count_raw_tokens(&mf.path, true).unwrap_or_default();
 
             // Pipeline's main turns
-            let pipeline_main_input: u64 = session.turns.iter()
-                .map(|t| t.usage.input_tokens.unwrap_or(0)).sum();
-            let pipeline_main_output: u64 = session.turns.iter()
-                .map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
-            let pipeline_main_cache_creation: u64 = session.turns.iter()
-                .map(|t| t.usage.cache_creation_input_tokens.unwrap_or(0)).sum();
-            let pipeline_main_cache_read: u64 = session.turns.iter()
-                .map(|t| t.usage.cache_read_input_tokens.unwrap_or(0)).sum();
+            let pipeline_main_input: u64 = session
+                .turns
+                .iter()
+                .map(|t| t.usage.input_tokens.unwrap_or(0))
+                .sum();
+            let pipeline_main_output: u64 = session
+                .turns
+                .iter()
+                .map(|t| t.usage.output_tokens.unwrap_or(0))
+                .sum();
+            let pipeline_main_cache_creation: u64 = session
+                .turns
+                .iter()
+                .map(|t| t.usage.cache_creation_input_tokens.unwrap_or(0))
+                .sum();
+            let pipeline_main_cache_read: u64 = session
+                .turns
+                .iter()
+                .map(|t| t.usage.cache_read_input_tokens.unwrap_or(0))
+                .sum();
             let pipeline_main_turns = session.turns.len();
 
             token_checks.push(Check::compare(
@@ -383,7 +447,11 @@ pub fn validate_all(
         // --- Agent validation ---
         let agent_session_files = agents_by_parent.get(session.session_id.as_str());
         let expected_agent_files = agent_session_files.map_or(0, |v| v.len());
-        let actual_agent_file_count = if expected_agent_files > 0 { expected_agent_files } else { 0 };
+        let actual_agent_file_count = if expected_agent_files > 0 {
+            expected_agent_files
+        } else {
+            0
+        };
 
         agent_checks.push(Check::compare(
             "agent_file_count (from scanner)",
@@ -405,17 +473,15 @@ pub fn validate_all(
                 let mut raw_agent_output: u64 = 0;
 
                 for af in afs {
-                    let raw = count_raw_tokens(&af.path, false)
-                        .unwrap_or_default();
-                    let file_rids = collect_valid_request_ids(&af.path, false)
-                        .unwrap_or_default();
+                    let raw = count_raw_tokens(&af.path, false).unwrap_or_default();
+                    let file_rids = collect_valid_request_ids(&af.path, false).unwrap_or_default();
                     let file_overlap = file_rids.intersection(&main_rids).count();
                     let unique_turns = raw.turn_count.saturating_sub(file_overlap);
                     expected_unique_agent_turns += unique_turns;
 
                     // Precise: count output tokens only for non-overlapping requestIds
-                    let (per_rid, no_rid_output) = count_tokens_by_request_id(&af.path, false)
-                        .unwrap_or_default();
+                    let (per_rid, no_rid_output) =
+                        count_tokens_by_request_id(&af.path, false).unwrap_or_default();
                     for (rid, output) in &per_rid {
                         if !main_rids.contains(rid) {
                             raw_agent_output += output;
@@ -441,15 +507,23 @@ pub fn validate_all(
                 }
 
                 // Agent output token verification (pipeline vs raw, ±5% tolerance for ratio estimate)
-                let pipeline_agent_output: u64 = session.agent_turns.iter()
-                    .map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
+                let pipeline_agent_output: u64 = session
+                    .agent_turns
+                    .iter()
+                    .map(|t| t.usage.output_tokens.unwrap_or(0))
+                    .sum();
 
                 let agent_output_match = {
-                    if raw_agent_output == 0 && pipeline_agent_output == 0 { true }
-                    else {
+                    if raw_agent_output == 0 && pipeline_agent_output == 0 {
+                        true
+                    } else {
                         let max_val = raw_agent_output.max(pipeline_agent_output) as f64;
-                        if max_val == 0.0 { true }
-                        else { (raw_agent_output as f64 - pipeline_agent_output as f64).abs() / max_val < 0.05 }
+                        if max_val == 0.0 {
+                            true
+                        } else {
+                            (raw_agent_output as f64 - pipeline_agent_output as f64).abs() / max_val
+                                < 0.05
+                        }
                     }
                 };
 
@@ -471,9 +545,12 @@ pub fn validate_all(
         }
 
         // --- Total (main + agent) verification ---
-        let pipeline_total_output: u64 = session.turns.iter()
+        let pipeline_total_output: u64 = session
+            .turns
+            .iter()
             .chain(session.agent_turns.iter())
-            .map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
+            .map(|t| t.usage.output_tokens.unwrap_or(0))
+            .sum();
         let pipeline_total_turns = session.turns.len() + session.agent_turns.len();
 
         // Verify total turn count matches all_responses()
@@ -493,16 +570,20 @@ pub fn validate_all(
         }
 
         // --- Cost validation ---
-        let pipeline_cost: f64 = session.turns.iter()
+        let pipeline_cost: f64 = session
+            .turns
+            .iter()
             .chain(session.agent_turns.iter())
             .map(|t| calc.calculate_turn_cost(&t.model, &t.usage).total)
             .sum();
 
         // Verify cost is non-negative and consistent with tokens
-        let has_tokens = session.turns.iter().chain(session.agent_turns.iter())
+        let has_tokens = session
+            .turns
+            .iter()
+            .chain(session.agent_turns.iter())
             .any(|t| {
-                t.usage.input_tokens.unwrap_or(0) > 0
-                    || t.usage.output_tokens.unwrap_or(0) > 0
+                t.usage.input_tokens.unwrap_or(0) > 0 || t.usage.output_tokens.unwrap_or(0) > 0
             });
         if has_tokens {
             token_checks.push(Check::compare(
@@ -521,7 +602,11 @@ pub fn validate_all(
             ));
         }
 
-        let project_name = session.project.as_deref().unwrap_or("(unknown)").to_string();
+        let project_name = session
+            .project
+            .as_deref()
+            .unwrap_or("(unknown)")
+            .to_string();
 
         session_results.push(SessionValidation {
             session_id: session.session_id.clone(),
@@ -537,7 +622,11 @@ pub fn validate_all(
 
     for check in &structure_checks {
         summary.total_checks += 1;
-        if check.passed { summary.passed += 1; } else { summary.failed += 1; }
+        if check.passed {
+            summary.passed += 1;
+        } else {
+            summary.failed += 1;
+        }
     }
 
     for sv in &session_results {

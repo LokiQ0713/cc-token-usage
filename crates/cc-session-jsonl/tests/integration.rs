@@ -25,34 +25,101 @@ fn setup_claude_home() -> TempDir {
 fn parse_entry_roundtrip_all_types() {
     // Verify that every entry type can be parsed through the public parse_entry function
     let test_cases = vec![
-        (r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":"hi"}}"#, "user"),
-        (r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#, "assistant"),
-        (r#"{"type":"system","uuid":"sys1","sessionId":"s1","subtype":"init"}"#, "system"),
-        (r#"{"type":"attachment","uuid":"att1","sessionId":"s1"}"#, "attachment"),
-        (r#"{"type":"summary","leafUuid":"l1","summary":"done"}"#, "summary"),
-        (r#"{"type":"custom-title","sessionId":"s1","customTitle":"t"}"#, "custom-title"),
-        (r#"{"type":"ai-title","sessionId":"s1","aiTitle":"t"}"#, "ai-title"),
-        (r#"{"type":"last-prompt","sessionId":"s1","lastPrompt":"p"}"#, "last-prompt"),
-        (r#"{"type":"task-summary","sessionId":"s1","summary":"s","timestamp":"2026-01-01T00:00:00Z"}"#, "task-summary"),
+        (
+            r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":"hi"}}"#,
+            "user",
+        ),
+        (
+            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#,
+            "assistant",
+        ),
+        (
+            r#"{"type":"system","uuid":"sys1","sessionId":"s1","subtype":"init"}"#,
+            "system",
+        ),
+        (
+            r#"{"type":"attachment","uuid":"att1","sessionId":"s1"}"#,
+            "attachment",
+        ),
+        (
+            r#"{"type":"summary","leafUuid":"l1","summary":"done"}"#,
+            "summary",
+        ),
+        (
+            r#"{"type":"custom-title","sessionId":"s1","customTitle":"t"}"#,
+            "custom-title",
+        ),
+        (
+            r#"{"type":"ai-title","sessionId":"s1","aiTitle":"t"}"#,
+            "ai-title",
+        ),
+        (
+            r#"{"type":"last-prompt","sessionId":"s1","lastPrompt":"p"}"#,
+            "last-prompt",
+        ),
+        (
+            r#"{"type":"task-summary","sessionId":"s1","summary":"s","timestamp":"2026-01-01T00:00:00Z"}"#,
+            "task-summary",
+        ),
         (r#"{"type":"tag","sessionId":"s1","tag":"t"}"#, "tag"),
-        (r#"{"type":"agent-name","sessionId":"s1","agentName":"n"}"#, "agent-name"),
-        (r##"{"type":"agent-color","sessionId":"s1","agentColor":"#f00"}"##, "agent-color"),
-        (r#"{"type":"agent-setting","sessionId":"s1","agentSetting":"default"}"#, "agent-setting"),
-        (r#"{"type":"pr-link","sessionId":"s1","prNumber":1}"#, "pr-link"),
+        (
+            r#"{"type":"agent-name","sessionId":"s1","agentName":"n"}"#,
+            "agent-name",
+        ),
+        (
+            r##"{"type":"agent-color","sessionId":"s1","agentColor":"#f00"}"##,
+            "agent-color",
+        ),
+        (
+            r#"{"type":"agent-setting","sessionId":"s1","agentSetting":"default"}"#,
+            "agent-setting",
+        ),
+        (
+            r#"{"type":"pr-link","sessionId":"s1","prNumber":1}"#,
+            "pr-link",
+        ),
         (r#"{"type":"mode","sessionId":"s1","mode":"code"}"#, "mode"),
-        (r#"{"type":"queue-operation","sessionId":"s1","operation":"enqueue"}"#, "queue-operation"),
-        (r#"{"type":"speculation-accept","timestamp":"2026-01-01T00:00:00Z","timeSavedMs":500}"#, "speculation-accept"),
-        (r#"{"type":"worktree-state","sessionId":"s1","worktreeSession":null}"#, "worktree-state"),
-        (r#"{"type":"content-replacement","sessionId":"s1","replacements":[]}"#, "content-replacement"),
-        (r#"{"type":"file-history-snapshot","messageId":"m1","snapshot":{},"isSnapshotUpdate":false}"#, "file-history-snapshot"),
-        (r#"{"type":"attribution-snapshot","messageId":"m1","surface":"cli","fileStates":{}}"#, "attribution-snapshot"),
-        (r#"{"type":"marble-origami-commit","sessionId":"s1","collapseId":"0001","summaryUuid":"su1","summaryContent":"x","summary":"x","firstArchivedUuid":"f1","lastArchivedUuid":"l1"}"#, "marble-origami-commit"),
-        (r#"{"type":"marble-origami-snapshot","sessionId":"s1","staged":[],"armed":false,"lastSpawnTokens":0}"#, "marble-origami-snapshot"),
+        (
+            r#"{"type":"queue-operation","sessionId":"s1","operation":"enqueue"}"#,
+            "queue-operation",
+        ),
+        (
+            r#"{"type":"speculation-accept","timestamp":"2026-01-01T00:00:00Z","timeSavedMs":500}"#,
+            "speculation-accept",
+        ),
+        (
+            r#"{"type":"worktree-state","sessionId":"s1","worktreeSession":null}"#,
+            "worktree-state",
+        ),
+        (
+            r#"{"type":"content-replacement","sessionId":"s1","replacements":[]}"#,
+            "content-replacement",
+        ),
+        (
+            r#"{"type":"file-history-snapshot","messageId":"m1","snapshot":{},"isSnapshotUpdate":false}"#,
+            "file-history-snapshot",
+        ),
+        (
+            r#"{"type":"attribution-snapshot","messageId":"m1","surface":"cli","fileStates":{}}"#,
+            "attribution-snapshot",
+        ),
+        (
+            r#"{"type":"marble-origami-commit","sessionId":"s1","collapseId":"0001","summaryUuid":"su1","summaryContent":"x","summary":"x","firstArchivedUuid":"f1","lastArchivedUuid":"l1"}"#,
+            "marble-origami-commit",
+        ),
+        (
+            r#"{"type":"marble-origami-snapshot","sessionId":"s1","staged":[],"armed":false,"lastSpawnTokens":0}"#,
+            "marble-origami-snapshot",
+        ),
     ];
 
     for (json, type_name) in &test_cases {
         let result = parse_entry(json);
-        assert!(result.is_ok(), "Failed to parse {type_name}: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse {type_name}: {:?}",
+            result.err()
+        );
     }
 
     // Unknown type
@@ -245,11 +312,7 @@ GARBAGE LINE HERE
 {{"type":"ai-title","sessionId":"{session_id}","aiTitle":"Test"}}"#
         );
 
-        fs::write(
-            project_dir.join(format!("{session_id}.jsonl")),
-            &content,
-        )
-        .unwrap();
+        fs::write(project_dir.join(format!("{session_id}.jsonl")), &content).unwrap();
 
         let sessions = load_all_sessions(tmp.path()).unwrap();
         assert_eq!(sessions.len(), 1);

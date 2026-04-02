@@ -77,14 +77,14 @@ pub struct ValidatedTurn {
     pub content_types: Vec<String>,
     pub is_agent: bool,
     pub agent_id: Option<String>,
-    pub user_text: Option<String>,       // 对应的用户消息文本（截断）
-    pub assistant_text: Option<String>,  // assistant 回复文本（截断）
-    pub tool_names: Vec<String>,         // 使用的工具名列表
+    pub user_text: Option<String>,      // 对应的用户消息文本（截断）
+    pub assistant_text: Option<String>, // assistant 回复文本（截断）
+    pub tool_names: Vec<String>,        // 使用的工具名列表
     pub service_tier: Option<String>,
     pub speed: Option<String>,
     pub inference_geo: Option<String>,
-    pub tool_error_count: usize,         // ToolResult blocks with is_error=true
-    pub git_branch: Option<String>,      // from the assistant entry's gitBranch field
+    pub tool_error_count: usize, // ToolResult blocks with is_error=true
+    pub git_branch: Option<String>, // from the assistant entry's gitBranch field
 }
 
 /// Aggregated data from a single session.
@@ -142,16 +142,16 @@ pub struct AttributionData {
 /// Metadata collected from non-assistant/user entries during parsing.
 #[derive(Debug, Default, Clone)]
 pub struct SessionMetadata {
-    pub title: Option<String>,              // custom-title > ai-title
+    pub title: Option<String>, // custom-title > ai-title
     pub tags: Vec<String>,
-    pub mode: Option<String>,               // last-wins
+    pub mode: Option<String>, // last-wins
     pub pr_links: Vec<PrLinkInfo>,
     pub speculation_accepts: usize,
     pub speculation_time_saved_ms: f64,
     pub queue_enqueues: usize,
     pub queue_dequeues: usize,
-    pub api_error_count: usize,             // assistant entries with api_error/error
-    pub user_prompt_count: usize,           // count of user entries
+    pub api_error_count: usize,   // assistant entries with api_error/error
+    pub user_prompt_count: usize, // count of user entries
     pub collapse_commits: Vec<CollapseCommit>,
     pub collapse_snapshot: Option<CollapseSnapshot>,
     pub attribution: Option<AttributionData>,
@@ -160,9 +160,8 @@ pub struct SessionMetadata {
 impl SessionData {
     /// All API responses (main + agent), sorted by timestamp.
     pub fn all_responses(&self) -> Vec<&ValidatedTurn> {
-        let mut all: Vec<&ValidatedTurn> = self.turns.iter()
-            .chain(self.agent_turns.iter())
-            .collect();
+        let mut all: Vec<&ValidatedTurn> =
+            self.turns.iter().chain(self.agent_turns.iter()).collect();
         all.sort_by_key(|r| r.timestamp);
         all
     }
@@ -313,8 +312,13 @@ mod tests {
             cc_session_jsonl::types::Entry::Assistant(msg) => {
                 let content = msg.message.unwrap().content.unwrap();
                 assert_eq!(content.len(), 2);
-                assert!(matches!(&content[0], cc_session_jsonl::types::ContentBlock::Thinking { thinking: Some(t), .. } if t.contains("analyze")));
-                assert!(matches!(&content[1], cc_session_jsonl::types::ContentBlock::Text { .. }));
+                assert!(
+                    matches!(&content[0], cc_session_jsonl::types::ContentBlock::Thinking { thinking: Some(t), .. } if t.contains("analyze"))
+                );
+                assert!(matches!(
+                    &content[1],
+                    cc_session_jsonl::types::ContentBlock::Text { .. }
+                ));
             }
             _ => panic!("expected Assistant variant"),
         }
@@ -359,8 +363,8 @@ mod tests {
                 web_fetch_requests: Some(1),
             }),
             service_tier: Some("standard".into()),
-            inference_geo: Some("us".into()),  // dropped in conversion
-            iterations: None,                  // dropped in conversion
+            inference_geo: Some("us".into()), // dropped in conversion
+            iterations: None,                 // dropped in conversion
             speed: Some("fast".into()),
         };
 

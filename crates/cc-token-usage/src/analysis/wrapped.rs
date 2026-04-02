@@ -35,11 +35,19 @@ impl DeveloperArchetype {
     pub fn description(&self) -> &'static str {
         match self {
             Self::Architect => "You love orchestrating multi-agent teams for complex tasks.",
-            Self::Sprinter => "Short, intense bursts of productivity — you get in, get it done, and get out.",
-            Self::NightOwl => "The best code is written after dark. Your peak hours are when the world sleeps.",
-            Self::Delegator => "You trust your agents more than yourself. Maximum delegation, maximum output.",
+            Self::Sprinter => {
+                "Short, intense bursts of productivity — you get in, get it done, and get out."
+            }
+            Self::NightOwl => {
+                "The best code is written after dark. Your peak hours are when the world sleeps."
+            }
+            Self::Delegator => {
+                "You trust your agents more than yourself. Maximum delegation, maximum output."
+            }
             Self::Explorer => "A polyglot of projects — always trying something new.",
-            Self::Marathoner => "You settle in for the long haul. Deep work sessions are your superpower.",
+            Self::Marathoner => {
+                "You settle in for the long haul. Deep work sessions are your superpower."
+            }
         }
     }
 }

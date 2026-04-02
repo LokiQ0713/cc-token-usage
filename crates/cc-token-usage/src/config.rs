@@ -37,13 +37,16 @@ impl Config {
         self.pricing_override
             .iter()
             .map(|(k, v)| {
-                (k.clone(), ModelPrice {
-                    base_input: v.base_input,
-                    cache_write_5m: v.cache_write_5m,
-                    cache_write_1h: v.cache_write_1h,
-                    cache_read: v.cache_read,
-                    output: v.output,
-                })
+                (
+                    k.clone(),
+                    ModelPrice {
+                        base_input: v.base_input,
+                        cache_write_5m: v.cache_write_5m,
+                        cache_write_1h: v.cache_write_1h,
+                        cache_read: v.cache_read,
+                        output: v.output,
+                    },
+                )
             })
             .collect()
     }

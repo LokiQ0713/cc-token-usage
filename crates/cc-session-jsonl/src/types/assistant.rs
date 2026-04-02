@@ -179,7 +179,10 @@ mod tests {
         assert_eq!(content.len(), 3);
 
         match &content[0] {
-            ContentBlock::Thinking { thinking, signature } => {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking.as_deref(), Some("Let me consider this..."));
                 assert_eq!(signature.as_deref(), Some("sig123"));
             }
@@ -262,8 +265,14 @@ mod tests {
 
         let entry: AssistantEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.api_error.as_deref(), Some("rate_limit_exceeded"));
-        assert_eq!(entry.error.as_deref(), Some("You have exceeded your rate limit"));
-        assert_eq!(entry.error_details.as_deref(), Some("Please wait 30 seconds"));
+        assert_eq!(
+            entry.error.as_deref(),
+            Some("You have exceeded your rate limit")
+        );
+        assert_eq!(
+            entry.error_details.as_deref(),
+            Some("Please wait 30 seconds")
+        );
         assert_eq!(entry.is_api_error_message, Some(true));
         assert!(entry.message.is_none());
     }
@@ -327,7 +336,11 @@ mod tests {
         }"#;
         let block: ContentBlock = serde_json::from_str(json).unwrap();
         match block {
-            ContentBlock::ToolResult { tool_use_id, content, is_error } => {
+            ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => {
                 assert_eq!(tool_use_id.as_deref(), Some("toolu_01ABC"));
                 assert!(content.is_some());
                 assert_eq!(is_error, Some(false));
@@ -338,10 +351,14 @@ mod tests {
 
     #[test]
     fn content_block_thinking() {
-        let json = r#"{"type": "thinking", "thinking": "Deep analysis...", "signature": "sig_xyz"}"#;
+        let json =
+            r#"{"type": "thinking", "thinking": "Deep analysis...", "signature": "sig_xyz"}"#;
         let block: ContentBlock = serde_json::from_str(json).unwrap();
         match block {
-            ContentBlock::Thinking { thinking, signature } => {
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => {
                 assert_eq!(thinking.as_deref(), Some("Deep analysis..."));
                 assert_eq!(signature.as_deref(), Some("sig_xyz"));
             }
@@ -426,7 +443,10 @@ mod tests {
             }
         }"#;
         let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.advisor_model.as_deref(), Some("claude-haiku-4-20250514"));
+        assert_eq!(
+            entry.advisor_model.as_deref(),
+            Some("claude-haiku-4-20250514")
+        );
     }
 
     // ── P0 missing tests (from QA review) ──

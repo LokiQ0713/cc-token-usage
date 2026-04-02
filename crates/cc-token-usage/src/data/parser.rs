@@ -5,11 +5,12 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use cc_session_jsonl::types::{
-    ApiMessage, AssistantEntry, ContentBlock, Entry, UserEntry,
-};
+use cc_session_jsonl::types::{ApiMessage, AssistantEntry, ContentBlock, Entry, UserEntry};
 
-use super::models::{AttributionData, CollapseCommit, CollapseSnapshot, DataQuality, PrLinkInfo, SessionMetadata, TokenUsage, ValidatedTurn};
+use super::models::{
+    AttributionData, CollapseCommit, CollapseSnapshot, DataQuality, PrLinkInfo, SessionMetadata,
+    TokenUsage, ValidatedTurn,
+};
 
 // ─── Pipeline Stage 1: JSON Parse (now via cc-session-jsonl) ──────────────
 
@@ -29,7 +30,9 @@ fn extract_user_text(user_entry: &UserEntry) -> Option<String> {
         arr.iter()
             .filter_map(|b| {
                 if b.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    b.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                    b.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| s.to_string())
                 } else {
                     None
                 }
@@ -116,10 +119,13 @@ fn validate_assistant(
     let usage: TokenUsage = lib_usage.into();
 
     // Timestamp validation
-    let timestamp_str = msg.timestamp.as_deref()
+    let timestamp_str = msg
+        .timestamp
+        .as_deref()
         .filter(|s| !s.is_empty())
         .ok_or(FilterReason::InvalidTimestamp)?;
-    let timestamp: DateTime<Utc> = timestamp_str.parse()
+    let timestamp: DateTime<Utc> = timestamp_str
+        .parse()
         .map_err(|_| FilterReason::InvalidTimestamp)?;
     if timestamp > now {
         return Err(FilterReason::InvalidTimestamp);
@@ -199,7 +205,12 @@ fn extract_content(content: &Option<Vec<ContentBlock>>) -> ContentExtraction {
         })
     };
 
-    ContentExtraction { content_types, assistant_text, tool_names, tool_error_count }
+    ContentExtraction {
+        content_types,
+        assistant_text,
+        tool_names,
+        tool_error_count,
+    }
 }
 
 // ─── Pipeline Stage 5: Streaming Deduplication ─────────────────────────────
@@ -231,9 +242,12 @@ fn dedup_by_request_id(turns: Vec<ValidatedTurn>) -> (Vec<ValidatedTurn>, usize)
 ///
 /// Pipeline: JSON parse → type filter → validation → content extraction → deduplication.
 /// Also collects metadata from non-assistant/user entries (titles, tags, mode, PR links, etc.).
-pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedTurn>, DataQuality, SessionMetadata)> {
-    let file =
-        File::open(path).with_context(|| format!("failed to open session file: {}", path.display()))?;
+pub fn parse_session_file(
+    path: &Path,
+    is_agent: bool,
+) -> Result<(Vec<ValidatedTurn>, DataQuality, SessionMetadata)> {
+    let file = File::open(path)
+        .with_context(|| format!("failed to open session file: {}", path.display()))?;
     let reader = BufReader::new(file);
 
     let mut quality = DataQuality::default();
@@ -245,7 +259,8 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
     let mut custom_title: Option<String> = None;
 
     for line_result in reader.lines() {
-        let line = line_result.with_context(|| format!("failed to read line from {}", path.display()))?;
+        let line =
+            line_result.with_context(|| format!("failed to read line from {}", path.display()))?;
         quality.total_lines += 1;
 
         // Stage 1: JSON parse (via cc-session-jsonl)
@@ -300,10 +315,20 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
                 continue;
             }
             Entry::PrLink(pr) => {
-                if let (Some(number), Some(url), Some(repo)) = (pr.pr_number, pr.pr_url, pr.pr_repository) {
+                if let (Some(number), Some(url), Some(repo)) =
+                    (pr.pr_number, pr.pr_url, pr.pr_repository)
+                {
                     // Avoid duplicate PR links
-                    if !metadata.pr_links.iter().any(|p| p.number == number && p.repository == repo) {
-                        metadata.pr_links.push(PrLinkInfo { number, url, repository: repo });
+                    if !metadata
+                        .pr_links
+                        .iter()
+                        .any(|p| p.number == number && p.repository == repo)
+                    {
+                        metadata.pr_links.push(PrLinkInfo {
+                            number,
+                            url,
+                            repository: repo,
+                        });
                     }
                 }
                 continue;
@@ -325,7 +350,10 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
                 let collapse_id = cc.collapse_id.unwrap_or_default();
                 let summary = cc.summary.unwrap_or_default();
                 if !collapse_id.is_empty() || !summary.is_empty() {
-                    metadata.collapse_commits.push(CollapseCommit { collapse_id, summary });
+                    metadata.collapse_commits.push(CollapseCommit {
+                        collapse_id,
+                        summary,
+                    });
                 }
                 continue;
             }
@@ -334,7 +362,11 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
                 let staged = cs.staged.unwrap_or_default();
                 let staged_count = staged.len();
                 let risks: Vec<f64> = staged.iter().filter_map(|s| s.risk).collect();
-                let avg_risk = if risks.is_empty() { 0.0 } else { risks.iter().sum::<f64>() / risks.len() as f64 };
+                let avg_risk = if risks.is_empty() {
+                    0.0
+                } else {
+                    risks.iter().sum::<f64>() / risks.len() as f64
+                };
                 let max_risk = risks.iter().cloned().fold(0.0f64, f64::max);
                 metadata.collapse_snapshot = Some(CollapseSnapshot {
                     staged_count,
@@ -348,15 +380,17 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
             Entry::AttributionSnapshot(a) => {
                 // last-wins semantics
                 let surface = a.surface.unwrap_or_default();
-                let (file_count, total_contribution) = if let Some(obj) = a.file_states.as_ref().and_then(|v| v.as_object()) {
-                    let fc = obj.len();
-                    let tc: u64 = obj.values()
-                        .filter_map(|v| v.get("claudeContribution")?.as_u64())
-                        .sum();
-                    (fc, tc)
-                } else {
-                    (0, 0)
-                };
+                let (file_count, total_contribution) =
+                    if let Some(obj) = a.file_states.as_ref().and_then(|v| v.as_object()) {
+                        let fc = obj.len();
+                        let tc: u64 = obj
+                            .values()
+                            .filter_map(|v| v.get("claudeContribution")?.as_u64())
+                            .sum();
+                        (fc, tc)
+                    } else {
+                        (0, 0)
+                    };
                 metadata.attribution = Some(AttributionData {
                     surface,
                     file_count,
@@ -373,9 +407,18 @@ pub fn parse_session_file(path: &Path, is_agent: bool) -> Result<(Vec<ValidatedT
         // Stage 3: Validation
         let fields = match validate_assistant(msg, is_agent, now) {
             Ok(f) => f,
-            Err(FilterReason::Sidechain) => { quality.skipped_sidechain += 1; continue; }
-            Err(FilterReason::Synthetic) => { quality.skipped_synthetic += 1; continue; }
-            Err(_) => { quality.skipped_invalid += 1; continue; }
+            Err(FilterReason::Sidechain) => {
+                quality.skipped_sidechain += 1;
+                continue;
+            }
+            Err(FilterReason::Synthetic) => {
+                quality.skipped_synthetic += 1;
+                continue;
+            }
+            Err(_) => {
+                quality.skipped_invalid += 1;
+                continue;
+            }
         };
 
         // Stage 4: Content extraction
@@ -491,7 +534,10 @@ mod tests {
         let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1);
-        assert_eq!(quality.skipped_parse_error, 0, "known entry types should not be parse errors");
+        assert_eq!(
+            quality.skipped_parse_error, 0,
+            "known entry types should not be parse errors"
+        );
         assert_eq!(quality.total_lines, 4);
     }
 
@@ -523,22 +569,42 @@ mod tests {
     #[test]
     fn dedup_preserves_last_entry() {
         let t1 = ValidatedTurn {
-            uuid: "u1".into(), request_id: Some("r1".into()),
+            uuid: "u1".into(),
+            request_id: Some("r1".into()),
             timestamp: "2026-03-16T10:00:00Z".parse().unwrap(),
-            model: "m".into(), usage: Default::default(), stop_reason: None,
-            content_types: vec![], is_agent: false, agent_id: None,
-            user_text: None, assistant_text: Some("first".into()), tool_names: vec![],
-            service_tier: None, speed: None, inference_geo: None,
-            tool_error_count: 0, git_branch: None,
+            model: "m".into(),
+            usage: Default::default(),
+            stop_reason: None,
+            content_types: vec![],
+            is_agent: false,
+            agent_id: None,
+            user_text: None,
+            assistant_text: Some("first".into()),
+            tool_names: vec![],
+            service_tier: None,
+            speed: None,
+            inference_geo: None,
+            tool_error_count: 0,
+            git_branch: None,
         };
         let t2 = ValidatedTurn {
-            uuid: "u2".into(), request_id: Some("r1".into()),
+            uuid: "u2".into(),
+            request_id: Some("r1".into()),
             timestamp: "2026-03-16T10:00:01Z".parse().unwrap(),
-            model: "m".into(), usage: Default::default(), stop_reason: None,
-            content_types: vec![], is_agent: false, agent_id: None,
-            user_text: None, assistant_text: Some("second".into()), tool_names: vec![],
-            service_tier: None, speed: None, inference_geo: None,
-            tool_error_count: 0, git_branch: None,
+            model: "m".into(),
+            usage: Default::default(),
+            stop_reason: None,
+            content_types: vec![],
+            is_agent: false,
+            agent_id: None,
+            user_text: None,
+            assistant_text: Some("second".into()),
+            tool_names: vec![],
+            service_tier: None,
+            speed: None,
+            inference_geo: None,
+            tool_error_count: 0,
+            git_branch: None,
         };
         let (result, dup) = dedup_by_request_id(vec![t1, t2]);
         assert_eq!(result.len(), 1);
@@ -549,14 +615,30 @@ mod tests {
     #[test]
     fn extract_content_handles_all_types() {
         let blocks = vec![
-            ContentBlock::Text { text: Some("hello".into()) },
-            ContentBlock::ToolUse { id: None, name: Some("Bash".into()), input: None },
-            ContentBlock::Thinking { thinking: Some("hmm".into()), signature: None },
-            ContentBlock::ToolResult { tool_use_id: None, content: None, is_error: None },
+            ContentBlock::Text {
+                text: Some("hello".into()),
+            },
+            ContentBlock::ToolUse {
+                id: None,
+                name: Some("Bash".into()),
+                input: None,
+            },
+            ContentBlock::Thinking {
+                thinking: Some("hmm".into()),
+                signature: None,
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: None,
+                content: None,
+                is_error: None,
+            },
             ContentBlock::Other,
         ];
         let extracted = extract_content(&Some(blocks));
-        assert_eq!(extracted.content_types, vec!["text", "tool_use", "thinking", "tool_result", "other"]);
+        assert_eq!(
+            extracted.content_types,
+            vec!["text", "tool_use", "thinking", "tool_result", "other"]
+        );
         assert_eq!(extracted.assistant_text.as_deref(), Some("hello"));
         assert_eq!(extracted.tool_names, vec!["Bash"]);
         assert_eq!(extracted.tool_error_count, 0);
@@ -565,9 +647,21 @@ mod tests {
     #[test]
     fn extract_content_counts_tool_errors() {
         let blocks = vec![
-            ContentBlock::ToolResult { tool_use_id: None, content: None, is_error: Some(true) },
-            ContentBlock::ToolResult { tool_use_id: None, content: None, is_error: Some(false) },
-            ContentBlock::ToolResult { tool_use_id: None, content: None, is_error: Some(true) },
+            ContentBlock::ToolResult {
+                tool_use_id: None,
+                content: None,
+                is_error: Some(true),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: None,
+                content: None,
+                is_error: Some(false),
+            },
+            ContentBlock::ToolResult {
+                tool_use_id: None,
+                content: None,
+                is_error: Some(true),
+            },
         ];
         let extracted = extract_content(&Some(blocks));
         assert_eq!(extracted.tool_error_count, 2);
@@ -577,7 +671,8 @@ mod tests {
     fn collects_metadata_from_entries() {
         let user = r#"{"type":"user","uuid":"u0","sessionId":"s1","message":{"role":"user","content":"hello"}}"#;
         let ai_title = r#"{"type":"ai-title","sessionId":"s1","aiTitle":"AI Generated Title"}"#;
-        let custom_title = r#"{"type":"custom-title","sessionId":"s1","customTitle":"My Custom Title"}"#;
+        let custom_title =
+            r#"{"type":"custom-title","sessionId":"s1","customTitle":"My Custom Title"}"#;
         let tag1 = r#"{"type":"tag","sessionId":"s1","tag":"bugfix"}"#;
         let tag2 = r#"{"type":"tag","sessionId":"s1","tag":"release"}"#;
         let mode = r#"{"type":"mode","sessionId":"s1","mode":"code"}"#;
@@ -586,7 +681,19 @@ mod tests {
         let enq = r#"{"type":"queue-operation","sessionId":"s1","operation":"enqueue","timestamp":"2026-03-16T10:00:00Z"}"#;
         let deq = r#"{"type":"queue-operation","sessionId":"s1","operation":"dequeue","timestamp":"2026-03-16T10:00:01Z"}"#;
 
-        let f = write_jsonl(&[user, ai_title, custom_title, tag1, tag2, mode, pr, spec, enq, deq, VALID_ASSISTANT]);
+        let f = write_jsonl(&[
+            user,
+            ai_title,
+            custom_title,
+            tag1,
+            tag2,
+            mode,
+            pr,
+            spec,
+            enq,
+            deq,
+            VALID_ASSISTANT,
+        ]);
         let (_turns, _quality, meta) = parse_session_file(f.path(), false).unwrap();
 
         // custom-title overrides ai-title

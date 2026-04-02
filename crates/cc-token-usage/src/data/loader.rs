@@ -50,7 +50,11 @@ fn request_id_set(turns: &[super::models::ValidatedTurn]) -> HashSet<String> {
 ///
 /// Claude Code writes agent responses to both the main session file and the
 /// agent file. We keep the main session's copy and skip duplicates from agents.
-fn merge_agent_turns(parent: &mut SessionData, agent_turns: Vec<super::models::ValidatedTurn>, quality: &DataQuality) {
+fn merge_agent_turns(
+    parent: &mut SessionData,
+    agent_turns: Vec<super::models::ValidatedTurn>,
+    quality: &DataQuality,
+) {
     let existing_rids = request_id_set(&parent.turns);
     let before = parent.agent_turns.len();
 
@@ -84,10 +88,9 @@ fn merge_agent_turns(parent: &mut SessionData, agent_turns: Vec<super::models::V
 /// 3. Parses main sessions first, then merges agent turns into their parents
 /// 4. Computes global time range and quality metrics
 pub fn load_all(claude_home: &Path) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    let mut files = scan_claude_home(claude_home)
-        .context("failed to scan claude home for session files")?;
-    resolve_agent_parents(&mut files)
-        .context("failed to resolve agent parent sessions")?;
+    let mut files =
+        scan_claude_home(claude_home).context("failed to scan claude home for session files")?;
+    resolve_agent_parents(&mut files).context("failed to resolve agent parent sessions")?;
     load_from_files(files)
 }
 
@@ -113,8 +116,7 @@ struct ParsedAgent {
 
 /// Shared loading logic: partition files, parse sessions in parallel, merge agents, compute time ranges.
 fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    let (main_files, agent_files): (Vec<_>, Vec<_>) =
-        files.into_iter().partition(|f| !f.is_agent);
+    let (main_files, agent_files): (Vec<_>, Vec<_>) = files.into_iter().partition(|f| !f.is_agent);
 
     let mut global_quality = GlobalDataQuality {
         total_session_files: main_files.len(),
@@ -153,17 +155,20 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
             + pm.quality.skipped_invalid
             + pm.quality.skipped_parse_error;
 
-        sessions.insert(pm.session_id.clone(), SessionData {
-            session_id: pm.session_id,
-            project: pm.project,
-            turns: pm.turns,
-            agent_turns: Vec::new(),
-            first_timestamp: pm.first_ts,
-            last_timestamp: pm.last_ts,
-            version: pm.version,
-            quality: pm.quality,
-            metadata: pm.metadata,
-        });
+        sessions.insert(
+            pm.session_id.clone(),
+            SessionData {
+                session_id: pm.session_id,
+                project: pm.project,
+                turns: pm.turns,
+                agent_turns: Vec::new(),
+                first_timestamp: pm.first_ts,
+                last_timestamp: pm.last_ts,
+                version: pm.version,
+                quality: pm.quality,
+                metadata: pm.metadata,
+            },
+        );
     }
 
     // ── Phase 2: Parse all agent files in parallel ────────────────────────
@@ -172,7 +177,10 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
         .map(|sf| {
             let (turns, quality, _agent_meta) = parse_session_file(&sf.path, true)
                 .with_context(|| format!("failed to parse agent file: {}", sf.path.display()))?;
-            let target_id = sf.parent_session_id.clone().unwrap_or_else(|| sf.session_id.clone());
+            let target_id = sf
+                .parent_session_id
+                .clone()
+                .unwrap_or_else(|| sf.session_id.clone());
             Ok(ParsedAgent {
                 target_id,
                 project: sf.project.clone(),
@@ -194,17 +202,20 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
 
         if !sessions.contains_key(&pa.target_id) {
             let project = pa.project.or_else(|| Some("(orphan)".to_string()));
-            sessions.insert(pa.target_id.clone(), SessionData {
-                session_id: pa.target_id.clone(),
-                project,
-                turns: Vec::new(),
-                agent_turns: Vec::new(),
-                first_timestamp: None,
-                last_timestamp: None,
-                version: None,
-                quality: DataQuality::default(),
-                metadata: SessionMetadata::default(),
-            });
+            sessions.insert(
+                pa.target_id.clone(),
+                SessionData {
+                    session_id: pa.target_id.clone(),
+                    project,
+                    turns: Vec::new(),
+                    agent_turns: Vec::new(),
+                    first_timestamp: None,
+                    last_timestamp: None,
+                    version: None,
+                    quality: DataQuality::default(),
+                    metadata: SessionMetadata::default(),
+                },
+            );
             global_quality.orphan_agents += 1;
         }
 

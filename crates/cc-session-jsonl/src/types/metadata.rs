@@ -141,7 +141,10 @@ mod tests {
         match entry {
             Entry::AiTitle(at) => {
                 assert_eq!(at.session_id.as_deref(), Some("sess-002"));
-                assert_eq!(at.ai_title.as_deref(), Some("Debugging memory leak in parser"));
+                assert_eq!(
+                    at.ai_title.as_deref(),
+                    Some("Debugging memory leak in parser")
+                );
             }
             other => panic!("Expected AiTitle, got: {other:?}"),
         }
@@ -158,7 +161,10 @@ mod tests {
         match entry {
             Entry::LastPrompt(lp) => {
                 assert_eq!(lp.session_id.as_deref(), Some("sess-003"));
-                assert_eq!(lp.last_prompt.as_deref(), Some("Refactor the authentication module"));
+                assert_eq!(
+                    lp.last_prompt.as_deref(),
+                    Some("Refactor the authentication module")
+                );
             }
             other => panic!("Expected LastPrompt, got: {other:?}"),
         }
@@ -245,7 +251,10 @@ mod tests {
         match entry {
             Entry::AgentSetting(asetting) => {
                 assert_eq!(asetting.session_id.as_deref(), Some("sess-008"));
-                assert_eq!(asetting.agent_setting.as_deref(), Some("custom-agent-definition"));
+                assert_eq!(
+                    asetting.agent_setting.as_deref(),
+                    Some("custom-agent-definition")
+                );
             }
             other => panic!("Expected AgentSetting, got: {other:?}"),
         }
@@ -266,7 +275,10 @@ mod tests {
             Entry::PrLink(pr) => {
                 assert_eq!(pr.session_id.as_deref(), Some("sess-009"));
                 assert_eq!(pr.pr_number, Some(42));
-                assert_eq!(pr.pr_url.as_deref(), Some("https://github.com/user/repo/pull/42"));
+                assert_eq!(
+                    pr.pr_url.as_deref(),
+                    Some("https://github.com/user/repo/pull/42")
+                );
                 assert_eq!(pr.pr_repository.as_deref(), Some("user/repo"));
                 assert_eq!(pr.timestamp.as_deref(), Some("2026-03-16T16:00:00Z"));
             }

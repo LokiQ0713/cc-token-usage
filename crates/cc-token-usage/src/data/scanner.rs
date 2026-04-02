@@ -54,7 +54,10 @@ mod tests {
     #[test]
     fn scan_finds_all_session_types() {
         let tmp = setup_claude_home();
-        let project_dir = tmp.path().join("projects").join("-Users-testuser-myproject");
+        let project_dir = tmp
+            .path()
+            .join("projects")
+            .join("-Users-testuser-myproject");
         fs::create_dir_all(&project_dir).unwrap();
 
         // Type 1: main session
@@ -83,7 +86,11 @@ mod tests {
 
         let files = scan_claude_home(tmp.path()).unwrap();
 
-        assert_eq!(files.len(), 3, "should find 3 session files, found: {files:?}");
+        assert_eq!(
+            files.len(),
+            3,
+            "should find 3 session files, found: {files:?}"
+        );
 
         let main = files.iter().find(|f| f.session_id == main_uuid).unwrap();
         assert!(!main.is_agent);
@@ -111,7 +118,10 @@ mod tests {
     #[test]
     fn agent_has_parent_session_id() {
         let tmp = setup_claude_home();
-        let project_dir = tmp.path().join("projects").join("-Users-testuser-myproject");
+        let project_dir = tmp
+            .path()
+            .join("projects")
+            .join("-Users-testuser-myproject");
         let parent_uuid = "11111111-2222-3333-4444-555555555555";
         let subagents_dir = project_dir.join(parent_uuid).join("subagents");
         fs::create_dir_all(&subagents_dir).unwrap();
