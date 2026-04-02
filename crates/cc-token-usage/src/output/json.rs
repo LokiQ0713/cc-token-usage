@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+
+use chrono::Datelike;
 use serde::Serialize;
 
 use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
+use crate::data::models::SessionData;
+use crate::pricing::calculator::PricingCalculator;
 
 // ─── Overview JSON ──────────────────────────────────────────────────────────
 
@@ -364,4 +369,206 @@ pub fn render_trend_json(trend: &TrendResult) -> String {
 
 pub fn render_wrapped_json(result: &WrappedResult) -> String {
     serde_json::to_string_pretty(result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+// ─── Unified HTML Report Payload ───────────────────────────────────────────
+
+/// Unified JSON payload for the HTML dashboard.
+/// Combines data from all subcommands into a single structure.
+#[derive(Serialize)]
+pub struct HtmlReportPayload {
+    pub overview: serde_json::Value,
+    pub projects: serde_json::Value,
+    pub trends: serde_json::Value,
+    pub sessions: Vec<HtmlSessionSummary>,
+    pub heatmap: HeatmapPayload,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrapped: Option<serde_json::Value>,
+}
+
+/// Per-session summary for the HTML dashboard.
+#[derive(Serialize)]
+pub struct HtmlSessionSummary {
+    pub id: String,
+    pub project: Option<String>,
+    pub turns: usize,
+    pub agent_turns: usize,
+    pub cost: f64,
+    pub duration_minutes: Option<f64>,
+    pub model: Option<String>,
+    pub cache_hit_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_timestamp: Option<String>,
+    // metadata
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub mode: Option<String>,
+}
+
+/// Heatmap data for the HTML dashboard.
+#[derive(Serialize)]
+pub struct HeatmapPayload {
+    pub days: Vec<DailyActivity>,
+}
+
+/// A single day's aggregated activity metrics.
+#[derive(Serialize)]
+pub struct DailyActivity {
+    pub date: String,
+    pub turns: usize,
+    pub cost: f64,
+    pub sessions: usize,
+}
+
+/// Build the unified HTML report payload.
+///
+/// Reuses existing `render_*_json` functions for overview/projects/trend,
+/// then builds session summaries and heatmap data directly from `SessionData`.
+pub fn render_html_payload(
+    overview: &OverviewResult,
+    projects: &ProjectResult,
+    trend: &TrendResult,
+    sessions: &[SessionData],
+    calc: &PricingCalculator,
+    wrapped: Option<&WrappedResult>,
+) -> String {
+    // Reuse existing JSON renderers and parse back into serde_json::Value
+    let overview_json: serde_json::Value = serde_json::from_str(&render_overview_json(overview))
+        .unwrap_or(serde_json::Value::Null);
+    let projects_json: serde_json::Value = serde_json::from_str(&render_projects_json(projects))
+        .unwrap_or(serde_json::Value::Null);
+    let trends_json: serde_json::Value = serde_json::from_str(&render_trend_json(trend))
+        .unwrap_or(serde_json::Value::Null);
+
+    // Build per-session summaries
+    let session_summaries: Vec<HtmlSessionSummary> = sessions
+        .iter()
+        .map(|s| build_html_session_summary(s, calc))
+        .collect();
+
+    // Build heatmap by aggregating sessions per date
+    let heatmap = build_heatmap(sessions, calc);
+
+    // Build wrapped data if available
+    let wrapped_json: Option<serde_json::Value> = wrapped.and_then(|w| {
+        serde_json::from_str(&render_wrapped_json(w)).ok()
+    });
+
+    let payload = HtmlReportPayload {
+        overview: overview_json,
+        projects: projects_json,
+        trends: trends_json,
+        sessions: session_summaries,
+        heatmap,
+        wrapped: wrapped_json,
+    };
+
+    serde_json::to_string(&payload).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
+/// Build an `HtmlSessionSummary` from a single `SessionData`.
+fn build_html_session_summary(session: &SessionData, calc: &PricingCalculator) -> HtmlSessionSummary {
+    let all = session.all_responses();
+    let turn_count = all.len();
+    let agent_turn_count = session.agent_turn_count();
+
+    // Compute total cost and cache hit rate
+    let mut total_cost = 0.0;
+    let mut total_cache_read: u64 = 0;
+    let mut total_context: u64 = 0;
+    let mut model_counts: HashMap<&str, usize> = HashMap::new();
+
+    for turn in &all {
+        let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
+        total_cost += cost.total;
+
+        let input = turn.usage.input_tokens.unwrap_or(0);
+        let cache_create = turn.usage.cache_creation_input_tokens.unwrap_or(0);
+        let cache_read = turn.usage.cache_read_input_tokens.unwrap_or(0);
+        let ctx = input + cache_create + cache_read;
+
+        total_context += ctx;
+        total_cache_read += cache_read;
+
+        *model_counts.entry(&turn.model).or_insert(0) += 1;
+    }
+
+    let cache_hit_rate = if total_context > 0 {
+        Some((total_cache_read as f64 / total_context as f64) * 100.0)
+    } else {
+        None
+    };
+
+    let primary_model = model_counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(m, _)| m.to_string());
+
+    let duration_minutes = match (session.first_timestamp, session.last_timestamp) {
+        (Some(first), Some(last)) => Some((last - first).num_seconds() as f64 / 60.0),
+        _ => None,
+    };
+
+    HtmlSessionSummary {
+        id: session.session_id.clone(),
+        project: session.project.clone(),
+        turns: turn_count,
+        agent_turns: agent_turn_count,
+        cost: total_cost,
+        duration_minutes,
+        model: primary_model,
+        cache_hit_rate,
+        first_timestamp: session.first_timestamp.map(|t| t.to_rfc3339()),
+        last_timestamp: session.last_timestamp.map(|t| t.to_rfc3339()),
+        title: session.metadata.title.clone(),
+        tags: session.metadata.tags.clone(),
+        mode: session.metadata.mode.clone(),
+    }
+}
+
+/// Aggregate sessions by date to build heatmap data.
+fn build_heatmap(sessions: &[SessionData], calc: &PricingCalculator) -> HeatmapPayload {
+    let mut daily_map: HashMap<String, (usize, f64, usize)> = HashMap::new(); // date -> (turns, cost, sessions)
+
+    for session in sessions {
+        // Use first_timestamp to determine the session's date
+        let date_key = match session.first_timestamp {
+            Some(ts) => {
+                let local = ts.with_timezone(&chrono::Local);
+                format!("{:04}-{:02}-{:02}", local.year(), local.month(), local.day())
+            }
+            None => continue,
+        };
+
+        let all = session.all_responses();
+        let turn_count = all.len();
+        let mut session_cost = 0.0;
+        for turn in &all {
+            let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
+            session_cost += cost.total;
+        }
+
+        let entry = daily_map.entry(date_key).or_insert((0, 0.0, 0));
+        entry.0 += turn_count;
+        entry.1 += session_cost;
+        entry.2 += 1;
+    }
+
+    let mut days: Vec<DailyActivity> = daily_map
+        .into_iter()
+        .map(|(date, (turns, cost, session_count))| DailyActivity {
+            date,
+            turns,
+            cost,
+            sessions: session_count,
+        })
+        .collect();
+
+    // Sort by date ascending
+    days.sort_by(|a, b| a.date.cmp(&b.date));
+
+    HeatmapPayload { days }
 }

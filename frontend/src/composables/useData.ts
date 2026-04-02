@@ -1,0 +1,330 @@
+import { reactive } from 'vue'
+import type { DashboardData } from '../types'
+
+function generateHeatmapMock(): { date: string; turns: number; cost: number; sessions: number }[] {
+  const days: { date: string; turns: number; cost: number; sessions: number }[] = []
+  const end = new Date('2026-04-02')
+  const start = new Date('2026-01-01')
+  const seed = 42
+  // Simple seeded pseudo-random
+  let s = seed
+  function rand() {
+    s = (s * 1103515245 + 12345) & 0x7fffffff
+    return s / 0x7fffffff
+  }
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().slice(0, 10)
+    const dow = d.getDay() // 0=Sun
+    const r = rand()
+    // ~25% chance of inactive day
+    if (r < 0.25) {
+      days.push({ date: dateStr, turns: 0, cost: 0, sessions: 0 })
+      continue
+    }
+    // Weekend tends to be more active (night owl pattern)
+    const weekendBoost = (dow === 0 || dow === 6) ? 1.5 : 1.0
+    const baseTurns = Math.floor(rand() * 120 * weekendBoost) + 5
+    // Occasional high-activity days
+    const spike = rand() > 0.9 ? 3.0 : 1.0
+    const turns = Math.floor(baseTurns * spike)
+    const costPerTurn = 0.08 + rand() * 0.25
+    const cost = Math.round(turns * costPerTurn * 100) / 100
+    const sessions = Math.max(1, Math.floor(turns / (15 + rand() * 30)))
+    days.push({ date: dateStr, turns, cost, sessions })
+  }
+  return days
+}
+
+function getMockData(): DashboardData {
+  return {
+    overview: {
+      total_sessions: 142,
+      total_turns: 8_547,
+      total_agent_turns: 4_359,
+      total_output_tokens: 2_134_567,
+      total_context_tokens: 891_234_567,
+      total_cost: 1595.42,
+      avg_cache_hit_rate: 87.3,
+      output_ratio: 0.24,
+      cost_per_turn: 0.187,
+      tokens_per_output_turn: 1_245,
+      cache_savings: {
+        total_saved: 8503.10,
+        savings_pct: 84.2,
+      },
+      subscription_value: {
+        monthly_price: 200,
+        api_equivalent: 1595.42,
+        value_multiplier: 7.98,
+      },
+      cost_by_category: {
+        input_cost: 6.06,
+        output_cost: 207.34,
+        cache_write_cost: 441.23,
+        cache_read_cost: 940.79,
+      },
+      models: [
+        { name: 'claude-opus-4-6', output_tokens: 1_800_000, turns: 6200, cost: 1459.12 },
+        { name: 'claude-sonnet-4', output_tokens: 200_000, turns: 1800, cost: 98.45 },
+        { name: 'claude-haiku-3.5', output_tokens: 134_567, turns: 547, cost: 18.32 },
+      ],
+      top_tools: [
+        { name: 'Bash', count: 6274 },
+        { name: 'Read', count: 3891 },
+        { name: 'Edit', count: 2456 },
+        { name: 'Write', count: 1823 },
+        { name: 'Grep', count: 1567 },
+        { name: 'Glob', count: 987 },
+        { name: 'ToolSearch', count: 238 },
+      ],
+      sessions: [
+        {
+          session_id: 'abc123',
+          project: 'cc-token-analyzer',
+          first_timestamp: '2025-12-01T10:30:00Z',
+          duration_minutes: 45.2,
+          model: 'claude-opus-4-6',
+          turn_count: 87,
+          agent_turn_count: 42,
+          output_tokens: 45_000,
+          context_tokens: 12_345_678,
+          max_context: 890_000,
+          cache_hit_rate: 91.2,
+          cost: 62.39,
+          output_ratio: 0.36,
+          cost_per_turn: 0.717,
+        },
+        {
+          session_id: 'def456',
+          project: 'my-web-app',
+          first_timestamp: '2025-12-02T14:15:00Z',
+          duration_minutes: 22.8,
+          model: 'claude-sonnet-4',
+          turn_count: 34,
+          agent_turn_count: 12,
+          output_tokens: 18_000,
+          context_tokens: 4_567_890,
+          max_context: 450_000,
+          cache_hit_rate: 85.4,
+          cost: 12.87,
+          output_ratio: 0.39,
+          cost_per_turn: 0.378,
+        },
+        {
+          session_id: 'ghi789',
+          project: 'cc-token-analyzer',
+          first_timestamp: '2025-12-03T09:00:00Z',
+          duration_minutes: 120.5,
+          model: 'claude-opus-4-6',
+          turn_count: 210,
+          agent_turn_count: 130,
+          output_tokens: 98_000,
+          context_tokens: 45_000_000,
+          max_context: 395_000,
+          cache_hit_rate: 93.5,
+          cost: 178.42,
+          output_ratio: 0.22,
+          cost_per_turn: 0.849,
+        },
+        {
+          session_id: 'jkl012',
+          project: 'rust-lib',
+          first_timestamp: '2025-12-04T16:20:00Z',
+          duration_minutes: 38.0,
+          model: 'claude-opus-4-6',
+          turn_count: 55,
+          agent_turn_count: 28,
+          output_tokens: 22_000,
+          context_tokens: 8_900_000,
+          max_context: 320_000,
+          cache_hit_rate: 88.1,
+          cost: 35.20,
+          output_ratio: 0.25,
+          cost_per_turn: 0.640,
+        },
+        {
+          session_id: 'mno345',
+          project: 'my-web-app',
+          first_timestamp: '2025-12-05T11:45:00Z',
+          duration_minutes: 15.3,
+          model: 'claude-haiku-3.5',
+          turn_count: 18,
+          agent_turn_count: 5,
+          output_tokens: 8_500,
+          context_tokens: 2_100_000,
+          max_context: 180_000,
+          cache_hit_rate: 82.0,
+          cost: 3.15,
+          output_ratio: 0.40,
+          cost_per_turn: 0.175,
+        },
+        {
+          session_id: 'pqr678',
+          project: 'api-gateway',
+          first_timestamp: '2025-12-06T08:00:00Z',
+          duration_minutes: 52.1,
+          model: 'claude-sonnet-4',
+          turn_count: 65,
+          agent_turn_count: 22,
+          output_tokens: 28_000,
+          context_tokens: 9_800_000,
+          max_context: 380_000,
+          cache_hit_rate: 89.3,
+          cost: 42.10,
+          output_ratio: 0.29,
+          cost_per_turn: 0.648,
+        },
+        {
+          session_id: 'stu901',
+          project: 'api-gateway',
+          first_timestamp: '2025-12-07T13:30:00Z',
+          duration_minutes: 28.6,
+          model: 'claude-sonnet-4',
+          turn_count: 38,
+          agent_turn_count: 10,
+          output_tokens: 14_200,
+          context_tokens: 5_200_000,
+          max_context: 290_000,
+          cache_hit_rate: 86.7,
+          cost: 18.50,
+          output_ratio: 0.27,
+          cost_per_turn: 0.487,
+        },
+        {
+          session_id: 'vwx234',
+          project: 'mobile-app',
+          first_timestamp: '2025-12-08T10:15:00Z',
+          duration_minutes: 65.0,
+          model: 'claude-opus-4-6',
+          turn_count: 72,
+          agent_turn_count: 35,
+          output_tokens: 32_000,
+          context_tokens: 14_500_000,
+          max_context: 410_000,
+          cache_hit_rate: 90.1,
+          cost: 52.40,
+          output_ratio: 0.22,
+          cost_per_turn: 0.728,
+        },
+        {
+          session_id: 'yza567',
+          project: 'rust-lib',
+          first_timestamp: '2025-12-09T15:40:00Z',
+          duration_minutes: 18.5,
+          model: 'claude-opus-4-6',
+          turn_count: 24,
+          agent_turn_count: 14,
+          output_tokens: 11_000,
+          context_tokens: 3_600_000,
+          max_context: 250_000,
+          cache_hit_rate: 87.5,
+          cost: 15.80,
+          output_ratio: 0.31,
+          cost_per_turn: 0.658,
+        },
+        {
+          session_id: 'bcd890',
+          project: 'cc-token-analyzer',
+          first_timestamp: '2025-12-10T20:00:00Z',
+          duration_minutes: 95.3,
+          model: 'claude-opus-4-6',
+          turn_count: 156,
+          agent_turn_count: 88,
+          output_tokens: 72_000,
+          context_tokens: 34_000_000,
+          max_context: 385_000,
+          cache_hit_rate: 94.0,
+          cost: 142.18,
+          output_ratio: 0.21,
+          cost_per_turn: 0.911,
+        },
+      ],
+    },
+    trends: {
+      group_label: 'Daily',
+      entries: [
+        // 30 days of realistic data (modeled from real usage: cost $0.13~$329, turns 1~3019)
+        { label: '2026-03-03', session_count: 1,  turn_count: 8,    output_tokens: 850,     context_tokens: 190660,     cost: 0.21,    cost_per_turn: 0.026 },
+        { label: '2026-03-04', session_count: 1,  turn_count: 77,   output_tokens: 30168,   context_tokens: 3973107,    cost: 3.43,    cost_per_turn: 0.045 },
+        { label: '2026-03-05', session_count: 2,  turn_count: 9,    output_tokens: 3968,    context_tokens: 244684,     cost: 0.61,    cost_per_turn: 0.068 },
+        { label: '2026-03-06', session_count: 1,  turn_count: 3,    output_tokens: 420,     context_tokens: 32000,      cost: 0.13,    cost_per_turn: 0.043 },
+        { label: '2026-03-07', session_count: 1,  turn_count: 1,    output_tokens: 600,     context_tokens: 11569,      cost: 0.13,    cost_per_turn: 0.131 },
+        { label: '2026-03-08', session_count: 22, turn_count: 799,  output_tokens: 341774,  context_tokens: 55037543,   cost: 58.08,   cost_per_turn: 0.073 },
+        { label: '2026-03-09', session_count: 5,  turn_count: 272,  output_tokens: 354888,  context_tokens: 19576161,   cost: 32.06,   cost_per_turn: 0.118 },
+        { label: '2026-03-10', session_count: 3,  turn_count: 42,   output_tokens: 18500,   context_tokens: 2100000,    cost: 4.20,    cost_per_turn: 0.100 },
+        { label: '2026-03-11', session_count: 2,  turn_count: 216,  output_tokens: 125256,  context_tokens: 16584214,   cost: 12.59,   cost_per_turn: 0.058 },
+        { label: '2026-03-12', session_count: 20, turn_count: 132,  output_tokens: 37928,   context_tokens: 7768397,    cost: 6.53,    cost_per_turn: 0.049 },
+        { label: '2026-03-13', session_count: 4,  turn_count: 88,   output_tokens: 42000,   context_tokens: 5600000,    cost: 7.90,    cost_per_turn: 0.090 },
+        { label: '2026-03-14', session_count: 58, turn_count: 1024, output_tokens: 315643,  context_tokens: 45837582,   cost: 36.45,   cost_per_turn: 0.036 },
+        { label: '2026-03-15', session_count: 15, turn_count: 813,  output_tokens: 530675,  context_tokens: 73438539,   cost: 72.66,   cost_per_turn: 0.089 },
+        { label: '2026-03-16', session_count: 11, turn_count: 490,  output_tokens: 247127,  context_tokens: 48862846,   cost: 41.97,   cost_per_turn: 0.086 },
+        { label: '2026-03-17', session_count: 17, turn_count: 597,  output_tokens: 197090,  context_tokens: 115842388,  cost: 66.92,   cost_per_turn: 0.112 },
+        { label: '2026-03-18', session_count: 4,  turn_count: 422,  output_tokens: 158619,  context_tokens: 125837872,  cost: 73.93,   cost_per_turn: 0.175 },
+        { label: '2026-03-19', session_count: 3,  turn_count: 142,  output_tokens: 110468,  context_tokens: 5563938,    cost: 8.93,    cost_per_turn: 0.063 },
+        { label: '2026-03-20', session_count: 4,  turn_count: 72,   output_tokens: 110308,  context_tokens: 5829892,    cost: 6.28,    cost_per_turn: 0.087 },
+        { label: '2026-03-21', session_count: 24, turn_count: 3019, output_tokens: 1306004, context_tokens: 472548611,  cost: 328.85,  cost_per_turn: 0.109 },
+        { label: '2026-03-22', session_count: 16, turn_count: 2319, output_tokens: 798898,  context_tokens: 163612093,  cost: 109.33,  cost_per_turn: 0.047 },
+        { label: '2026-03-23', session_count: 12, turn_count: 479,  output_tokens: 164534,  context_tokens: 50885920,   cost: 42.27,   cost_per_turn: 0.088 },
+        { label: '2026-03-24', session_count: 10, turn_count: 643,  output_tokens: 196579,  context_tokens: 58403121,   cost: 43.59,   cost_per_turn: 0.068 },
+        { label: '2026-03-25', session_count: 4,  turn_count: 378,  output_tokens: 201710,  context_tokens: 38497291,   cost: 33.09,   cost_per_turn: 0.088 },
+        { label: '2026-03-26', session_count: 2,  turn_count: 398,  output_tokens: 413411,  context_tokens: 25234044,   cost: 33.41,   cost_per_turn: 0.084 },
+        { label: '2026-03-27', session_count: 6,  turn_count: 316,  output_tokens: 200363,  context_tokens: 19990343,   cost: 25.73,   cost_per_turn: 0.081 },
+        { label: '2026-03-28', session_count: 11, turn_count: 1306, output_tokens: 514264,  context_tokens: 178886792,  cost: 119.99,  cost_per_turn: 0.092 },
+        { label: '2026-03-29', session_count: 7,  turn_count: 987,  output_tokens: 364276,  context_tokens: 140283543,  cost: 110.62,  cost_per_turn: 0.112 },
+        { label: '2026-03-30', session_count: 2,  turn_count: 300,  output_tokens: 143470,  context_tokens: 27097923,   cost: 24.21,   cost_per_turn: 0.081 },
+        { label: '2026-03-31', session_count: 4,  turn_count: 788,  output_tokens: 581306,  context_tokens: 58911990,   cost: 62.88,   cost_per_turn: 0.080 },
+        { label: '2026-04-01', session_count: 14, turn_count: 2704, output_tokens: 1157526, context_tokens: 244162190,  cost: 189.95,  cost_per_turn: 0.070 },
+      ],
+    },
+    projects: {
+      projects: [
+        { name: 'cc-token-analyzer', display_name: 'cc-token-analyzer', session_count: 45, total_turns: 3200, agent_turns: 1800, output_tokens: 890000, context_tokens: 345000000, cost: 812.50, primary_model: 'claude-opus-4-6' },
+        { name: 'my-web-app', display_name: 'my-web-app', session_count: 28, total_turns: 1800, agent_turns: 600, output_tokens: 420000, context_tokens: 180000000, cost: 298.30, primary_model: 'claude-sonnet-4' },
+        { name: 'rust-lib', display_name: 'rust-lib', session_count: 12, total_turns: 800, agent_turns: 400, output_tokens: 210000, context_tokens: 95000000, cost: 164.20, primary_model: 'claude-opus-4-6' },
+        { name: 'api-gateway', display_name: 'api-gateway', session_count: 8, total_turns: 520, agent_turns: 180, output_tokens: 145000, context_tokens: 62000000, cost: 98.70, primary_model: 'claude-sonnet-4' },
+        { name: 'mobile-app', display_name: 'mobile-app', session_count: 5, total_turns: 310, agent_turns: 90, output_tokens: 85000, context_tokens: 38000000, cost: 52.40, primary_model: 'claude-opus-4-6' },
+      ],
+    },
+    wrapped: {
+      year: 2025,
+      active_days: 189,
+      total_days: 365,
+      longest_streak: 23,
+      ghost_days: 176,
+      total_sessions: 142,
+      total_turns: 8547,
+      total_agent_turns: 4359,
+      total_output_tokens: 2134567,
+      total_input_tokens: 891234567,
+      total_cost: 1595.42,
+      autonomy_ratio: 3.2,
+      avg_session_duration_min: 38.5,
+      avg_cost_per_session: 11.24,
+      output_ratio: 0.24,
+      peak_hour: 22,
+      peak_weekday: 'Wednesday',
+      hourly_distribution: [5,3,2,1,0,0,1,3,8,12,15,18,20,22,19,16,14,11,9,13,17,21,19,8],
+      weekday_distribution: [18,32,28,35,31,24,12],
+      top_projects: [['cc-token-analyzer', 812.50], ['my-web-app', 298.30], ['rust-lib', 164.20]],
+      top_tools: [['Bash', 6274], ['Read', 3891], ['Edit', 2456]],
+      most_expensive_session: ['abc123', 62.39, 'cc-token-analyzer'],
+      longest_session: ['xyz789', 180.5, 'my-web-app'],
+      model_distribution: [['claude-opus-4-6', 6200], ['claude-sonnet-4', 1800], ['claude-haiku-3.5', 547]],
+      archetype: 'Architect',
+      total_pr_count: 34,
+      total_speculation_time_saved_ms: 45000,
+      total_collapse_count: 132,
+    },
+    heatmap: {
+      days: generateHeatmapMock(),
+    },
+  }
+}
+
+export function useData() {
+  const raw = (window as any).__CC_DATA__
+  const data: DashboardData =
+    typeof raw === 'string' ? getMockData() : raw
+
+  return reactive({ data })
+}
