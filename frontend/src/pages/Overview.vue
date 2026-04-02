@@ -102,8 +102,8 @@ const projectTooltipExtra = computed(() => {
   const result: Record<number, string[]> = {}
   projectsSorted.value.forEach((p, i) => {
     result[i] = [
-      `${p.session_count} sessions`,
-      `${p.total_turns.toLocaleString()} turns`,
+      `${p.session_count} ${t('common.sessions')}`,
+      `${p.total_turns.toLocaleString()} ${t('common.turns')}`,
     ]
   })
   return result

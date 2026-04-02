@@ -194,7 +194,7 @@ function round4(n: number): number {
         bar-color="#3b82f6"
         line-color="#f59e0b"
         :format-bar="(v: number) => formatCost(v)"
-        :format-line="(v: number) => v.toLocaleString() + ' turns'"
+        :format-line="(v: number) => v.toLocaleString() + ' ' + t('common.turns')"
         :bar-y-label="t('trends.cost')"
         :line-y-label="t('trends.turns')"
         :extreme-indices="extremeIndices"

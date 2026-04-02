@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use chrono::Datelike;
 use serde::Serialize;
 
+use crate::analysis::project::project_display_name;
 use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
 use crate::data::models::SessionData;
@@ -91,7 +92,8 @@ struct SessionSummaryJson {
     cost_per_turn: f64,
 }
 
-pub fn render_overview_json(overview: &OverviewResult) -> String {
+/// Build the typed `OverviewJson` struct from an `OverviewResult`.
+fn build_overview_json(overview: &OverviewResult) -> OverviewJson {
     let mut models: Vec<(&String, &crate::analysis::AggregatedTokens)> =
         overview.tokens_by_model.iter().collect();
     models.sort_by(|a, b| {
@@ -143,7 +145,7 @@ pub fn render_overview_json(overview: &OverviewResult) -> String {
 
     let cat = &overview.cost_by_category;
 
-    let json = OverviewJson {
+    OverviewJson {
         total_sessions: overview.total_sessions,
         total_turns: overview.total_turns,
         total_agent_turns: overview.total_agent_turns,
@@ -175,8 +177,11 @@ pub fn render_overview_json(overview: &OverviewResult) -> String {
         models: models_json,
         top_tools,
         sessions,
-    };
+    }
+}
 
+pub fn render_overview_json(overview: &OverviewResult) -> String {
+    let json = build_overview_json(overview);
     serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
@@ -297,8 +302,9 @@ struct ProjectJson {
     primary_model: String,
 }
 
-pub fn render_projects_json(projects: &ProjectResult) -> String {
-    let json = ProjectsJson {
+/// Build the typed `ProjectsJson` struct from a `ProjectResult`.
+fn build_projects_json(projects: &ProjectResult) -> ProjectsJson {
+    ProjectsJson {
         projects: projects
             .projects
             .iter()
@@ -314,8 +320,11 @@ pub fn render_projects_json(projects: &ProjectResult) -> String {
                 primary_model: p.primary_model.clone(),
             })
             .collect(),
-    };
+    }
+}
 
+pub fn render_projects_json(projects: &ProjectResult) -> String {
+    let json = build_projects_json(projects);
     serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
@@ -338,8 +347,9 @@ struct TrendEntryJson {
     cost_per_turn: f64,
 }
 
-pub fn render_trend_json(trend: &TrendResult) -> String {
-    let json = TrendJson {
+/// Build the typed `TrendJson` struct from a `TrendResult`.
+fn build_trend_json(trend: &TrendResult) -> TrendJson {
+    TrendJson {
         group_label: trend.group_label.clone(),
         entries: trend
             .entries
@@ -361,8 +371,11 @@ pub fn render_trend_json(trend: &TrendResult) -> String {
                 }
             })
             .collect(),
-    };
+    }
+}
 
+pub fn render_trend_json(trend: &TrendResult) -> String {
+    let json = build_trend_json(trend);
     serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
@@ -439,13 +452,13 @@ pub fn render_html_payload(
     wrapped: Option<&WrappedResult>,
     active_session_id: Option<&str>,
 ) -> String {
-    // Reuse existing JSON renderers and parse back into serde_json::Value
+    // Build typed structs and convert directly to serde_json::Value
     let overview_json: serde_json::Value =
-        serde_json::from_str(&render_overview_json(overview)).unwrap_or(serde_json::Value::Null);
+        serde_json::to_value(build_overview_json(overview)).unwrap_or(serde_json::Value::Null);
     let projects_json: serde_json::Value =
-        serde_json::from_str(&render_projects_json(projects)).unwrap_or(serde_json::Value::Null);
+        serde_json::to_value(build_projects_json(projects)).unwrap_or(serde_json::Value::Null);
     let trends_json: serde_json::Value =
-        serde_json::from_str(&render_trend_json(trend)).unwrap_or(serde_json::Value::Null);
+        serde_json::to_value(build_trend_json(trend)).unwrap_or(serde_json::Value::Null);
 
     // Build per-session summaries
     let session_summaries: Vec<HtmlSessionSummary> = sessions
@@ -458,7 +471,7 @@ pub fn render_html_payload(
 
     // Build wrapped data if available
     let wrapped_json: Option<serde_json::Value> =
-        wrapped.and_then(|w| serde_json::from_str(&render_wrapped_json(w)).ok());
+        wrapped.and_then(|w| serde_json::to_value(w).ok());
 
     let payload = HtmlReportPayload {
         overview: overview_json,
@@ -521,7 +534,7 @@ fn build_html_session_summary(
 
     HtmlSessionSummary {
         id: session.session_id.clone(),
-        project: session.project.clone(),
+        project: session.project.as_deref().map(project_display_name),
         turns: turn_count,
         agent_turns: agent_turn_count,
         cost: total_cost,

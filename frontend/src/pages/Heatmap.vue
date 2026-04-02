@@ -7,7 +7,7 @@ import { useI18n } from '../composables/useI18n'
 import type { HeatmapMetric } from '../components/CalendarHeatmap.vue'
 
 const { data } = useData()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 // ─── Metric Switcher ────────────────────────────────────────────────────────
 
@@ -75,9 +75,8 @@ const busiestDay = computed(() => {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00')
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return `${months[d.getMonth()]} ${d.getDate()}`
+  const loc = locale.value === 'zh' ? 'zh-CN' : 'en-US'
+  return d.toLocaleDateString(loc, { month: 'short', day: 'numeric' })
 }
 
 function formatCost(n: number): string {

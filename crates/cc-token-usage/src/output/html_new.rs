@@ -8,8 +8,6 @@ const TEMPLATE: &str = include_str!("../../../../frontend/dist/index.html");
 /// - `</` → `<\/` prevents premature `</script>` closure
 /// - `<!--` → `<\!--` prevents HTML comment injection
 pub fn render_vue_dashboard(json_payload: &str) -> String {
-    let safe_payload = json_payload
-        .replace("</", "<\\/")
-        .replace("<!--", "<\\!--");
+    let safe_payload = json_payload.replace("</", "<\\/").replace("<!--", "<\\!--");
     TEMPLATE.replace("\"__DATA_PLACEHOLDER__\"", &safe_payload)
 }

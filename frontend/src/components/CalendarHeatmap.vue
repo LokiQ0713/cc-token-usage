@@ -16,7 +16,7 @@ const props = defineProps<{
   metric: HeatmapMetric
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 // ─── Tooltip State ──────────────────────────────────────────────────────────
 
@@ -168,9 +168,9 @@ const monthLabels = computed(() => {
       const day = d.getDate()
       // Only show label if it's within first ~7 days of month
       if (day <= 7) {
-        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                            'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-        labels.push({ text: monthNames[month], col: cell.col })
+        const loc = locale.value === 'zh' ? 'zh-CN' : 'en-US'
+        const monthText = d.toLocaleString(loc, { month: 'short' })
+        labels.push({ text: monthText, col: cell.col })
       }
       lastMonth = month
     }
@@ -202,10 +202,8 @@ const colorClass = computed(() => {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00')
-  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return `${weekdays[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`
+  const loc = locale.value === 'zh' ? 'zh-CN' : 'en-US'
+  return d.toLocaleDateString(loc, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 function formatCost(n: number): string {

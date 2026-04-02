@@ -21,12 +21,12 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { page: 'overview', icon: '&#9673;', labelKey: 'nav.overview' },
-  { page: 'trends', icon: '&#9650;', labelKey: 'nav.trends' },
-  { page: 'projects', icon: '&#9632;', labelKey: 'nav.projects' },
-  { page: 'sessions', icon: '&#9776;', labelKey: 'nav.sessions' },
-  { page: 'heatmap', icon: '&#9618;', labelKey: 'nav.heatmap' },
-  { page: 'wrapped', icon: '&#10022;', labelKey: 'nav.wrapped' },
+  { page: 'overview', icon: '\u25C9', labelKey: 'nav.overview' },
+  { page: 'trends', icon: '\u25B2', labelKey: 'nav.trends' },
+  { page: 'projects', icon: '\u25A0', labelKey: 'nav.projects' },
+  { page: 'sessions', icon: '\u2630', labelKey: 'nav.sessions' },
+  { page: 'heatmap', icon: '\u2592', labelKey: 'nav.heatmap' },
+  { page: 'wrapped', icon: '\u2726', labelKey: 'nav.wrapped' },
 ]
 </script>
 
@@ -43,7 +43,7 @@ const navItems: NavItem[] = [
         :class="['nav-item', { active: activePage === item.page }]"
         @click="emit('navigate', item.page)"
       >
-        <span class="nav-icon" v-html="item.icon"></span>
+        <span class="nav-icon">{{ item.icon }}</span>
         <span class="nav-label">{{ t(item.labelKey) }}</span>
       </button>
     </nav>

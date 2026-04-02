@@ -225,6 +225,8 @@ fn load_from_files(files: Vec<SessionFile>) -> Result<(Vec<SessionData>, GlobalD
 
     // ── Phase 3: Recompute time ranges (serial, cheap) ────────────────────
     let mut result: Vec<SessionData> = sessions.into_values().collect();
+    // Sort by time descending (most recent first) for deterministic output
+    result.sort_by(|a, b| b.first_timestamp.cmp(&a.first_timestamp));
     let mut global_min: Option<DateTime<Utc>> = None;
     let mut global_max: Option<DateTime<Utc>> = None;
 
