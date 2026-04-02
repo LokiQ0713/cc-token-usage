@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import type { PageName } from './types'
 import Sidebar from './components/Sidebar.vue'
 import Overview from './pages/Overview.vue'
@@ -9,15 +9,23 @@ import Sessions from './pages/Sessions.vue'
 import Heatmap from './pages/Heatmap.vue'
 import Wrapped from './pages/Wrapped.vue'
 import { useTheme } from './composables/useTheme'
+import { useData } from './composables/useData'
 
 // Initialize theme system
 useTheme()
 
+const { data } = useData()
 const activePage = ref<PageName>('overview')
 
 function navigate(page: PageName) {
   activePage.value = page
 }
+
+onMounted(() => {
+  if (data.active_session_id) {
+    activePage.value = 'sessions'
+  }
+})
 </script>
 
 <template>

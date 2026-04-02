@@ -92,6 +92,10 @@ export interface AgentBreakdown {
   cost: number
 }
 
+/**
+ * Full session detail (mock data / JSON --format output).
+ * Contains per-turn detail in `turns: Turn[]`.
+ */
 export interface SessionDetail {
   session_id: string
   project: string
@@ -115,6 +119,82 @@ export interface SessionDetail {
   service_tier?: string
   agents?: AgentBreakdown[]
   turns: Turn[]
+}
+
+/**
+ * Lightweight session summary from Rust HtmlSessionSummary.
+ * `turns` is a number (count), not an array.
+ * Uses `id` instead of `session_id`, `cost` instead of `total_cost`.
+ */
+export interface HtmlSessionSummary {
+  id: string
+  project?: string
+  turns: number
+  agent_turns: number
+  cost: number
+  duration_minutes?: number
+  model?: string
+  cache_hit_rate?: number
+  first_timestamp?: string
+  last_timestamp?: string
+  title?: string
+  tags?: string[]
+  mode?: string
+}
+
+/**
+ * Union type: sessions array can contain either format.
+ * Use helper functions (getSessionId, getTurnCount, etc.) for safe access.
+ */
+export type SessionEntry = SessionDetail | HtmlSessionSummary
+
+// ─── Session entry helpers ────────────────────────────────────────────────
+
+/** Returns a stable session ID regardless of which format the entry uses. */
+export function getSessionId(s: SessionEntry): string {
+  return 'session_id' in s ? s.session_id : s.id
+}
+
+/** Returns the turn count regardless of whether turns is a number or an array. */
+export function getTurnCount(s: SessionEntry): number {
+  return Array.isArray(s.turns) ? s.turns.length : s.turns
+}
+
+/** Returns total cost (field is `total_cost` in SessionDetail, `cost` in HtmlSessionSummary). */
+export function getSessionCost(s: SessionEntry): number {
+  return 'total_cost' in s ? s.total_cost : s.cost
+}
+
+/** Returns the first timestamp from a session entry. */
+export function getFirstTimestamp(s: SessionEntry): string {
+  if ('first_timestamp' in s && s.first_timestamp) return s.first_timestamp
+  if (Array.isArray(s.turns) && s.turns.length > 0) return s.turns[0].timestamp
+  return ''
+}
+
+/** True if this entry has full turn-level detail. */
+export function hasDetailedTurns(s: SessionEntry): s is SessionDetail {
+  return Array.isArray(s.turns)
+}
+
+/** Returns the project name, normalizing Option<String> from Rust. */
+export function getProject(s: SessionEntry): string {
+  return s.project ?? ''
+}
+
+/** Returns the model name, normalizing Option<String> from Rust. */
+export function getModel(s: SessionEntry): string {
+  return ('model' in s ? s.model : '') ?? ''
+}
+
+/** Returns the cache hit rate, normalizing Option from Rust. */
+export function getCacheHitRate(s: SessionEntry): number {
+  return s.cache_hit_rate ?? 0
+}
+
+/** Returns duration in minutes, normalizing Option from Rust. */
+export function getDurationMinutes(s: SessionEntry): number {
+  return s.duration_minutes ?? 0
 }
 
 // ─── Projects Types ────────────────────────────────────────────────────────
@@ -212,9 +292,10 @@ export interface DashboardData {
   overview: OverviewData
   trends?: TrendData
   projects?: ProjectsData
-  sessions?: SessionDetail[]
+  sessions?: SessionEntry[]
   wrapped?: WrappedData
   heatmap?: HeatmapData
+  active_session_id?: string
 }
 
 // ─── Navigation ────────────────────────────────────────────────────────────

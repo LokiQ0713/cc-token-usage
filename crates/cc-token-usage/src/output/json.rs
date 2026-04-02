@@ -384,6 +384,8 @@ pub struct HtmlReportPayload {
     pub heatmap: HeatmapPayload,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrapped: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_session_id: Option<String>,
 }
 
 /// Per-session summary for the HTML dashboard.
@@ -434,6 +436,7 @@ pub fn render_html_payload(
     sessions: &[SessionData],
     calc: &PricingCalculator,
     wrapped: Option<&WrappedResult>,
+    active_session_id: Option<&str>,
 ) -> String {
     // Reuse existing JSON renderers and parse back into serde_json::Value
     let overview_json: serde_json::Value = serde_json::from_str(&render_overview_json(overview))
@@ -464,6 +467,7 @@ pub fn render_html_payload(
         sessions: session_summaries,
         heatmap,
         wrapped: wrapped_json,
+        active_session_id: active_session_id.map(|s| s.to_string()),
     };
 
     serde_json::to_string(&payload).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))

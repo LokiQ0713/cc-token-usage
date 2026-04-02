@@ -1,10 +1,21 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import KpiCard from '../components/KpiCard.vue'
 import DataTable from '../components/DataTable.vue'
 import FilterPills from '../components/FilterPills.vue'
 import type { Column } from '../components/DataTable.vue'
-import type { SessionDetail, AgentBreakdown } from '../types'
+import type { SessionEntry, AgentBreakdown } from '../types'
+import {
+  getSessionId,
+  getTurnCount,
+  getSessionCost,
+  getFirstTimestamp as getFirstTs,
+  hasDetailedTurns,
+  getProject,
+  getModel,
+  getCacheHitRate,
+  getDurationMinutes,
+} from '../types'
 import { useData } from '../composables/useData'
 import { useI18n } from '../composables/useI18n'
 
@@ -50,24 +61,44 @@ function formatDate(ts: string): string {
   return d.toLocaleDateString(locale.value === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' })
 }
 
-function getFirstTimestamp(session: SessionDetail): string {
-  if (session.turns.length > 0) return session.turns[0].timestamp
-  return ''
+function getFirstTimestamp(session: SessionEntry): string {
+  return getFirstTs(session)
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────
 
-const sessions = computed<SessionDetail[]>(() => data.sessions ?? [])
+const sessions = computed<SessionEntry[]>(() => data.sessions ?? [])
 
 // ─── Search & Filters ─────────────────────────────────────────────────────
 
+const activeSessionId = data.active_session_id ?? ''
 const searchQuery = ref('')
 const modelFilter = ref('all')
 const sortBy = ref('cost')
 
+// Keys to auto-expand on mount (for session --latest deep-link)
+const initialExpanded = computed<string[]>(() => {
+  if (!activeSessionId) return []
+  // Find the matching session by full or prefix match
+  const match = sessions.value.find(s => {
+    const sid = getSessionId(s)
+    return sid === activeSessionId || sid.startsWith(activeSessionId)
+  })
+  return match ? [getSessionId(match)] : []
+})
+
+onMounted(() => {
+  if (activeSessionId) {
+    // Set search to the session ID prefix so the table filters to show it
+    searchQuery.value = activeSessionId.slice(0, 8)
+    // Sort by date so the targeted session appears prominently
+    sortBy.value = 'date'
+  }
+})
+
 const modelOptions = computed(() => {
   const models = new Set(sessions.value.map(s => {
-    const short = shortenModel(s.model)
+    const short = shortenModel(getModel(s))
     // Extract family name (opus, sonnet, haiku)
     const parts = short.split('-')
     return parts[0] ?? short
@@ -92,8 +123,8 @@ const filteredSessions = computed(() => {
   const query = searchQuery.value.toLowerCase().trim()
   if (query) {
     result = result.filter(s =>
-      s.session_id.toLowerCase().includes(query) ||
-      s.project.toLowerCase().includes(query) ||
+      getSessionId(s).toLowerCase().includes(query) ||
+      getProject(s).toLowerCase().includes(query) ||
       (s.title?.toLowerCase().includes(query) ?? false)
     )
   }
@@ -101,7 +132,7 @@ const filteredSessions = computed(() => {
   // Model filter
   if (modelFilter.value !== 'all') {
     result = result.filter(s => {
-      const short = shortenModel(s.model).split('-')[0]?.toLowerCase() ?? ''
+      const short = shortenModel(getModel(s)).split('-')[0]?.toLowerCase() ?? ''
       return short === modelFilter.value
     })
   }
@@ -109,7 +140,7 @@ const filteredSessions = computed(() => {
   // Sort
   switch (sortBy.value) {
     case 'cost':
-      result.sort((a, b) => b.total_cost - a.total_cost)
+      result.sort((a, b) => getSessionCost(b) - getSessionCost(a))
       break
     case 'date': {
       result.sort((a, b) => {
@@ -120,8 +151,7 @@ const filteredSessions = computed(() => {
       break
     }
     case 'turns': {
-      const getTotalTurns = (s: SessionDetail) => s.turns.length + s.agent_turns
-      result.sort((a, b) => getTotalTurns(b) - getTotalTurns(a))
+      result.sort((a, b) => (getTurnCount(b) + b.agent_turns) - (getTurnCount(a) + a.agent_turns))
       break
     }
   }
@@ -134,7 +164,7 @@ const filteredSessions = computed(() => {
 const totalSessions = computed(() => sessions.value.length)
 
 const totalCost = computed(() =>
-  sessions.value.reduce((sum, s) => sum + s.total_cost, 0)
+  sessions.value.reduce((sum, s) => sum + getSessionCost(s), 0)
 )
 
 const avgCostPerSession = computed(() =>
@@ -143,28 +173,28 @@ const avgCostPerSession = computed(() =>
 
 const avgDuration = computed(() => {
   if (totalSessions.value === 0) return 0
-  const sum = sessions.value.reduce((acc, s) => acc + s.duration_minutes, 0)
+  const sum = sessions.value.reduce((acc, s) => acc + getDurationMinutes(s), 0)
   return sum / totalSessions.value
 })
 
 // ─── Session Table Columns ────────────────────────────────────────────────
 
-const sessionColumns = computed<Column<SessionDetail>[]>(() => [
+const sessionColumns = computed<Column<SessionEntry>[]>(() => [
   {
     key: 'session_id',
     label: t('sessions.col_session_id'),
     sortable: true,
     align: 'left',
-    format: (row: SessionDetail) => row.session_id.slice(0, 8),
+    format: (row: SessionEntry) => getSessionId(row).slice(0, 8),
   },
   {
     key: 'project',
     label: t('sessions.col_project'),
     sortable: true,
     align: 'left',
-    format: (row: SessionDetail) => {
+    format: (row: SessionEntry) => {
       // Clean up project path display
-      const name = row.project
+      const name = getProject(row)
         .replace(/^-Users-[^-]+-/, '~/')
         .replace(/-/g, '/')
       return name.length > 20 ? '...' + name.slice(-17) : name
@@ -175,8 +205,8 @@ const sessionColumns = computed<Column<SessionDetail>[]>(() => [
     label: t('sessions.col_turns'),
     sortable: true,
     align: 'right',
-    format: (row: SessionDetail) => {
-      const main = row.turns.length
+    format: (row: SessionEntry) => {
+      const main = getTurnCount(row)
       if (row.agent_turns > 0) return `${main + row.agent_turns} (+${row.agent_turns})`
       return String(main)
     },
@@ -186,21 +216,21 @@ const sessionColumns = computed<Column<SessionDetail>[]>(() => [
     label: t('sessions.col_duration'),
     sortable: true,
     align: 'right',
-    format: (row: SessionDetail) => formatDuration(row.duration_minutes),
+    format: (row: SessionEntry) => formatDuration(getDurationMinutes(row)),
   },
   {
     key: 'total_cost',
     label: t('sessions.col_cost'),
     sortable: true,
     align: 'right',
-    format: (row: SessionDetail) => formatCost(row.total_cost),
+    format: (row: SessionEntry) => formatCost(getSessionCost(row)),
   },
   {
     key: 'model',
     label: t('sessions.col_model'),
     sortable: true,
     align: 'left',
-    format: (row: SessionDetail) => shortenModel(row.model),
+    format: (row: SessionEntry) => shortenModel(getModel(row)),
   },
   {
     key: 'cache_hit_rate',
@@ -208,7 +238,7 @@ const sessionColumns = computed<Column<SessionDetail>[]>(() => [
     sortable: true,
     align: 'right',
     hideOnNarrow: true,
-    format: (row: SessionDetail) => formatPercent(row.cache_hit_rate),
+    format: (row: SessionEntry) => formatPercent(getCacheHitRate(row)),
   },
   {
     key: 'date_display',
@@ -216,7 +246,7 @@ const sessionColumns = computed<Column<SessionDetail>[]>(() => [
     sortable: true,
     align: 'right',
     hideOnNarrow: true,
-    format: (row: SessionDetail) => {
+    format: (row: SessionEntry) => {
       const ts = getFirstTimestamp(row)
       return ts ? formatDate(ts) : '-'
     },
@@ -319,11 +349,12 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
         <DataTable
           :columns="sessionColumns"
           :rows="filteredSessions"
-          row-key="session_id"
+          :row-key="(row: SessionEntry) => getSessionId(row)"
           :expandable="true"
           :show-rank="false"
           default-sort-key="total_cost"
           default-sort-dir="desc"
+          :initial-expanded-keys="initialExpanded"
         >
           <template #expand="{ row }">
             <div class="session-detail">
@@ -343,14 +374,14 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
                   <span class="info-label">{{ t('sessions.detail_mode') }}</span>
                   <span class="info-value mode-badge" :class="'mode-' + row.mode">{{ row.mode }}</span>
                 </div>
-                <div class="info-item" v-if="row.branch">
+                <div class="info-item" v-if="'branch' in row && row.branch">
                   <span class="info-label">{{ t('sessions.detail_branch') }}</span>
                   <span class="info-value branch-name">{{ row.branch }}</span>
                 </div>
               </div>
 
-              <!-- Agent Breakdown -->
-              <div class="detail-section" v-if="row.agents && row.agents.length > 0">
+              <!-- Agent Breakdown (only available in SessionDetail format) -->
+              <div class="detail-section" v-if="'agents' in row && row.agents && row.agents.length > 0">
                 <h3 class="detail-section-title">{{ t('sessions.detail_agent_breakdown') }}</h3>
                 <DataTable
                   :columns="agentColumns"
@@ -365,35 +396,35 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
               <div class="detail-section">
                 <h3 class="detail-section-title">{{ t('sessions.detail_metadata') }}</h3>
                 <div class="metadata-grid">
-                  <div class="meta-item" v-if="row.autonomy_ratio != null">
+                  <div class="meta-item" v-if="'autonomy_ratio' in row && row.autonomy_ratio != null">
                     <span class="meta-label">{{ t('sessions.detail_autonomy') }}</span>
                     <span class="meta-value">1:{{ row.autonomy_ratio.toFixed(1) }}</span>
                   </div>
-                  <div class="meta-item">
+                  <div class="meta-item" v-if="'api_errors' in row">
                     <span class="meta-label">{{ t('sessions.detail_api_errors') }}</span>
                     <span class="meta-value" :class="{ 'error-highlight': (row.api_errors ?? 0) > 0 }">{{ row.api_errors ?? 0 }}</span>
                   </div>
-                  <div class="meta-item">
+                  <div class="meta-item" v-if="'max_context' in row">
                     <span class="meta-label">{{ t('sessions.detail_max_context') }}</span>
                     <span class="meta-value">{{ formatTokens(row.max_context) }}</span>
                   </div>
-                  <div class="meta-item">
+                  <div class="meta-item" v-if="'compaction_count' in row">
                     <span class="meta-label">{{ t('sessions.detail_compactions') }}</span>
                     <span class="meta-value">{{ row.compaction_count }}</span>
                   </div>
-                  <div class="meta-item">
+                  <div class="meta-item" v-if="'output_tokens' in row">
                     <span class="meta-label">{{ t('sessions.detail_output_tokens') }}</span>
                     <span class="meta-value">{{ formatTokens(row.output_tokens) }}</span>
                   </div>
-                  <div class="meta-item">
+                  <div class="meta-item" v-if="'agent_cost' in row">
                     <span class="meta-label">{{ t('sessions.detail_agent_cost_label') }}</span>
                     <span class="meta-value">{{ formatCost(row.agent_cost) }}</span>
                   </div>
                   <div class="meta-item">
                     <span class="meta-label">{{ t('sessions.detail_cache_hit') }}</span>
-                    <span class="meta-value">{{ formatPercent(row.cache_hit_rate) }}</span>
+                    <span class="meta-value">{{ formatPercent(getCacheHitRate(row)) }}</span>
                   </div>
-                  <div class="meta-item" v-if="row.service_tier">
+                  <div class="meta-item" v-if="'service_tier' in row && row.service_tier">
                     <span class="meta-label">{{ t('sessions.detail_service_tier') }}</span>
                     <span class="meta-value">{{ row.service_tier }}</span>
                   </div>

@@ -21,6 +21,7 @@ const props = withDefaults(
     defaultSortKey?: string
     defaultSortDir?: 'asc' | 'desc'
     showRank?: boolean
+    initialExpandedKeys?: string[]
   }>(),
   {
     expandable: false,
@@ -77,7 +78,7 @@ const sortedRows = computed(() => {
 
 // ─── Expand ───────────────────────────────────────────────────────────────
 
-const expandedKeys = ref<Set<string>>(new Set())
+const expandedKeys = ref<Set<string>>(new Set(props.initialExpandedKeys ?? []))
 
 function toggleExpand(row: T) {
   if (!props.expandable) return
