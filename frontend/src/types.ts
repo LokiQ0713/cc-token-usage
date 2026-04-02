@@ -84,6 +84,14 @@ export interface Turn {
   tool_names: string[]
 }
 
+export interface AgentBreakdown {
+  agent_type: string
+  description: string
+  turns: number
+  output_tokens: number
+  cost: number
+}
+
 export interface SessionDetail {
   session_id: string
   project: string
@@ -100,6 +108,12 @@ export interface SessionDetail {
   agent_cost: number
   title?: string
   tags: string[]
+  mode?: string
+  branch?: string
+  autonomy_ratio?: number
+  api_errors?: number
+  service_tier?: string
+  agents?: AgentBreakdown[]
   turns: Turn[]
 }
 
