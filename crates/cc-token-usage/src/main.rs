@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Datelike;
 use clap::Parser;
 
+use cc_token_usage::analysis::heatmap::analyze_heatmap;
 use cc_token_usage::analysis::overview::analyze_overview;
 use cc_token_usage::analysis::project::analyze_projects;
 use cc_token_usage::analysis::session::analyze_session;
@@ -15,7 +16,7 @@ use cc_token_usage::data::models::SessionData;
 use cc_token_usage::output::html::render_session_html;
 use cc_token_usage::output::html_new::render_vue_dashboard;
 use cc_token_usage::output::json::{render_html_payload, render_overview_json, render_projects_json, render_session_json, render_trend_json, render_wrapped_json};
-use cc_token_usage::output::text::{render_overview, render_projects, render_session, render_trend, render_validation, render_wrapped};
+use cc_token_usage::output::text::{render_heatmap, render_overview, render_projects, render_session, render_trend, render_validation, render_wrapped};
 use cc_token_usage::pricing::calculator::PricingCalculator;
 
 fn main() -> Result<()> {
@@ -220,6 +221,12 @@ fn main() -> Result<()> {
             }
         }
 
+        // ── Heatmap (text only) ─────────────────────────────────────────────
+        Command::Heatmap { days } => {
+            let result = analyze_heatmap(&sessions, &calc, days);
+            println!("{}", render_heatmap(&result));
+        }
+
         // ── Update (already handled above, unreachable) ─────────────────────
         Command::Update { .. } => unreachable!(),
 
@@ -245,6 +252,7 @@ fn main() -> Result<()> {
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
             }
         }
+
     }
 
     Ok(())

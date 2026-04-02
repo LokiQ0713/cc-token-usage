@@ -105,4 +105,11 @@ pub enum Command {
         #[arg(long)]
         year: Option<i32>,
     },
+
+    /// Show a GitHub-style activity heatmap in the terminal
+    Heatmap {
+        /// Number of days to show (0 = all history, default 365)
+        #[arg(long, default_value_t = 365)]
+        days: u32,
+    },
 }

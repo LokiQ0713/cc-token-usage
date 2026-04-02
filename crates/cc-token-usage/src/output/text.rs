@@ -1,5 +1,8 @@
 use std::fmt::Write as _;
 
+use chrono::{Datelike, NaiveDate};
+
+use crate::analysis::heatmap::HeatmapResult;
 use crate::analysis::validate::ValidationReport;
 use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
@@ -722,6 +725,189 @@ pub fn render_wrapped(result: &WrappedResult) -> String {
     writeln!(out, "\u{255a}{}\u{255d}", "\u{2550}".repeat(w)).unwrap();
 
     out
+}
+
+// ─── 6. Heatmap ────────────────────────────────────────────────────────────
+
+pub fn render_heatmap(result: &HeatmapResult) -> String {
+    let mut out = String::new();
+    let (p25, p50, p75) = result.thresholds;
+
+    writeln!(out, "Activity Heatmap").unwrap();
+    writeln!(
+        out,
+        "{}  ~  {}",
+        result.start_date.format("%Y-%m-%d"),
+        result.end_date.format("%Y-%m-%d")
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+
+    // Map turns to glyph
+    let glyph = |turns: usize| -> char {
+        if turns == 0 {
+            '\u{00B7}' // middle dot for zero
+        } else if turns < p25 {
+            '\u{2591}' // light shade
+        } else if turns < p50 {
+            '\u{2592}' // medium shade
+        } else if turns < p75 {
+            '\u{2593}' // dark shade
+        } else {
+            '\u{2588}' // full block
+        }
+    };
+
+    // Build the calendar grid.
+    // Columns = weeks, rows = weekdays (Mon=0 .. Sun=6).
+    // Find the Monday on or before start_date to align the grid.
+    let start_weekday = result.start_date.weekday().num_days_from_monday(); // 0=Mon
+    let grid_start = result.start_date - chrono::Duration::days(start_weekday as i64);
+
+    // End at the Sunday on or after end_date
+    let end_weekday = result.end_date.weekday().num_days_from_monday();
+    let grid_end = result.end_date + chrono::Duration::days((6 - end_weekday) as i64);
+
+    let total_days = (grid_end - grid_start).num_days() as usize + 1;
+    let num_weeks = total_days.div_ceil(7);
+
+    // Build a lookup from date -> turns
+    let mut turns_by_date: std::collections::HashMap<NaiveDate, usize> =
+        std::collections::HashMap::new();
+    for d in &result.daily {
+        turns_by_date.insert(d.date, d.turns);
+    }
+
+    // Render month labels on top.
+    // Each week column is 1 char wide. Month labels ("Jan", etc.) are 3 chars.
+    // A label is placed at the week column containing the 1st of that month.
+    // Labels that would overlap a previous label are skipped.
+    let label_width = 5; // "Mon  " prefix width
+
+    // Collect (week_index, month_abbr) for each month that has its 1st within the grid
+    let mut month_marks: Vec<(usize, &str)> = Vec::new();
+    {
+        // Walk from the first month that starts on or after grid_start
+        let mut d = if grid_start.day() == 1 {
+            grid_start
+        } else {
+            // Advance to the 1st of the next month
+            let (y, m) = if grid_start.month() == 12 {
+                (grid_start.year() + 1, 1)
+            } else {
+                (grid_start.year(), grid_start.month() + 1)
+            };
+            NaiveDate::from_ymd_opt(y, m, 1).unwrap_or(grid_start)
+        };
+
+        while d <= grid_end {
+            let week_idx = ((d - grid_start).num_days() / 7) as usize;
+            month_marks.push((week_idx, month_abbr(d.month())));
+            // Advance to the 1st of the next month
+            d = if d.month() == 12 {
+                NaiveDate::from_ymd_opt(d.year() + 1, 1, 1).unwrap()
+            } else {
+                NaiveDate::from_ymd_opt(d.year(), d.month() + 1, 1).unwrap()
+            };
+        }
+    }
+
+    // Build the header string by placing labels at correct column positions
+    let mut month_header = " ".repeat(label_width);
+    let mut cursor = 0usize; // tracks how many week-columns we have filled
+    for (col, name) in &month_marks {
+        if *col >= cursor {
+            // Pad with spaces from cursor to this column
+            for _ in cursor..*col {
+                month_header.push(' ');
+            }
+            month_header.push_str(name);
+            cursor = col + name.len(); // name takes 3 column slots
+        }
+        // else: skip this label (overlaps with previous)
+    }
+    writeln!(out, "{}", month_header.trim_end()).unwrap();
+
+    // Render each weekday row (show Mon, Wed, Fri, Sun labels; blank for others)
+    let weekday_labels = ["Mon", "   ", "Wed", "   ", "Fri", "   ", "Sun"];
+
+    for row in 0..7u32 {
+        let label = weekday_labels[row as usize];
+        write!(out, "{:<5}", label).unwrap();
+
+        for week_idx in 0..num_weeks {
+            let day = grid_start + chrono::Duration::days((week_idx * 7 + row as usize) as i64);
+            if day < result.start_date || day > result.end_date {
+                write!(out, " ").unwrap();
+            } else {
+                let turns = turns_by_date.get(&day).copied().unwrap_or(0);
+                write!(out, "{}", glyph(turns)).unwrap();
+            }
+        }
+        writeln!(out).unwrap();
+    }
+
+    // Legend
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "     \u{00B7}=0  \u{2591}<P25({})  \u{2592}<P50({})  \u{2593}<P75({})  \u{2588}\u{2265}P75",
+        p25, p50, p75
+    )
+    .unwrap();
+
+    // Stats
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "  Active days:     {}/{}",
+        result.stats.active_days, result.stats.total_days
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  Current streak:  {} days",
+        result.stats.current_streak
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "  Longest streak:  {} days",
+        result.stats.longest_streak
+    )
+    .unwrap();
+
+    if let Some((date, turns)) = result.stats.busiest_day {
+        writeln!(
+            out,
+            "  Busiest day:     {} ({} turns)",
+            date.format("%Y-%m-%d"),
+            turns
+        )
+        .unwrap();
+    }
+
+    writeln!(out).unwrap();
+
+    out
+}
+
+fn month_abbr(m: u32) -> &'static str {
+    match m {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "???",
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

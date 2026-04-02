@@ -1,3 +1,4 @@
+pub mod heatmap;
 pub mod overview;
 pub mod project;
 pub mod session;
