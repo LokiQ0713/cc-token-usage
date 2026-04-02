@@ -1,6 +1,6 @@
 /// The Vue frontend template, built from frontend/dist/index.html
-/// Rebuild with: cd frontend && npm run build
-const TEMPLATE: &str = include_str!("../../../../frontend/dist/index.html");
+/// Rebuild with: cd frontend && npm run build && cp frontend/dist/index.html crates/cc-token-usage/src/output/template.html
+const TEMPLATE: &str = include_str!("template.html");
 
 /// Render the new Vue dashboard by injecting real data into the template.
 ///
