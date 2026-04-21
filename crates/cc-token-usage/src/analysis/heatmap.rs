@@ -312,12 +312,15 @@ mod tests {
     #[test]
     fn test_analyze_with_sessions() {
         let calc = PricingCalculator::new();
+        let now = Utc::now();
+        let two_days_ago = (now - chrono::Duration::days(2)).to_rfc3339();
+        let one_day_ago = (now - chrono::Duration::days(1)).to_rfc3339();
         let sessions = vec![make_session(
             "s1",
             vec![
-                make_turn("2026-03-20T10:00:00Z"),
-                make_turn("2026-03-20T11:00:00Z"),
-                make_turn("2026-03-21T09:00:00Z"),
+                make_turn(&two_days_ago),
+                make_turn(&two_days_ago),
+                make_turn(&one_day_ago),
             ],
         )];
 

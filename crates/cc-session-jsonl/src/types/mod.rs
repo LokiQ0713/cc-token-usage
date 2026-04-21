@@ -1,12 +1,14 @@
 pub mod assistant;
 pub mod context;
 pub mod metadata;
+pub mod progress;
 pub mod tracking;
 pub mod user;
 
 pub use assistant::*;
 pub use context::*;
 pub use metadata::*;
+pub use progress::*;
 pub use tracking::*;
 pub use user::*;
 
@@ -113,6 +115,10 @@ pub enum Entry {
     PrLink(PrLinkMessage),
     #[serde(rename = "mode")]
     Mode(ModeEntry),
+    #[serde(rename = "permission-mode")]
+    PermissionMode(PermissionModeEntry),
+    #[serde(rename = "progress")]
+    Progress(ProgressEntry),
     #[serde(rename = "queue-operation")]
     QueueOperation(QueueOperationMessage),
     #[serde(rename = "speculation-accept")]
@@ -242,6 +248,21 @@ mod tests {
         let json = r#"{"type":"mode","sessionId":"s1","mode":"code"}"#;
         let entry: Entry = serde_json::from_str(json).unwrap();
         assert!(matches!(entry, Entry::Mode(_)));
+    }
+
+    #[test]
+    fn route_permission_mode() {
+        let json =
+            r#"{"type":"permission-mode","sessionId":"s1","permissionMode":"bypassPermissions"}"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, Entry::PermissionMode(_)));
+    }
+
+    #[test]
+    fn route_progress() {
+        let json = r#"{"type":"progress","uuid":"u1","sessionId":"s1","data":{"type":"hook_progress","hookEvent":"PostToolUse"}}"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, Entry::Progress(_)));
     }
 
     #[test]

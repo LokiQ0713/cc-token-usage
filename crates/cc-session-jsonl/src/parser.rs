@@ -57,6 +57,7 @@ impl SessionReader {
         LenientReader {
             lines: self.lines,
             errors_skipped: 0,
+            unknown_count: 0,
         }
     }
 }
@@ -82,12 +83,24 @@ impl Iterator for SessionReader {
 pub struct LenientReader {
     lines: io::Lines<BufReader<File>>,
     errors_skipped: usize,
+    unknown_count: usize,
 }
 
 impl LenientReader {
     /// Number of lines that failed to parse and were skipped.
     pub fn errors_skipped(&self) -> usize {
         self.errors_skipped
+    }
+
+    /// Number of entries successfully parsed as [`Entry::Unknown`] (type field
+    /// present but not recognized by this library version).
+    ///
+    /// A non-zero value here is an early signal of Claude Code JSONL format
+    /// drift: Anthropic has added a new entry type since this library's types
+    /// were defined. Consumers should treat a rising ratio as a hint to bump
+    /// the `cc-session-jsonl` dependency.
+    pub fn unknown_count(&self) -> usize {
+        self.unknown_count
     }
 }
 
@@ -101,7 +114,12 @@ impl Iterator for LenientReader {
                 continue;
             }
             match parse_entry(&line) {
-                Ok(entry) => return Some(entry),
+                Ok(entry) => {
+                    if matches!(entry, Entry::Unknown) {
+                        self.unknown_count += 1;
+                    }
+                    return Some(entry);
+                }
                 Err(_) => {
                     self.errors_skipped += 1;
                     continue;
@@ -320,5 +338,22 @@ GARBAGE LINE
         let err = parse_entry("not json").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("JSON parse error"));
+    }
+
+    #[test]
+    fn lenient_reader_counts_unknown_entries() {
+        // Mix: 2 recognized, 2 unknown-type, 1 garbage
+        let content = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":"ok"}}
+{"type":"future-type-alpha","sessionId":"s1","data":1}
+GARBAGE
+{"type":"future-type-beta","sessionId":"s1"}
+{"type":"tag","sessionId":"s1","tag":"t"}"#;
+        let file = write_temp_file(content);
+        let reader = SessionReader::open(file.path()).unwrap();
+        let mut lenient = reader.lenient();
+        let entries: Vec<_> = lenient.by_ref().collect();
+        assert_eq!(entries.len(), 4); // user + 2 unknown + tag
+        assert_eq!(lenient.errors_skipped(), 1); // 1 garbage line
+        assert_eq!(lenient.unknown_count(), 2);
     }
 }

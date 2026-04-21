@@ -66,6 +66,8 @@ fn entry_type_name(entry: &Entry) -> &'static str {
         Entry::AgentSetting(_) => "agent-setting",
         Entry::PrLink(_) => "pr-link",
         Entry::Mode(_) => "mode",
+        Entry::PermissionMode(_) => "permission-mode",
+        Entry::Progress(_) => "progress",
         Entry::QueueOperation(_) => "queue-operation",
         Entry::SpeculationAccept(_) => "speculation-accept",
         Entry::WorktreeState(_) => "worktree-state",

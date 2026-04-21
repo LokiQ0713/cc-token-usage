@@ -85,11 +85,28 @@ pub struct PrLinkMessage {
 }
 
 /// The operating mode of a session (e.g., "plan", "code").
+///
+/// **Legacy entry type.** Claude Code v2.1 and later write
+/// `permission-mode` entries ([`PermissionModeEntry`]) instead. This type is
+/// kept for backward compatibility with JSONL files produced by older
+/// versions and is never emitted by recent Claude Code releases.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModeEntry {
     pub session_id: Option<String>,
     pub mode: Option<String>,
+}
+
+/// The permission mode applied to a session (e.g., `"bypassPermissions"`,
+/// `"acceptEdits"`, `"plan"`, `"default"`).
+///
+/// Introduced in Claude Code v2.1 as the replacement for the legacy `mode`
+/// entry. Recorded whenever the user switches permission mode mid-session.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionModeEntry {
+    pub session_id: Option<String>,
+    pub permission_mode: Option<String>,
 }
 
 #[cfg(test)]

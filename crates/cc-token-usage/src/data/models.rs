@@ -284,10 +284,26 @@ mod tests {
 
     #[test]
     fn test_parse_progress_entry() {
-        // progress is not a named variant in cc-session-jsonl; it maps to Unknown
-        let json = r#"{"type":"progress","data":{"type":"hook_progress"},"uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
+        let json = r#"{"type":"progress","data":{"type":"hook_progress","hookEvent":"PostToolUse","hookName":"PostToolUse:Read","command":"callback"},"toolUseID":"toolu_01","parentToolUseID":"toolu_01","uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
         let entry: cc_session_jsonl::types::Entry = serde_json::from_str(json).unwrap();
-        assert!(matches!(entry, cc_session_jsonl::types::Entry::Unknown));
+        match entry {
+            cc_session_jsonl::types::Entry::Progress(p) => {
+                assert_eq!(p.tool_use_id.as_deref(), Some("toolu_01"));
+                match p.data.unwrap() {
+                    cc_session_jsonl::types::ProgressData::HookProgress {
+                        hook_event,
+                        hook_name,
+                        command,
+                    } => {
+                        assert_eq!(hook_event.as_deref(), Some("PostToolUse"));
+                        assert_eq!(hook_name.as_deref(), Some("PostToolUse:Read"));
+                        assert_eq!(command.as_deref(), Some("callback"));
+                    }
+                    other => panic!("expected HookProgress, got {other:?}"),
+                }
+            }
+            other => panic!("expected Progress, got {other:?}"),
+        }
     }
 
     #[test]
