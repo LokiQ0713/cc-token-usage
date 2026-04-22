@@ -302,7 +302,7 @@ pub fn analyze_wrapped(
 
     // ── Top tools (by count, top 5) ─────────────────────────────────────────
     let mut top_tools: Vec<(String, usize)> = tool_counts.into_iter().collect();
-    top_tools.sort_by(|a, b| b.1.cmp(&a.1));
+    top_tools.sort_by_key(|b| std::cmp::Reverse(b.1));
     top_tools.truncate(5);
 
     // ── Most expensive session ──────────────────────────────────────────────
@@ -315,7 +315,7 @@ pub fn analyze_wrapped(
 
     // ── Model distribution ──────────────────────────────────────────────────
     let mut model_distribution: Vec<(String, usize)> = model_counts.into_iter().collect();
-    model_distribution.sort_by(|a, b| b.1.cmp(&a.1));
+    model_distribution.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // ── Archetype classification ────────────────────────────────────────────
     let agent_ratio = if total_turns > 0 {

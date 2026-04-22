@@ -51,7 +51,7 @@ pub fn analyze_overview(
     }
 
     let mut tool_counts: Vec<(String, usize)> = tool_count_map.into_iter().collect();
-    tool_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    tool_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     // Compute totals from tokens_by_model
     let mut total_output_tokens: u64 = 0;
@@ -351,7 +351,7 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         tool_use_count,
         top_tools: {
             let mut tools: Vec<(String, usize)> = tool_map.into_iter().collect();
-            tools.sort_by(|a, b| b.1.cmp(&a.1));
+            tools.sort_by_key(|b| std::cmp::Reverse(b.1));
             tools.truncate(5);
             tools
         },
