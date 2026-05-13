@@ -362,4 +362,48 @@ mod tests {
         let stats = compute_stats(&daily, today);
         assert_eq!(stats.busiest_day.unwrap().1, 10);
     }
+
+    /// A session whose turns span two local days must contribute its turns
+    /// to *both* days (per turn), not lump everything onto its start day.
+    /// This is the regression test for the multi-day attribution bug.
+    #[test]
+    fn analyze_heatmap_splits_multi_day_session_turns_per_day() {
+        use chrono::TimeZone;
+
+        let calc = PricingCalculator::new();
+        let today = Local::now().date_naive();
+        let day_a = today - chrono::Duration::days(2);
+        let day_b = today - chrono::Duration::days(1);
+
+        // 12:00 local on each of day_a and day_b, expressed in UTC.
+        let ts_a: DateTime<Utc> = Local
+            .from_local_datetime(&day_a.and_hms_opt(12, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        let ts_b: DateTime<Utc> = Local
+            .from_local_datetime(&day_b.and_hms_opt(12, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // Session has 1 turn on day_a, 3 turns on day_b. Busiest day = day_b.
+        let session = make_session(
+            "s1",
+            vec![
+                make_turn(&ts_a.to_rfc3339()),
+                make_turn(&ts_b.to_rfc3339()),
+                make_turn(&ts_b.to_rfc3339()),
+                make_turn(&ts_b.to_rfc3339()),
+            ],
+        );
+
+        let result = analyze_heatmap(&[session], &calc, 7);
+        let entry_a = result.daily.iter().find(|d| d.date == day_a).unwrap();
+        let entry_b = result.daily.iter().find(|d| d.date == day_b).unwrap();
+        assert_eq!(entry_a.turns, 1, "day_a must have exactly 1 turn");
+        assert_eq!(entry_b.turns, 3, "day_b must have exactly 3 turns");
+        assert_eq!(result.stats.busiest_day.unwrap().0, day_b);
+        assert_eq!(result.stats.busiest_day.unwrap().1, 3);
+    }
 }

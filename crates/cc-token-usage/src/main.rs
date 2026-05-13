@@ -15,8 +15,8 @@ use cc_token_usage::data::loader;
 use cc_token_usage::data::models::SessionData;
 use cc_token_usage::output::html_new::render_vue_dashboard;
 use cc_token_usage::output::json::{
-    render_html_payload, render_overview_json, render_projects_json, render_session_json,
-    render_trend_json, render_wrapped_json,
+    render_heatmap_json, render_html_payload, render_overview_json, render_projects_json,
+    render_session_json, render_trend_json, render_wrapped_json,
 };
 use cc_token_usage::output::text::{
     render_heatmap, render_overview, render_projects, render_session, render_trend,
@@ -281,10 +281,37 @@ fn main() -> Result<()> {
             }
         }
 
-        // ── Heatmap (text only) ─────────────────────────────────────────────
+        // ── Heatmap ─────────────────────────────────────────────────────────
         Command::Heatmap { days } => {
             let result = analyze_heatmap(&sessions, &calc, days);
-            println!("{}", render_heatmap(&result));
+
+            if want_json {
+                println!("{}", render_heatmap_json(&result));
+            }
+            if want_text {
+                println!("{}", render_heatmap(&result));
+            }
+            if want_html {
+                // Reuse the Vue dashboard; the heatmap data is already part
+                // of the unified payload via `build_heatmap`.
+                let overview =
+                    analyze_overview(&sessions, quality.clone(), &calc, subscription_price);
+                let projects = analyze_projects(&sessions, &calc, 20);
+                let trend = analyze_trend(&sessions, &calc, 0, false);
+                let year = chrono::Utc::now().year();
+                let wrapped = analyze_wrapped(&sessions, &calc, year);
+                let json_payload = render_html_payload(
+                    &overview,
+                    &projects,
+                    &trend,
+                    &sessions,
+                    &calc,
+                    Some(&wrapped),
+                    None,
+                );
+                let html = render_vue_dashboard(&json_payload);
+                write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
+            }
         }
 
         // ── Update (already handled above, unreachable) ─────────────────────

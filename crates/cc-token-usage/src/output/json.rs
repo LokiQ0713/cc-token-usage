@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use chrono::Datelike;
 use serde::Serialize;
 
+use crate::analysis::heatmap::HeatmapResult;
 use crate::analysis::project::project_display_name;
 use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
@@ -462,6 +463,77 @@ pub fn render_wrapped_json(result: &WrappedResult) -> String {
     serde_json::to_string_pretty(result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
+// ─── Heatmap JSON ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeatmapJson {
+    start_date: String,
+    end_date: String,
+    /// Percentile thresholds (P25, P50, P75) computed from non-zero days.
+    thresholds: [usize; 3],
+    daily: Vec<DailyActivityJson>,
+    stats: HeatmapStatsJson,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DailyActivityJson {
+    date: String,
+    turns: usize,
+    cost: f64,
+    sessions: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HeatmapStatsJson {
+    total_days: usize,
+    active_days: usize,
+    current_streak: usize,
+    longest_streak: usize,
+    /// `None` when no day in the range has activity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    busiest_day: Option<BusiestDayJson>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BusiestDayJson {
+    date: String,
+    turns: usize,
+}
+
+pub fn render_heatmap_json(result: &HeatmapResult) -> String {
+    let (p25, p50, p75) = result.thresholds;
+    let json = HeatmapJson {
+        start_date: result.start_date.to_string(),
+        end_date: result.end_date.to_string(),
+        thresholds: [p25, p50, p75],
+        daily: result
+            .daily
+            .iter()
+            .map(|d| DailyActivityJson {
+                date: d.date.to_string(),
+                turns: d.turns,
+                cost: d.cost,
+                sessions: d.sessions,
+            })
+            .collect(),
+        stats: HeatmapStatsJson {
+            total_days: result.stats.total_days,
+            active_days: result.stats.active_days,
+            current_streak: result.stats.current_streak,
+            longest_streak: result.stats.longest_streak,
+            busiest_day: result.stats.busiest_day.map(|(d, n)| BusiestDayJson {
+                date: d.to_string(),
+                turns: n,
+            }),
+        },
+    };
+    serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+}
+
 // ─── Unified HTML Report Payload ───────────────────────────────────────────
 
 /// Unified JSON payload for the HTML dashboard.
@@ -692,36 +764,41 @@ fn build_html_session_summary(
 }
 
 /// Aggregate sessions by date to build heatmap data.
+///
+/// Each turn is attributed to its own local-time date (mirrors
+/// `analysis::heatmap::analyze_heatmap`). Earlier versions of this function
+/// dropped all of a multi-day session's turns onto its `first_timestamp`
+/// date, producing inflated single-day buckets for long sessions.
 fn build_heatmap(sessions: &[SessionData], calc: &PricingCalculator) -> HeatmapPayload {
-    let mut daily_map: HashMap<String, (usize, f64, usize)> = HashMap::new(); // date -> (turns, cost, sessions)
+    // date -> (turns, cost, session_count)
+    let mut daily_map: HashMap<String, (usize, f64, usize)> = HashMap::new();
 
     for session in sessions {
-        // Use first_timestamp to determine the session's date
-        let date_key = match session.first_timestamp {
-            Some(ts) => {
-                let local = ts.with_timezone(&chrono::Local);
-                format!(
-                    "{:04}-{:02}-{:02}",
-                    local.year(),
-                    local.month(),
-                    local.day()
-                )
-            }
-            None => continue,
-        };
-
-        let all = session.all_responses();
-        let turn_count = all.len();
-        let mut session_cost = 0.0;
-        for turn in &all {
-            let cost = calc.calculate_turn_cost(&turn.model, &turn.usage);
-            session_cost += cost.total;
+        // Session is counted on the date of its `first_timestamp` (one
+        // session = one start). Turns and cost are attributed per-turn below.
+        if let Some(ts) = session.first_timestamp {
+            let local = ts.with_timezone(&chrono::Local);
+            let date_key = format!(
+                "{:04}-{:02}-{:02}",
+                local.year(),
+                local.month(),
+                local.day()
+            );
+            daily_map.entry(date_key).or_insert((0, 0.0, 0)).2 += 1;
         }
 
-        let entry = daily_map.entry(date_key).or_insert((0, 0.0, 0));
-        entry.0 += turn_count;
-        entry.1 += session_cost;
-        entry.2 += 1;
+        for turn in session.all_responses() {
+            let local = turn.timestamp.with_timezone(&chrono::Local);
+            let date_key = format!(
+                "{:04}-{:02}-{:02}",
+                local.year(),
+                local.month(),
+                local.day()
+            );
+            let entry = daily_map.entry(date_key).or_insert((0, 0.0, 0));
+            entry.0 += 1;
+            entry.1 += calc.calculate_turn_cost(&turn.model, &turn.usage).total;
+        }
     }
 
     let mut days: Vec<DailyActivity> = daily_map
@@ -738,4 +815,199 @@ fn build_heatmap(sessions: &[SessionData], calc: &PricingCalculator) -> HeatmapP
     days.sort_by(|a, b| a.date.cmp(&b.date));
 
     HeatmapPayload { days }
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::heatmap::analyze_heatmap;
+    use crate::data::models::{
+        DataQuality, SessionData, SessionMetadata, TokenUsage, ValidatedTurn,
+    };
+    use chrono::{DateTime, Local, TimeZone, Utc};
+
+    fn make_turn(ts: &str) -> ValidatedTurn {
+        ValidatedTurn {
+            uuid: format!("u-{ts}"),
+            request_id: Some(format!("r-{ts}")),
+            timestamp: ts.parse::<DateTime<Utc>>().unwrap(),
+            model: "claude-sonnet-4-20250514".into(),
+            usage: TokenUsage {
+                input_tokens: Some(10),
+                output_tokens: Some(20),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                cache_creation: None,
+                server_tool_use: None,
+                service_tier: None,
+                speed: None,
+                inference_geo: None,
+            },
+            stop_reason: None,
+            content_types: vec!["text".into()],
+            is_agent: false,
+            agent_id: None,
+            user_text: None,
+            assistant_text: None,
+            tool_names: vec![],
+            service_tier: None,
+            speed: None,
+            inference_geo: None,
+            tool_error_count: 0,
+            git_branch: None,
+            attribution_plugin: None,
+            attribution_skill: None,
+        }
+    }
+
+    fn make_session(id: &str, turns: Vec<ValidatedTurn>) -> SessionData {
+        let first = turns.iter().map(|t| t.timestamp).min();
+        let last = turns.iter().map(|t| t.timestamp).max();
+        SessionData {
+            session_id: id.into(),
+            project: Some("test".into()),
+            turns,
+            subagents: vec![],
+            plugins: vec![],
+            skills: vec![],
+            hooks: vec![],
+            first_timestamp: first,
+            last_timestamp: last,
+            version: None,
+            quality: DataQuality::default(),
+            metadata: SessionMetadata::default(),
+            is_orphan: false,
+        }
+    }
+
+    /// Bug regression: `build_heatmap` used to attribute *all* of a session's
+    /// turns to `first_timestamp.date`. A long-running session that spans two
+    /// local days must split its turns across those two days, not lump them
+    /// onto the start day.
+    #[test]
+    fn heatmap_html_payload_attributes_turns_per_day() {
+        let calc = PricingCalculator::new();
+        // Pick noon-local on two consecutive days so the test is timezone-independent.
+        let local_today = Local::now().date_naive();
+        let day_a = local_today - chrono::Duration::days(2);
+        let day_b = local_today - chrono::Duration::days(1);
+        // 12:00 local on each day, converted to UTC for the turn timestamp.
+        let ts_a: DateTime<Utc> = Local
+            .from_local_datetime(&day_a.and_hms_opt(12, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        let ts_b: DateTime<Utc> = Local
+            .from_local_datetime(&day_b.and_hms_opt(12, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let sessions = vec![make_session(
+            "s1",
+            vec![
+                make_turn(&ts_a.to_rfc3339()),
+                make_turn(&ts_a.to_rfc3339()),
+                make_turn(&ts_b.to_rfc3339()),
+            ],
+        )];
+
+        let hm = build_heatmap(&sessions, &calc);
+        // Two distinct local dates -> two entries.
+        let day_a_str = day_a.to_string();
+        let day_b_str = day_b.to_string();
+        let entry_a = hm.days.iter().find(|d| d.date == day_a_str).unwrap();
+        let entry_b = hm.days.iter().find(|d| d.date == day_b_str).unwrap();
+        assert_eq!(
+            entry_a.turns, 2,
+            "two turns at 12:00 local on day_a must stay on day_a"
+        );
+        assert_eq!(
+            entry_b.turns, 1,
+            "one turn at 12:00 local on day_b must be attributed to day_b"
+        );
+        // The session is counted once on day_a (its first_timestamp date).
+        assert_eq!(entry_a.sessions, 1);
+        assert_eq!(entry_b.sessions, 0);
+    }
+
+    /// `render_heatmap_json` must produce a parseable JSON object with the
+    /// expected top-level keys (camelCase) and a `daily` array whose length
+    /// matches the heatmap range.
+    #[test]
+    fn heatmap_json_output_has_expected_shape() {
+        let calc = PricingCalculator::new();
+        // One turn at 12:00 local yesterday.
+        let local_today = Local::now().date_naive();
+        let yesterday = local_today - chrono::Duration::days(1);
+        let ts: DateTime<Utc> = Local
+            .from_local_datetime(&yesterday.and_hms_opt(12, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        let sessions = vec![make_session("s1", vec![make_turn(&ts.to_rfc3339())])];
+
+        let result = analyze_heatmap(&sessions, &calc, 7);
+        let json_str = render_heatmap_json(&result);
+        let v: serde_json::Value = serde_json::from_str(&json_str).expect("must parse as JSON");
+        assert!(v.get("daily").and_then(|d| d.as_array()).is_some());
+        assert!(v.get("startDate").and_then(|s| s.as_str()).is_some());
+        assert!(v.get("endDate").and_then(|s| s.as_str()).is_some());
+        assert!(v.get("thresholds").and_then(|t| t.as_array()).is_some());
+        assert!(v.get("stats").is_some());
+        // Daily entries use camelCase too.
+        let first = &v["daily"][0];
+        assert!(first.get("date").is_some());
+        assert!(first.get("turns").is_some());
+        assert!(first.get("cost").is_some());
+        assert!(first.get("sessions").is_some());
+        // Yesterday's bucket has exactly one turn.
+        let yesterday_str = yesterday.to_string();
+        let y_entry = v["daily"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["date"].as_str() == Some(&yesterday_str))
+            .expect("yesterday must be in the heatmap range");
+        assert_eq!(y_entry["turns"].as_u64(), Some(1));
+        // Busiest day matches.
+        let bd = &v["stats"]["busiestDay"];
+        assert_eq!(bd["date"].as_str(), Some(yesterday_str.as_str()));
+        assert_eq!(bd["turns"].as_u64(), Some(1));
+    }
+
+    /// The unified HTML report payload always includes a `heatmap` section
+    /// with a `days` array (possibly empty).
+    #[test]
+    fn html_report_payload_includes_heatmap_section() {
+        use crate::analysis::overview::analyze_overview;
+        use crate::analysis::project::analyze_projects;
+        use crate::analysis::trend::analyze_trend;
+        use crate::data::models::GlobalDataQuality;
+
+        let calc = PricingCalculator::new();
+        let local_today = Local::now().date_naive();
+        let ts: DateTime<Utc> = Local
+            .from_local_datetime(&local_today.and_hms_opt(12, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+        let sessions = vec![make_session("s1", vec![make_turn(&ts.to_rfc3339())])];
+
+        let overview = analyze_overview(&sessions, GlobalDataQuality::default(), &calc, None);
+        let projects = analyze_projects(&sessions, &calc, 10);
+        let trend = analyze_trend(&sessions, &calc, 0, false);
+        let payload =
+            render_html_payload(&overview, &projects, &trend, &sessions, &calc, None, None);
+        let v: serde_json::Value = serde_json::from_str(&payload).expect("must parse as JSON");
+        let days = v["heatmap"]["days"]
+            .as_array()
+            .expect("heatmap.days must be an array");
+        assert!(
+            days.iter().any(|d| d["turns"].as_u64() == Some(1)),
+            "the one turn we wrote must appear in heatmap.days"
+        );
+    }
 }
