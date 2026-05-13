@@ -13,6 +13,10 @@ transcript_entry! {
         pub is_api_error_message: Option<bool>,
         pub is_virtual: Option<bool>,
         pub advisor_model: Option<String>,
+        /// 触发本 turn 的 plugin 名（如 "superpowers"，Claude Code 2.1.138+）
+        pub attribution_plugin: Option<String>,
+        /// 触发本 turn 的 skill 名（如 "superpowers:brainstorming"，Claude Code 2.1.138+）
+        pub attribution_skill: Option<String>,
     }
 }
 

@@ -6,6 +6,18 @@ transcript_entry! {
     /// A user-authored message entry in a Claude Code session.
     pub struct UserEntry {
         pub message: Option<UserContent>,
+        /// tool-use placeholder 标志（Claude Code 2.1.104+）
+        pub is_meta: Option<bool>,
+        /// 当前 turn 的权限模式快照（inline，Claude Code 2.1.104+）
+        pub permission_mode: Option<String>,
+        /// 旧版 toolResult 回填，保留原始 JSON 结构（Claude Code 2.1.104+）
+        pub tool_use_result: Option<serde_json::Value>,
+        /// tool 调用与结果的关联 id（新名，Claude Code 2.1.71+）
+        #[serde(rename = "sourceToolUseID")]
+        pub source_tool_use_id: Option<String>,
+        /// tool 调用与结果的关联 id（旧名，仍在用，Claude Code 2.1.71+）
+        #[serde(rename = "sourceToolAssistantUUID")]
+        pub source_tool_assistant_uuid: Option<String>,
     }
 }
 
@@ -15,7 +27,33 @@ transcript_entry! {
         pub message: Option<serde_json::Value>,
         pub subtype: Option<String>,
         pub duration_ms: Option<u64>,
+        // ── 仅在 subtype = stop_hook_summary 时出现（Claude Code 2.1.104+）──
+        /// 本次 stop hook 触发的钩子总数
+        pub hook_count: Option<u64>,
+        /// 每个钩子的详细信息（命令 + 耗时）
+        pub hook_infos: Option<Vec<HookInfo>>,
+        /// 钩子执行过程中产生的错误列表（结构未必稳定，用 Value 兜底）
+        pub hook_errors: Option<Vec<serde_json::Value>>,
+        /// 钩子是否阻止了 turn 继续
+        pub prevented_continuation: Option<bool>,
+        /// 停止原因
+        pub stop_reason: Option<String>,
+        /// 是否有输出
+        pub has_output: Option<bool>,
+        /// 日志/通知级别（如 "suggestion"）
+        pub level: Option<String>,
+        /// 关联的 tool_use id（注意末尾全大写 ID）
+        #[serde(rename = "toolUseID")]
+        pub tool_use_id: Option<String>,
     }
+}
+
+/// stop_hook_summary 中单个钩子的执行信息（Claude Code 2.1.104+）。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookInfo {
+    pub command: Option<String>,
+    pub duration_ms: Option<u64>,
 }
 
 transcript_entry! {
