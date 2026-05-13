@@ -9,6 +9,10 @@ pub const PRICING_FETCH_DATE: &str = "2026-03-21";
 /// Source URL for pricing data.
 pub const PRICING_SOURCE: &str = "platform.claude.com/docs/en/about-claude/pricing";
 
+/// Built-in model used to price unknown models when no exact/prefix match exists.
+/// Updated whenever a new "latest" Claude flagship is added to `builtin_prices()`.
+pub const LATEST_FALLBACK_MODEL: &str = "claude-opus-4-7";
+
 // ─── Data Structures ─────────────────────────────────────────────────────────
 
 /// Per-model pricing in dollars per million tokens.
@@ -45,7 +49,14 @@ pub enum PriceSource {
     Builtin,
     /// Loaded from a user config file override.
     Config,
-    /// Model not found – all costs are zero.
+    /// Unknown model — priced using the latest built-in Claude as a stand-in.
+    /// `requested` is the model name actually queried; `fallback_to` is the
+    /// built-in entry whose prices were used.
+    Fallback {
+        requested: String,
+        fallback_to: String,
+    },
+    /// Model not found and no fallback available – all costs are zero.
     Unknown,
 }
 
@@ -53,6 +64,16 @@ pub enum PriceSource {
 
 fn builtin_prices() -> HashMap<String, ModelPrice> {
     let entries: Vec<(&str, ModelPrice)> = vec![
+        (
+            "claude-opus-4-7",
+            ModelPrice {
+                base_input: 5.0,
+                cache_write_5m: 6.25,
+                cache_write_1h: 10.0,
+                cache_read: 0.50,
+                output: 25.0,
+            },
+        ),
         (
             "claude-opus-4-6",
             ModelPrice {
@@ -197,6 +218,7 @@ impl PricingCalculator {
     /// 2. Prefix match in overrides
     /// 3. Exact match in built-in prices
     /// 4. Prefix match in built-in prices
+    /// 5. Fallback to the latest built-in Claude (returns `PriceSource::Fallback`)
     pub fn get_price(&self, model: &str) -> Option<(&ModelPrice, PriceSource)> {
         // 1. Exact override
         if let Some(p) = self.overrides.get(model) {
@@ -214,6 +236,17 @@ impl PricingCalculator {
         if let Some(p) = Self::prefix_lookup(&self.prices, model) {
             return Some((p, PriceSource::Builtin));
         }
+        // 5. Fallback to latest built-in Claude so unknown models don't
+        // silently produce $0 costs. Caller can detect via `PriceSource::Fallback`.
+        if let Some((fallback_key, fallback_price)) = self.latest_builtin_claude() {
+            return Some((
+                fallback_price,
+                PriceSource::Fallback {
+                    requested: model.to_string(),
+                    fallback_to: fallback_key.to_string(),
+                },
+            ));
+        }
         None
     }
 
@@ -226,6 +259,16 @@ impl PricingCalculator {
             .filter(|(key, _)| model.starts_with(key.as_str()))
             .max_by_key(|(key, _)| key.len())
             .map(|(_, v)| v)
+    }
+
+    /// Look up the built-in entry used as the unknown-model fallback.
+    ///
+    /// Returns `None` only if `LATEST_FALLBACK_MODEL` is somehow missing from
+    /// the built-in table — guarded by a unit test.
+    fn latest_builtin_claude(&self) -> Option<(&str, &ModelPrice)> {
+        self.prices
+            .get_key_value(LATEST_FALLBACK_MODEL)
+            .map(|(k, v)| (k.as_str(), v))
     }
 
     /// Calculate the cost of a single assistant turn.
@@ -409,7 +452,13 @@ mod tests {
 
     #[test]
     fn unknown_model_zero() {
-        let calc = PricingCalculator::new();
+        // With no built-in entries at all, an unknown model has no fallback and
+        // produces zero cost with `PriceSource::Unknown`. This guards the path
+        // taken when `calculate_turn_cost` cannot resolve a price.
+        let calc = PricingCalculator {
+            prices: HashMap::new(),
+            overrides: HashMap::new(),
+        };
         let usage = make_usage(1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0);
         let cost = calc.calculate_turn_cost("gpt-99-turbo", &usage);
 
@@ -441,5 +490,112 @@ mod tests {
             cost.input_cost
         );
         assert_eq!(cost.price_source, PriceSource::Config);
+    }
+
+    /// `claude-opus-4-7` must use the same pricing as the opus-4-6 generation
+    /// ($5 input / $25 output), not the older opus-4 generation ($15/$75).
+    /// Previously opus-4-7 fell through the prefix chain to `claude-opus-4`,
+    /// inflating its cost ~3x.
+    #[test]
+    fn opus_4_7_uses_opus_4_6_pricing() {
+        let calc = PricingCalculator::new();
+        let usage = make_usage(1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0);
+        let cost = calc.calculate_turn_cost("claude-opus-4-7", &usage);
+
+        // Same total as opus-4-6 with the same usage: 5 + 6.25 + 0.50 + 25 = 36.75
+        assert!(
+            (cost.input_cost - 5.0).abs() < 1e-9,
+            "input_cost: {}",
+            cost.input_cost
+        );
+        assert!(
+            (cost.output_cost - 25.0).abs() < 1e-9,
+            "output_cost: {}",
+            cost.output_cost
+        );
+        assert!(
+            (cost.cache_write_5m_cost - 6.25).abs() < 1e-9,
+            "cache_write_5m_cost: {}",
+            cost.cache_write_5m_cost
+        );
+        assert!(
+            (cost.cache_read_cost - 0.50).abs() < 1e-9,
+            "cache_read_cost: {}",
+            cost.cache_read_cost
+        );
+        assert!((cost.total - 36.75).abs() < 1e-9, "total: {}", cost.total);
+        assert_eq!(cost.price_source, PriceSource::Builtin);
+    }
+
+    /// An unknown model name with no prefix overlap with any built-in entry
+    /// must fall back to `LATEST_FALLBACK_MODEL` (currently claude-opus-4-7)
+    /// with a `PriceSource::Fallback` so the cost is not silently $0.
+    ///
+    /// Note: we pick "claude-future-x-1" deliberately — names like
+    /// `claude-opus-4-999` would be eaten by the `claude-opus-4` prefix.
+    #[test]
+    fn unknown_model_falls_back_to_latest_with_warning() {
+        let calc = PricingCalculator::new();
+        let usage = make_usage(1_000_000, 1_000_000, 0, 0, 0, 0);
+        let cost = calc.calculate_turn_cost("claude-future-x-1", &usage);
+
+        // Priced at LATEST_FALLBACK_MODEL (opus-4-7) rates: $5 input + $25 output = $30.
+        assert!((cost.total - 30.0).abs() < 1e-9, "total: {}", cost.total);
+        match cost.price_source {
+            PriceSource::Fallback {
+                ref requested,
+                ref fallback_to,
+            } => {
+                assert_eq!(requested, "claude-future-x-1");
+                assert_eq!(fallback_to, LATEST_FALLBACK_MODEL);
+            }
+            other => panic!("expected PriceSource::Fallback, got {:?}", other),
+        }
+    }
+
+    /// Guard against typos: the constant pointed at by `LATEST_FALLBACK_MODEL`
+    /// must actually exist in the built-in table; otherwise `get_price` would
+    /// silently fall through to `None` and `PriceSource::Unknown`.
+    #[test]
+    fn fallback_model_must_exist_in_builtin() {
+        let calc = PricingCalculator::new();
+        assert!(
+            calc.prices.contains_key(LATEST_FALLBACK_MODEL),
+            "LATEST_FALLBACK_MODEL ({}) must exist in builtin_prices()",
+            LATEST_FALLBACK_MODEL
+        );
+        assert!(calc.latest_builtin_claude().is_some());
+    }
+
+    /// `calculate_turn_cost` must propagate the `PriceSource` from `get_price`
+    /// onto the `CostBreakdown`, so downstream code can surface fallback warnings.
+    #[test]
+    fn cost_breakdown_carries_source() {
+        let calc = PricingCalculator::new();
+        let usage = make_usage(1_000_000, 0, 0, 0, 0, 0);
+
+        let builtin = calc.calculate_turn_cost("claude-opus-4-6", &usage);
+        assert_eq!(builtin.price_source, PriceSource::Builtin);
+
+        let fallback = calc.calculate_turn_cost("claude-future-x-1", &usage);
+        assert!(matches!(
+            fallback.price_source,
+            PriceSource::Fallback { .. }
+        ));
+
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "claude-opus-4-6".to_string(),
+            ModelPrice {
+                base_input: 1.0,
+                cache_write_5m: 0.0,
+                cache_write_1h: 0.0,
+                cache_read: 0.0,
+                output: 0.0,
+            },
+        );
+        let calc_with_override = PricingCalculator::new().with_overrides(overrides);
+        let config = calc_with_override.calculate_turn_cost("claude-opus-4-6", &usage);
+        assert_eq!(config.price_source, PriceSource::Config);
     }
 }

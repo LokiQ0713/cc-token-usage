@@ -36,6 +36,18 @@ struct OverviewJson {
     top_tools: Vec<ToolJson>,
     // Sessions
     sessions: Vec<SessionSummaryJson>,
+    /// Unknown-model pricing fallbacks. Empty array when every observed model
+    /// has explicit pricing — emitted as `[]` (never elided) so the frontend
+    /// type contract is stable.
+    pricing_warnings: Vec<PricingWarningJson>,
+}
+
+#[derive(Serialize)]
+struct PricingWarningJson {
+    unknown_model: String,
+    fallback_to: String,
+    turn_count: u64,
+    fallback_cost: f64,
 }
 
 #[derive(Serialize)]
@@ -178,6 +190,16 @@ fn build_overview_json(overview: &OverviewResult) -> OverviewJson {
         models: models_json,
         top_tools,
         sessions,
+        pricing_warnings: overview
+            .pricing_warnings
+            .iter()
+            .map(|w| PricingWarningJson {
+                unknown_model: w.unknown_model.clone(),
+                fallback_to: w.fallback_to.clone(),
+                turn_count: w.turn_count,
+                fallback_cost: w.fallback_cost,
+            })
+            .collect(),
     }
 }
 

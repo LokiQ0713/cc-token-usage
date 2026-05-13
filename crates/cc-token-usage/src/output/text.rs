@@ -360,6 +360,38 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         .unwrap();
     }
 
+    // Pricing fallback warnings — surfaced last so they're not buried.
+    if !result.pricing_warnings.is_empty() {
+        writeln!(out).unwrap();
+        writeln!(
+            out,
+            "! Pricing fallback ({} unknown model{})",
+            result.pricing_warnings.len(),
+            if result.pricing_warnings.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        )
+        .unwrap();
+        for w in &result.pricing_warnings {
+            writeln!(
+                out,
+                "  \u{00b7} {}: {} turns, {} \u{2014} used {} pricing",
+                w.unknown_model,
+                format_number(w.turn_count),
+                format_cost(w.fallback_cost),
+                w.fallback_to
+            )
+            .unwrap();
+        }
+        writeln!(
+            out,
+            "  These costs are estimates. Update the pricing table when actual rates are known."
+        )
+        .unwrap();
+    }
+
     writeln!(out).unwrap();
 
     out

@@ -3,12 +3,20 @@ use std::collections::HashMap;
 use chrono::{Datelike, Local, Timelike};
 
 use crate::data::models::{GlobalDataQuality, SessionData};
-use crate::pricing::calculator::PricingCalculator;
+use crate::pricing::calculator::{PriceSource, PricingCalculator};
 
 use super::{
-    AggregatedTokens, CacheSavings, CostByCategory, OverviewResult, SessionSummary,
+    AggregatedTokens, CacheSavings, CostByCategory, OverviewResult, PricingWarning, SessionSummary,
     SubscriptionValue,
 };
+
+/// Accumulator for one unknown model encountered during overview aggregation.
+#[derive(Default)]
+struct FallbackAccum {
+    fallback_to: String,
+    turn_count: u64,
+    fallback_cost: f64,
+}
 
 pub fn analyze_overview(
     sessions: &[SessionData],
@@ -25,6 +33,8 @@ pub fn analyze_overview(
     let mut total_agent_turns = 0usize;
     let mut cost_by_category = CostByCategory::default();
     let mut tool_count_map: HashMap<String, usize> = HashMap::new();
+    // Collect fallback occurrences keyed by the *requested* (unknown) model.
+    let mut fallback_map: HashMap<String, FallbackAccum> = HashMap::new();
 
     for session in sessions {
         for turn in session.all_responses() {
@@ -37,6 +47,7 @@ pub fn analyze_overview(
                 &mut hourly_distribution,
                 &mut weekday_hour_matrix,
                 &mut cost_by_category,
+                &mut fallback_map,
             );
             total_turns += 1;
             if turn.is_agent {
@@ -148,6 +159,23 @@ pub fn analyze_overview(
         0
     };
 
+    // Build sorted, deterministic pricing warnings: cost desc, then model name asc.
+    let mut pricing_warnings: Vec<PricingWarning> = fallback_map
+        .into_iter()
+        .map(|(unknown_model, acc)| PricingWarning {
+            unknown_model,
+            fallback_to: acc.fallback_to,
+            turn_count: acc.turn_count,
+            fallback_cost: acc.fallback_cost,
+        })
+        .collect();
+    pricing_warnings.sort_by(|a, b| {
+        b.fallback_cost
+            .partial_cmp(&a.fallback_cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.unknown_model.cmp(&b.unknown_model))
+    });
+
     OverviewResult {
         total_sessions: sessions.len(),
         total_turns,
@@ -169,6 +197,7 @@ pub fn analyze_overview(
         output_ratio,
         cost_per_turn,
         tokens_per_output_turn,
+        pricing_warnings,
     }
 }
 
@@ -182,6 +211,7 @@ fn process_turn(
     hourly_distribution: &mut [usize; 24],
     weekday_hour_matrix: &mut [[usize; 24]; 7],
     cost_by_category: &mut CostByCategory,
+    fallback_map: &mut HashMap<String, FallbackAccum>,
 ) {
     // Aggregate tokens by model
     tokens_by_model
@@ -200,6 +230,21 @@ fn process_turn(
     cost_by_category.cache_write_5m_cost += cost.cache_write_5m_cost;
     cost_by_category.cache_write_1h_cost += cost.cache_write_1h_cost;
     cost_by_category.cache_read_cost += cost.cache_read_cost;
+
+    // Track unknown-model fallbacks so the user can be warned that those
+    // dollars are estimates. Keyed by the model name as it actually appeared.
+    if let PriceSource::Fallback {
+        ref requested,
+        ref fallback_to,
+    } = cost.price_source
+    {
+        let entry = fallback_map.entry(requested.clone()).or_default();
+        if entry.fallback_to.is_empty() {
+            entry.fallback_to = fallback_to.clone();
+        }
+        entry.turn_count += 1;
+        entry.fallback_cost += cost.total;
+    }
 
     // Hourly distribution (local timezone)
     let local_ts = turn.timestamp.with_timezone(&Local);
@@ -358,5 +403,124 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         turn_details: None,
         output_ratio,
         cost_per_turn,
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::models::{
+        DataQuality, SessionData, SessionMetadata, TokenUsage, ValidatedTurn,
+    };
+    use chrono::{TimeZone, Utc};
+
+    fn make_turn(model: &str, input: u64, output: u64) -> ValidatedTurn {
+        ValidatedTurn {
+            uuid: format!("uuid-{}-{}", model, input),
+            request_id: None,
+            timestamp: Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap(),
+            model: model.to_string(),
+            usage: TokenUsage {
+                input_tokens: Some(input),
+                output_tokens: Some(output),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                cache_creation: None,
+                server_tool_use: None,
+                service_tier: None,
+                speed: None,
+                inference_geo: None,
+            },
+            stop_reason: Some("end_turn".to_string()),
+            content_types: vec!["text".to_string()],
+            is_agent: false,
+            agent_id: None,
+            user_text: None,
+            assistant_text: None,
+            tool_names: vec![],
+            service_tier: None,
+            speed: None,
+            inference_geo: None,
+            tool_error_count: 0,
+            git_branch: None,
+            attribution_plugin: None,
+            attribution_skill: None,
+        }
+    }
+
+    fn make_session(turns: Vec<ValidatedTurn>) -> SessionData {
+        SessionData {
+            session_id: "test-session".to_string(),
+            project: Some("test-project".to_string()),
+            turns,
+            subagents: vec![],
+            plugins: vec![],
+            skills: vec![],
+            hooks: vec![],
+            first_timestamp: Some(Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap()),
+            last_timestamp: Some(Utc.with_ymd_and_hms(2026, 5, 1, 13, 0, 0).unwrap()),
+            version: None,
+            quality: DataQuality::default(),
+            metadata: SessionMetadata::default(),
+        }
+    }
+
+    /// Mix one known model (claude-opus-4-6) with two unknown models that
+    /// each take the LATEST_FALLBACK_MODEL fallback. Aggregation must:
+    ///   1. produce exactly one PricingWarning per distinct unknown model
+    ///   2. sum turn_count and fallback_cost per unknown model
+    ///   3. leave the known model out of the warnings list
+    ///   4. sort by cost desc (tie-broken by model name asc)
+    #[test]
+    fn pricing_warnings_aggregated_across_session() {
+        let calc = PricingCalculator::new();
+        let session = make_session(vec![
+            make_turn("claude-opus-4-6", 1_000_000, 1_000_000), // known
+            make_turn("claude-future-x-1", 1_000_000, 1_000_000), // unknown -> fallback
+            make_turn("claude-future-x-1", 500_000, 500_000),   // unknown, same model
+            make_turn("claude-future-y-2", 2_000_000, 2_000_000), // unknown, distinct
+        ]);
+
+        let result = analyze_overview(&[session], GlobalDataQuality::default(), &calc, None);
+
+        assert_eq!(
+            result.pricing_warnings.len(),
+            2,
+            "expected one warning per distinct unknown model"
+        );
+
+        // future-y-2 has the higher cost (2M+2M vs 1.5M+1.5M) → first by sort.
+        let first = &result.pricing_warnings[0];
+        assert_eq!(first.unknown_model, "claude-future-y-2");
+        assert_eq!(first.turn_count, 1);
+        assert_eq!(first.fallback_to, "claude-opus-4-7");
+        // 2M input * $5 + 2M output * $25 = $60
+        assert!(
+            (first.fallback_cost - 60.0).abs() < 1e-9,
+            "fallback_cost: {}",
+            first.fallback_cost
+        );
+
+        let second = &result.pricing_warnings[1];
+        assert_eq!(second.unknown_model, "claude-future-x-1");
+        assert_eq!(second.turn_count, 2);
+        assert_eq!(second.fallback_to, "claude-opus-4-7");
+        // (1M+0.5M) * $5 input + (1M+0.5M) * $25 output = $7.5 + $37.5 = $45
+        assert!(
+            (second.fallback_cost - 45.0).abs() < 1e-9,
+            "fallback_cost: {}",
+            second.fallback_cost
+        );
+
+        // The known model must not appear in pricing_warnings.
+        assert!(
+            !result
+                .pricing_warnings
+                .iter()
+                .any(|w| w.unknown_model == "claude-opus-4-6"),
+            "known model leaked into pricing_warnings"
+        );
     }
 }

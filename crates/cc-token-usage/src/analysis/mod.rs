@@ -93,6 +93,23 @@ pub struct OverviewResult {
     pub output_ratio: f64,           // output / total input (as percentage)
     pub cost_per_turn: f64,          // $/turn
     pub tokens_per_output_turn: u64, // avg output tokens per turn
+    /// Models whose pricing was estimated via fallback to the latest built-in
+    /// Claude. One entry per distinct unknown model name. Empty when every
+    /// observed model has explicit pricing.
+    pub pricing_warnings: Vec<PricingWarning>,
+}
+
+/// One unknown-model fallback aggregated across all sessions.
+#[derive(Debug, Clone, Serialize)]
+pub struct PricingWarning {
+    /// The model name as it appeared in the JSONL (e.g. "claude-opus-4-8").
+    pub unknown_model: String,
+    /// The built-in entry whose prices were used as a stand-in.
+    pub fallback_to: String,
+    /// How many turns from this model contributed to the totals.
+    pub turn_count: u64,
+    /// Total estimated cost charged at the fallback's rates.
+    pub fallback_cost: f64,
 }
 
 /// How much money was saved by cache hits vs paying full input price.
