@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::analysis::project::project_display_name;
 use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
-use crate::data::models::{HookUsage, PluginUsage, SessionData, SkillUsage};
+use crate::data::models::{HookUsage, PluginUsage, SessionData, SkillUsage, SubagentTypeAggregate};
 use crate::pricing::calculator::PricingCalculator;
 
 // ─── Overview JSON ──────────────────────────────────────────────────────────
@@ -103,6 +103,8 @@ struct SessionSummaryJson {
     cost: f64,
     output_ratio: f64,
     cost_per_turn: f64,
+    #[serde(rename = "isOrphan")]
+    is_orphan: bool,
 }
 
 /// Build the typed `OverviewJson` struct from an `OverviewResult`.
@@ -153,6 +155,7 @@ fn build_overview_json(overview: &OverviewResult) -> OverviewJson {
             cost: s.cost,
             output_ratio: s.output_ratio,
             cost_per_turn: s.cost_per_turn,
+            is_orphan: s.is_orphan,
         })
         .collect();
 
@@ -242,6 +245,14 @@ struct SessionJson {
     plugins: Vec<PluginUsage>,
     skills: Vec<SkillUsage>,
     hooks: Vec<HookUsage>,
+    /// Per-`agent_type` rollup of `subagents[]`. UI chips group by type.
+    /// SubagentTypeAggregate serializes to camelCase.
+    #[serde(rename = "subagentTypes")]
+    subagent_types: Vec<SubagentTypeAggregate>,
+    /// Orphan session: scanner reconstructed this session from subagent
+    /// jsonl files only (parent jsonl deleted). Totals still include it.
+    #[serde(rename = "isOrphan")]
+    is_orphan: bool,
 }
 
 /// JSON shape for one subagent. Mirrors the spec's `subagents[]` schema
@@ -341,6 +352,8 @@ pub fn render_session_json(result: &SessionResult) -> String {
         plugins: result.plugins.clone(),
         skills: result.skills.clone(),
         hooks: result.hooks.clone(),
+        subagent_types: result.subagent_types.clone(),
+        is_orphan: result.is_orphan,
     };
 
     serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
@@ -493,6 +506,13 @@ pub struct HtmlSessionSummary {
     pub plugins: Vec<PluginUsage>,
     pub skills: Vec<SkillUsage>,
     pub hooks: Vec<HookUsage>,
+    /// Per-`agent_type` rollup of `subagents[]` for chip rendering.
+    #[serde(rename = "subagentTypes")]
+    pub subagent_types: Vec<SubagentTypeAggregate>,
+    /// Orphan session: scanner reconstructed this session from subagent
+    /// jsonl files only (parent jsonl deleted). Totals still include it.
+    #[serde(rename = "isOrphan")]
+    pub is_orphan: bool,
 }
 
 /// Per-subagent summary for the HTML dashboard. Mirrors `SubagentJson` but
@@ -646,6 +666,8 @@ fn build_html_session_summary(
         })
         .collect();
 
+    let subagent_types = session.subagent_type_aggregates(calc);
+
     HtmlSessionSummary {
         id: session.session_id.clone(),
         project: session.project.as_deref().map(project_display_name),
@@ -664,6 +686,8 @@ fn build_html_session_summary(
         plugins: session.plugins.clone(),
         skills: session.skills.clone(),
         hooks: session.hooks.clone(),
+        subagent_types,
+        is_orphan: session.is_orphan,
     }
 }
 

@@ -7,10 +7,10 @@ import type { Column } from '../components/DataTable.vue'
 import type {
   SessionEntry,
   AgentBreakdown,
-  Subagent,
   PluginUsage,
   SkillUsage,
   HookUsage,
+  SubagentTypeAggregate,
 } from '../types'
 import {
   getSessionId,
@@ -109,19 +109,37 @@ function formatTimeRangeDuration(firstIso?: string, lastIso?: string): string | 
   return m > 0 ? `${h}h ${m}m` : `${h}h`
 }
 
-function subagentLabel(sub: Subagent): string {
-  return truncateChipLabel(sub.agentType || sub.agentId)
+/**
+ * Chip label for an aggregated subagent type. The session-level `subagent_types`
+ * array groups per-agent_id subagents by their `agentType`, so one chip
+ * represents N calls of the same type (e.g. `builder × 7`).
+ */
+function subagentTypeLabel(agg: SubagentTypeAggregate): string {
+  return truncateChipLabel(`${agg.agentType} ${t('sessions.chip_times')} ${agg.count}`)
 }
 
-function subagentTooltip(sub: Subagent): string {
-  const parts = [
-    `${sub.turns} ${t('common.turns')}`,
-    formatCost(sub.cost),
-  ]
-  const duration = formatTimeRangeDuration(sub.firstTimestamp, sub.lastTimestamp)
-  if (duration) parts.push(duration)
-  if (sub.description) parts.push(truncateChipLabel(sub.description, 80))
-  return parts.join(' · ')
+/**
+ * Tooltip for an aggregated subagent chip. Shows cost, total turns, and
+ * up to 3 invocation descriptions; if more exist they're summarized as
+ * "...and N more". Newlines separate the lines (modern browsers honor them
+ * inside `title=""`).
+ */
+function subagentTypeTooltip(agg: SubagentTypeAggregate): string {
+  const head = [
+    `${agg.count} ${t('sessions.chip_calls')}`,
+    `${agg.totalTurns} ${t('common.turns')}`,
+    formatCost(agg.totalCost),
+  ].join(' · ')
+  const lines = [head]
+  const shown = agg.descriptions.slice(0, 3)
+  for (const d of shown) {
+    lines.push('• ' + truncateChipLabel(d, 80))
+  }
+  if (agg.descriptions.length > 3) {
+    const more = agg.descriptions.length - 3
+    lines.push(t('sessions.chip_and_more').replace('{n}', String(more)))
+  }
+  return lines.join('\n')
 }
 
 function pluginTooltip(p: PluginUsage): string {
@@ -284,7 +302,10 @@ const sessionColumns = computed<Column<SessionEntry>[]>(() => [
       const name = getProject(row)
         .replace(/^-Users-[^-]+-/, '~/')
         .replace(/-/g, '/')
-      return name.length > 20 ? '...' + name.slice(-17) : name
+      const trimmed = name.length > 20 ? '...' + name.slice(-17) : name
+      // Mark orphan sessions inline so users can spot them without expanding.
+      // Totals still include orphans; this is a display-only flag.
+      return ('isOrphan' in row && row.isOrphan) ? `${trimmed} ${t('sessions.orphan_tag')}` : trimmed
     },
   },
   {
@@ -445,6 +466,15 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
         >
           <template #expand="{ row }">
             <div class="session-detail">
+              <!-- Orphan banner: parent main jsonl was deleted but the
+                   subagent files are still on disk. The session's totals are
+                   still included in global aggregates. -->
+              <div
+                v-if="'isOrphan' in row && row.isOrphan"
+                class="orphan-banner"
+              >
+                {{ t('sessions.orphan_banner') }}
+              </div>
               <!-- Basic Info -->
               <div class="detail-section info-row">
                 <div class="info-item" v-if="row.title">
@@ -521,18 +551,21 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
               <!-- Phase 2 capability chips: subagents / plugins / skills / hooks.
                    Empty / missing arrays → no row is rendered (consistent with
                    how PR-link / branch behave above). -->
+              <!-- Subagents render aggregated by agentType (Phase 3):
+                   `builder × 7` instead of seven per-agent_id chips. Falls
+                   back to nothing if the array is missing or empty. -->
               <div
                 class="chip-row"
-                v-if="row.subagents && row.subagents.length > 0"
+                v-if="row.subagentTypes && row.subagentTypes.length > 0"
               >
                 <span class="chip-row-label">{{ t('session.subagents') }}</span>
                 <span class="chip-row-list">
                   <span
-                    v-for="sub in row.subagents"
-                    :key="sub.agentId"
+                    v-for="agg in row.subagentTypes"
+                    :key="agg.agentType"
                     class="capability-chip subagent-chip"
-                    :title="subagentTooltip(sub)"
-                  >{{ subagentLabel(sub) }}</span>
+                    :title="subagentTypeTooltip(agg)"
+                  >{{ subagentTypeLabel(agg) }}</span>
                 </span>
               </div>
               <div
@@ -871,6 +904,18 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
 .hook-chip {
   border-color: rgba(245, 158, 11, 0.4);
   color: #fbbf24;
+}
+
+/* ─── Orphan Banner ───────────────────────────────────────────────────────── */
+
+.orphan-banner {
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 8px;
+  color: #fbbf24;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 /* ─── No Sessions ─────────────────────────────────────────────────────────── */

@@ -7,7 +7,8 @@ pub mod validate;
 pub mod wrapped;
 
 use crate::data::models::{
-    AttributionData, GlobalDataQuality, HookUsage, PluginUsage, PrLinkInfo, SkillUsage, TokenUsage,
+    AttributionData, GlobalDataQuality, HookUsage, PluginUsage, PrLinkInfo, SkillUsage,
+    SubagentTypeAggregate, TokenUsage,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
@@ -200,6 +201,13 @@ pub struct SessionResult {
     pub plugins: Vec<PluginUsage>,
     pub skills: Vec<SkillUsage>,
     pub hooks: Vec<HookUsage>,
+    /// Subagents grouped by `agent_type` for chip rendering. Always
+    /// derivable from `subagents` (per-agent_id) but exposed as a stable,
+    /// pre-aggregated structure for the frontend / text renderer.
+    pub subagent_types: Vec<SubagentTypeAggregate>,
+    /// Orphan session: scanner picked up subagent jsonl files whose parent
+    /// main session jsonl was deleted. Totals still include this session.
+    pub is_orphan: bool,
 }
 
 /// One subagent's roll-up for the session detail view.
@@ -282,6 +290,9 @@ pub struct SessionSummary {
     // Efficiency metrics
     pub output_ratio: f64,  // output / total context (as percentage)
     pub cost_per_turn: f64, // $/turn
+    /// True for sessions reconstructed only from subagent files (parent
+    /// jsonl deleted). Totals still include these.
+    pub is_orphan: bool,
 }
 
 // ─── Trend ───────────────────────────────────────────────────────────────────

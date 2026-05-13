@@ -359,6 +359,22 @@ pub fn render_overview(result: &OverviewResult, calc: &PricingCalculator) -> Str
         )
         .unwrap();
     }
+    // Surface orphan sessions (parent jsonl deleted, subagents still on disk).
+    // Their cost / turns / tokens are already included in the totals above —
+    // this line just makes the count visible.
+    let orphan_session_count = result
+        .session_summaries
+        .iter()
+        .filter(|s| s.is_orphan)
+        .count();
+    if orphan_session_count > 0 {
+        writeln!(
+            out,
+            "  Orphaned subagents detected: {} (still counted in totals)",
+            orphan_session_count
+        )
+        .unwrap();
+    }
 
     // Pricing fallback warnings — surfaced last so they're not buried.
     if !result.pricing_warnings.is_empty() {
@@ -469,11 +485,13 @@ pub fn render_session(result: &SessionResult) -> String {
 
     let main_turns = result.turn_details.iter().filter(|t| !t.is_agent).count();
 
+    let orphan_tag = if result.is_orphan { " [orphan]" } else { "" };
     writeln!(
         out,
-        "Session {}  {}",
+        "Session {}  {}{}",
         &result.session_id[..result.session_id.len().min(8)],
-        result.project
+        result.project,
+        orphan_tag
     )
     .unwrap();
     writeln!(out).unwrap();
@@ -710,32 +728,19 @@ pub fn render_session(result: &SessionResult) -> String {
     // Each row only renders when its data is non-empty (mirrors how metadata
     // rows are gated). Old sessions (pre-2.1.104/2.1.138) emit nothing here.
 
-    if !result.subagents.is_empty() {
+    // Subagent chips: group by `agent_type` so a session with 7 builder calls
+    // renders one chip `builder x 7 ($X.YY)` rather than seven per-agent_id
+    // chips. `subagent_types` is empty exactly when `subagents` is.
+    if !result.subagent_types.is_empty() {
         let parts: Vec<String> = result
-            .subagents
+            .subagent_types
             .iter()
-            .map(|sa| {
-                let label = sa
-                    .agent_type
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("unknown");
-                let desc = sa.description.as_deref().unwrap_or("");
-                let desc_trim = if desc.is_empty() {
-                    String::new()
-                } else if desc.chars().count() > 40 {
-                    let mut s: String = desc.chars().take(40).collect();
-                    s.push_str("...");
-                    format!(", \"{}\"", s)
-                } else {
-                    format!(", \"{}\"", desc)
-                };
+            .map(|agg| {
                 format!(
-                    "{} ({} turns, {}{})",
-                    label,
-                    sa.turns,
-                    format_cost(sa.cost),
-                    desc_trim
+                    "{} x {} ({})",
+                    agg.agent_type,
+                    agg.count,
+                    format_cost(agg.total_cost)
                 )
             })
             .collect();

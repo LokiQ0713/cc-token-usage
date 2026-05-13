@@ -165,6 +165,7 @@ fn load_from_files(
                 version: pm.version,
                 quality: pm.quality,
                 metadata: pm.metadata,
+                is_orphan: false,
             },
         );
     }
@@ -228,6 +229,7 @@ fn load_from_files(
                     version: None,
                     quality: DataQuality::default(),
                     metadata: SessionMetadata::default(),
+                    is_orphan: true,
                 },
             );
             global_quality.orphan_agents += 1;
@@ -748,6 +750,273 @@ mod tests {
             s.subagents.is_empty(),
             "session without agent files must produce empty subagents Vec"
         );
+    }
+
+    /// A subagent jsonl exists at `<proj>/<uuid>/subagents/agent-X.jsonl`
+    /// but the parent main session jsonl `<proj>/<uuid>.jsonl` was deleted.
+    /// The loader still picks up the subagent (data is preserved), but flags
+    /// the synthesized parent SessionData as orphan.
+    #[test]
+    fn loader_marks_orphan_subagent_as_orphan() {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("projects").join("-Users-test-proj");
+        let parent_uuid = "99999999-aaaa-bbbb-cccc-dddddddddddd";
+        let subagents_dir = project.join(parent_uuid).join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        // Note: NO `<project>/<parent_uuid>.jsonl` — the parent main session
+        // was deleted by the user.
+
+        let agent_turn = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"orphan-agent"}]},"sessionId":"agent-orphan-1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-orphan-1"}"#;
+        fs::write(
+            subagents_dir.join("agent-orphan-1.jsonl"),
+            format!("{}\n", agent_turn),
+        )
+        .unwrap();
+
+        let calc = PricingCalculator::new();
+        let (sessions, quality) = load_all(tmp.path(), &calc).unwrap();
+
+        assert_eq!(
+            sessions.len(),
+            1,
+            "loader should reconstruct an orphan parent session"
+        );
+        let s = &sessions[0];
+        assert_eq!(s.session_id, parent_uuid);
+        assert!(s.is_orphan, "synthesized parent must be flagged as orphan");
+        // The subagent's turn is preserved.
+        assert_eq!(s.subagents.len(), 1);
+        assert_eq!(s.subagents[0].turns.len(), 1);
+        // Quality counter also records the orphan.
+        assert_eq!(quality.orphan_agents, 1);
+    }
+
+    /// A normal session with its main `<uuid>.jsonl` present *and* subagent
+    /// files under `<uuid>/subagents/` must NOT be flagged as orphan.
+    #[test]
+    fn loader_marks_normal_session_as_not_orphan() {
+        let (tmp, session_uuid) = write_fixture_session();
+        let calc = PricingCalculator::new();
+        let (sessions, quality) = load_all(tmp.path(), &calc).unwrap();
+        assert_eq!(sessions.len(), 1);
+        let s = &sessions[0];
+        assert_eq!(s.session_id, session_uuid);
+        assert!(
+            !s.is_orphan,
+            "session with parent main jsonl present must not be orphan"
+        );
+        // No orphans counted at the global level either.
+        assert_eq!(quality.orphan_agents, 0);
+    }
+
+    /// Group three subagents (2x builder, 1x code-reviewer) plus one with
+    /// no agent_type (None) → expect three entries: builder x2, code-reviewer
+    /// x1, and "unknown" x1 (data not dropped).
+    #[test]
+    fn subagent_type_aggregation_groups_by_agent_type() {
+        use crate::data::models::{Subagent, ValidatedTurn};
+
+        let calc = PricingCalculator::new();
+
+        // Helper to build a synthetic Subagent with N turns of given token counts.
+        let make_agent = |agent_id: &str,
+                          agent_type: Option<&str>,
+                          description: Option<&str>,
+                          turns: usize|
+         -> Subagent {
+            let mut tlist = Vec::with_capacity(turns);
+            for i in 0..turns {
+                tlist.push(ValidatedTurn {
+                    uuid: format!("{}-{}", agent_id, i),
+                    request_id: Some(format!("{}-r-{}", agent_id, i)),
+                    timestamp: "2026-05-01T10:00:00Z".parse().unwrap(),
+                    model: "claude-opus-4-6".into(),
+                    usage: crate::data::models::TokenUsage {
+                        input_tokens: Some(100),
+                        output_tokens: Some(200),
+                        cache_creation_input_tokens: Some(0),
+                        cache_read_input_tokens: Some(0),
+                        cache_creation: None,
+                        server_tool_use: None,
+                        service_tier: None,
+                        speed: None,
+                        inference_geo: None,
+                    },
+                    stop_reason: None,
+                    content_types: vec![],
+                    is_agent: true,
+                    agent_id: Some(agent_id.to_string()),
+                    user_text: None,
+                    assistant_text: None,
+                    tool_names: vec![],
+                    service_tier: None,
+                    speed: None,
+                    inference_geo: None,
+                    tool_error_count: 0,
+                    git_branch: None,
+                    attribution_plugin: None,
+                    attribution_skill: None,
+                });
+            }
+            Subagent {
+                agent_id: agent_id.to_string(),
+                agent_type: agent_type.map(|s| s.to_string()),
+                description: description.map(|s| s.to_string()),
+                turns: tlist,
+                first_timestamp: None,
+                last_timestamp: None,
+            }
+        };
+
+        let session = SessionData {
+            session_id: "s1".into(),
+            project: Some("p".into()),
+            turns: Vec::new(),
+            subagents: vec![
+                make_agent("agent-aaa", Some("builder"), Some("task A"), 2),
+                make_agent("agent-bbb", Some("builder"), Some("task B"), 3),
+                make_agent("agent-ccc", Some("code-reviewer"), Some("review X"), 1),
+            ],
+            plugins: Vec::new(),
+            skills: Vec::new(),
+            hooks: Vec::new(),
+            first_timestamp: None,
+            last_timestamp: None,
+            version: None,
+            quality: DataQuality::default(),
+            metadata: super::SessionMetadata::default(),
+            is_orphan: false,
+        };
+
+        let aggs = session.subagent_type_aggregates(&calc);
+        // Sorted alphabetically: builder, code-reviewer.
+        assert_eq!(aggs.len(), 2);
+        assert_eq!(aggs[0].agent_type, "builder");
+        assert_eq!(aggs[0].count, 2);
+        assert_eq!(aggs[0].total_turns, 5); // 2 + 3
+        assert_eq!(aggs[0].total_input_tokens, 500); // (2+3) * 100
+        assert_eq!(aggs[0].total_output_tokens, 1000); // (2+3) * 200
+        assert!(aggs[0].total_cost > 0.0);
+        assert_eq!(
+            aggs[0].descriptions,
+            vec!["task A".to_string(), "task B".to_string()]
+        );
+
+        assert_eq!(aggs[1].agent_type, "code-reviewer");
+        assert_eq!(aggs[1].count, 1);
+        assert_eq!(aggs[1].total_turns, 1);
+        assert_eq!(aggs[1].descriptions, vec!["review X".to_string()]);
+    }
+
+    /// A subagent with `agent_type = None` must be grouped under the literal
+    /// "unknown" key, never silently dropped.
+    #[test]
+    fn subagent_type_aggregation_handles_missing_type() {
+        use crate::data::models::{Subagent, ValidatedTurn};
+
+        let calc = PricingCalculator::new();
+        let make_turn = |id: &str| ValidatedTurn {
+            uuid: id.to_string(),
+            request_id: Some(format!("r-{}", id)),
+            timestamp: "2026-05-01T10:00:00Z".parse().unwrap(),
+            model: "claude-opus-4-6".into(),
+            usage: crate::data::models::TokenUsage {
+                input_tokens: Some(50),
+                output_tokens: Some(50),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                cache_creation: None,
+                server_tool_use: None,
+                service_tier: None,
+                speed: None,
+                inference_geo: None,
+            },
+            stop_reason: None,
+            content_types: vec![],
+            is_agent: true,
+            agent_id: Some("agent-no-meta".into()),
+            user_text: None,
+            assistant_text: None,
+            tool_names: vec![],
+            service_tier: None,
+            speed: None,
+            inference_geo: None,
+            tool_error_count: 0,
+            git_branch: None,
+            attribution_plugin: None,
+            attribution_skill: None,
+        };
+
+        let session = SessionData {
+            session_id: "s1".into(),
+            project: Some("p".into()),
+            turns: Vec::new(),
+            subagents: vec![Subagent {
+                agent_id: "agent-no-meta".into(),
+                agent_type: None, // .meta.json missing
+                description: None,
+                turns: vec![make_turn("t1")],
+                first_timestamp: None,
+                last_timestamp: None,
+            }],
+            plugins: Vec::new(),
+            skills: Vec::new(),
+            hooks: Vec::new(),
+            first_timestamp: None,
+            last_timestamp: None,
+            version: None,
+            quality: DataQuality::default(),
+            metadata: super::SessionMetadata::default(),
+            is_orphan: false,
+        };
+
+        let aggs = session.subagent_type_aggregates(&calc);
+        assert_eq!(
+            aggs.len(),
+            1,
+            "agent_type=None should still produce one aggregate, not drop the data"
+        );
+        assert_eq!(aggs[0].agent_type, "unknown");
+        assert_eq!(aggs[0].count, 1);
+        assert_eq!(aggs[0].total_turns, 1);
+    }
+
+    /// Orphan sessions must contribute to the *global* overview totals
+    /// (cost / turns / tokens). The orphan flag is for display only.
+    #[test]
+    fn global_totals_include_orphan_sessions() {
+        // Same fixture as the orphan-flag test, but verify overview math.
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("projects").join("-Users-test-proj");
+        let parent_uuid = "88888888-aaaa-bbbb-cccc-dddddddddddd";
+        let subagents_dir = project.join(parent_uuid).join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        // Two turns under the orphan parent.
+        let t1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"x"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-orph-1"}"#;
+        let t2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"y"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-orph-2"}"#;
+        fs::write(
+            subagents_dir.join("agent-orphan-z.jsonl"),
+            format!("{}\n{}\n", t1, t2),
+        )
+        .unwrap();
+
+        let calc = PricingCalculator::new();
+        let (sessions, quality) = load_all(tmp.path(), &calc).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].is_orphan);
+
+        // Now drive the overview analysis and ensure totals reflect the
+        // orphan session's data (cost > 0, agent turns counted).
+        let overview = crate::analysis::overview::analyze_overview(&sessions, quality, &calc, None);
+        assert_eq!(overview.total_sessions, 1);
+        assert_eq!(overview.total_turns, 2);
+        assert_eq!(overview.total_agent_turns, 2);
+        assert!(
+            overview.total_cost > 0.0,
+            "orphan session's cost must flow into total_cost"
+        );
+        // Output tokens accumulated from the two orphan turns.
+        assert_eq!(overview.total_output_tokens, 6000);
     }
 
     #[test]

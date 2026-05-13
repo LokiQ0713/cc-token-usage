@@ -45,6 +45,7 @@ export interface SessionSummary {
   cost: number
   output_ratio: number
   cost_per_turn: number
+  isOrphan?: boolean
 }
 
 export interface OverviewData {
@@ -129,6 +130,11 @@ export interface SessionDetail {
   plugins?: PluginUsage[]
   skills?: SkillUsage[]
   hooks?: HookUsage[]
+  // Phase 3: per-agentType rollup of `subagents[]`. Chips render this.
+  subagentTypes?: SubagentTypeAggregate[]
+  // True when the parent main session jsonl was deleted but subagent files
+  // remain on disk. Totals still include the session.
+  isOrphan?: boolean
 }
 
 /**
@@ -156,6 +162,11 @@ export interface HtmlSessionSummary {
   plugins?: PluginUsage[]
   skills?: SkillUsage[]
   hooks?: HookUsage[]
+  // Phase 3: per-agentType rollup of `subagents[]`. Chips render this.
+  subagentTypes?: SubagentTypeAggregate[]
+  // True when the parent main session jsonl was deleted but subagent files
+  // remain on disk. Totals still include the session.
+  isOrphan?: boolean
 }
 
 // ─── Phase 2 capability inventory (subagents / plugins / skills / hooks) ────
@@ -177,6 +188,24 @@ export interface Subagent {
   cost: number
   firstTimestamp?: string
   lastTimestamp?: string
+}
+
+/**
+ * Per-agentType rollup of subagents within one session.
+ * Mirrors Rust `SubagentTypeAggregate` (rename_all = "camelCase").
+ *
+ * `count` = number of subagent invocations of this type in the session
+ * (one `agent-X.jsonl` file = one invocation). Subagents without a meta
+ * sidecar are grouped under the literal type `"unknown"` (never dropped).
+ */
+export interface SubagentTypeAggregate {
+  agentType: string
+  count: number
+  totalTurns: number
+  totalCost: number
+  totalInputTokens: number
+  totalOutputTokens: number
+  descriptions: string[]
 }
 
 export interface PluginUsage {

@@ -403,6 +403,7 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
         turn_details: None,
         output_ratio,
         cost_per_turn,
+        is_orphan: session.is_orphan,
     }
 }
 
@@ -464,6 +465,7 @@ mod tests {
             version: None,
             quality: DataQuality::default(),
             metadata: SessionMetadata::default(),
+            is_orphan: false,
         }
     }
 

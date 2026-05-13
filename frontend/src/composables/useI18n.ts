@@ -182,6 +182,16 @@ const messages: Record<string, Record<Locale, string>> = {
   'sessions.hook_invocations_unit': { en: 'invocations', zh: '次调用' },
   'sessions.hook_errors_unit': { en: 'errors', zh: '错误' },
   'sessions.hook_prevented_unit': { en: 'prevented', zh: '阻止' },
+  // Subagent type aggregate chip text
+  'sessions.chip_times': { en: '×', zh: '×' },
+  'sessions.chip_calls': { en: 'calls', zh: '次调用' },
+  'sessions.chip_and_more': { en: '...and {n} more', zh: '...另外 {n} 个' },
+  // Orphan session display
+  'sessions.orphan_tag': { en: '(orphan)', zh: '(孤儿)' },
+  'sessions.orphan_banner': {
+    en: 'Orphaned session: parent jsonl was deleted but subagent files remain on disk. Totals still include this session.',
+    zh: '孤儿会话：父级 jsonl 已被删除，但子智能体文件仍存在。该会话的统计仍计入全局总计。'
+  },
 
   // Common
   'common.coming_soon': { en: 'Coming soon', zh: '即将推出' },

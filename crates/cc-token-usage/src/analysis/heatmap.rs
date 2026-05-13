@@ -249,6 +249,7 @@ mod tests {
             version: None,
             quality: DataQuality::default(),
             metadata: SessionMetadata::default(),
+            is_orphan: false,
         }
     }
 

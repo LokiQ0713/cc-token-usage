@@ -176,6 +176,35 @@ pub struct SessionData {
     pub version: Option<String>,
     pub quality: DataQuality,
     pub metadata: SessionMetadata,
+    /// Orphan session: the parent main session `.jsonl` was deleted, but
+    /// subagent files under `<uuid>/subagents/` still exist. Scanner picked
+    /// them up and the loader created this session as a placeholder so the
+    /// subagent data isn't lost. Turn / token / cost totals still include
+    /// these sessions; this flag only marks them for separate display.
+    pub is_orphan: bool,
+}
+
+/// Per-`agent_type` rollup of all subagent invocations within one session.
+///
+/// One session may invoke the same agent type (e.g. `builder`) many times;
+/// each invocation produces its own `agent-<id>.jsonl` file and one
+/// `Subagent` instance. This struct groups those instances by `agent_type`
+/// so the UI can render a single chip per type with a call count.
+///
+/// Subagents whose `agent_type` is `None` (no `.meta.json` sidecar) are
+/// grouped under the literal type `"unknown"` rather than dropped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentTypeAggregate {
+    pub agent_type: String,
+    pub count: u64,
+    pub total_turns: u64,
+    pub total_cost: f64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    /// Descriptions from each invocation of this agent type, in deterministic
+    /// order (sorted by agent_id). Empty strings are omitted.
+    pub descriptions: Vec<String>,
 }
 
 // ─── Session Metadata ───────────────────────────────────────────────────────
@@ -254,6 +283,64 @@ impl SessionData {
     /// Total number of agent API responses (sum across all subagents).
     pub fn agent_turn_count(&self) -> usize {
         self.subagents.iter().map(|s| s.turns.len()).sum::<usize>()
+    }
+
+    /// Group this session's subagents by `agent_type` for chip rendering.
+    ///
+    /// Each output entry corresponds to one `agent_type` string. Subagents
+    /// with `agent_type = None` are grouped under the literal type
+    /// `"unknown"` (data is preserved, never dropped). Output is sorted by
+    /// `agent_type` ascending for deterministic JSON serialization.
+    ///
+    /// Token / cost totals are summed across each subagent's turns; the
+    /// `count` field counts the number of `Subagent` instances per type
+    /// (i.e. how many times that type was invoked in this session).
+    pub fn subagent_type_aggregates(
+        &self,
+        calc: &crate::pricing::calculator::PricingCalculator,
+    ) -> Vec<SubagentTypeAggregate> {
+        use std::collections::BTreeMap;
+
+        // Sort subagents by agent_id so descriptions land in deterministic order.
+        let mut sorted: Vec<&Subagent> = self.subagents.iter().collect();
+        sorted.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+
+        let mut acc: BTreeMap<String, SubagentTypeAggregate> = BTreeMap::new();
+        for sa in sorted {
+            let key = sa
+                .agent_type
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "unknown".to_string());
+            let mut sa_input: u64 = 0;
+            let mut sa_output: u64 = 0;
+            let mut sa_cost: f64 = 0.0;
+            for t in &sa.turns {
+                sa_input += t.usage.input_tokens.unwrap_or(0);
+                sa_output += t.usage.output_tokens.unwrap_or(0);
+                sa_cost += calc.calculate_turn_cost(&t.model, &t.usage).total;
+            }
+            let entry = acc
+                .entry(key.clone())
+                .or_insert_with(|| SubagentTypeAggregate {
+                    agent_type: key,
+                    count: 0,
+                    total_turns: 0,
+                    total_cost: 0.0,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                    descriptions: Vec::new(),
+                });
+            entry.count += 1;
+            entry.total_turns += sa.turns.len() as u64;
+            entry.total_cost += sa_cost;
+            entry.total_input_tokens += sa_input;
+            entry.total_output_tokens += sa_output;
+            if let Some(desc) = sa.description.as_ref().filter(|d| !d.is_empty()) {
+                entry.descriptions.push(desc.clone());
+            }
+        }
+        acc.into_values().collect()
     }
 }
 

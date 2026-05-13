@@ -293,6 +293,8 @@ pub fn analyze_session(
         plugins: session.plugins.clone(),
         skills: session.skills.clone(),
         hooks: session.hooks.clone(),
+        subagent_types: session.subagent_type_aggregates(calc),
+        is_orphan: session.is_orphan,
     }
 }
 
