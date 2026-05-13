@@ -538,4 +538,48 @@ mod tests {
         assert_eq!(entry.has_output, Some(true));
         assert_eq!(entry.hook_count, Some(1));
     }
+
+    #[test]
+    fn parse_hook_info_partial_fields_command_only() {
+        // 真实风险：未来 CC 版本某次 hook 调用没报告 durationMs
+        let json = r#"{
+            "type": "system",
+            "subtype": "stop_hook_summary",
+            "hookCount": 1,
+            "hookInfos": [{"command": "bash hook.sh"}]
+        }"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        match entry {
+            Entry::System(s) => {
+                let hooks = s
+                    .hook_infos
+                    .as_ref()
+                    .expect("hook_infos parses despite missing durationMs");
+                assert_eq!(hooks.len(), 1);
+                assert_eq!(hooks[0].command.as_deref(), Some("bash hook.sh"));
+                assert!(hooks[0].duration_ms.is_none());
+            }
+            other => panic!("Expected System, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_hook_info_partial_fields_duration_only() {
+        let json = r#"{
+            "type": "system",
+            "subtype": "stop_hook_summary",
+            "hookCount": 1,
+            "hookInfos": [{"durationMs": 50}]
+        }"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        match entry {
+            Entry::System(s) => {
+                let hooks = s.hook_infos.as_ref().unwrap();
+                assert_eq!(hooks.len(), 1);
+                assert!(hooks[0].command.is_none());
+                assert_eq!(hooks[0].duration_ms, Some(50));
+            }
+            other => panic!("Expected System, got: {other:?}"),
+        }
+    }
 }

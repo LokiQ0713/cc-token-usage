@@ -186,7 +186,12 @@ fn fill_rate_source_tool_use_id() {
          Check #[serde(rename = \"sourceToolUseID\")] — capital ID required.",
         top_level, parsed
     );
-    // Note: fixture may have 0 or few occurrences; only assert parity
+    assert!(
+        parsed >= 1,
+        "fixture must contain at least one sourceToolUseID sample to meaningfully test the \
+         camelCase-ID rename; parity 0=0 is trivially true and would mask a typo in \
+         #[serde(rename = \"sourceToolUseID\")] or related",
+    );
 }
 
 #[test]
@@ -203,8 +208,10 @@ fn fill_rate_source_tool_assistant_uuid() {
         top_level, parsed
     );
     assert!(
-        parsed > 0,
-        "fixture must contain at least one sourceToolAssistantUUID in a user entry"
+        parsed >= 1,
+        "fixture must contain at least one sourceToolAssistantUUID sample to meaningfully test \
+         the camelCase-ID rename; parity 0=0 is trivially true and would mask a typo in \
+         #[serde(rename = \"sourceToolAssistantUUID\")] or related",
     );
 }
 
@@ -302,8 +309,10 @@ fn fill_rate_tool_use_id_system() {
         top_level, parsed
     );
     assert!(
-        parsed > 0,
-        "fixture must contain at least one toolUseID in a system entry"
+        parsed >= 1,
+        "fixture must contain at least one toolUseID sample to meaningfully test the \
+         camelCase-ID rename; parity 0=0 is trivially true and would mask a typo in \
+         #[serde(rename = \"toolUseID\")] or related",
     );
 }
 
