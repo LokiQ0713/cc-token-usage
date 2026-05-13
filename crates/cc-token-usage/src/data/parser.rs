@@ -407,6 +407,20 @@ pub fn parse_session_file(
                         .is_some_and(|errs| !errs.is_empty());
                     let prevented = sys.prevented_continuation == Some(true);
                     if let Some(infos) = sys.hook_infos {
+                        // Spec invariant 4: total invocations should equal
+                        // sum(SystemEntry.hookCount where subtype=stop_hook_summary).
+                        // On all observed 2.1.104+ samples, `hookCount` matches
+                        // `hookInfos.len()` — so per-element +1 below is correct.
+                        // If a future Claude Code release decouples the two
+                        // (e.g. truncates/samples `hookInfos`), the `invocations`
+                        // semantics must be re-evaluated; this debug_assert is
+                        // the canary that surfaces such drift immediately in
+                        // dev/test builds without paying any release cost.
+                        debug_assert_eq!(
+                            sys.hook_count.unwrap_or(infos.len() as u64) as usize,
+                            infos.len(),
+                            "hookCount field disagrees with hookInfos.len() — invocations semantics may need re-evaluation"
+                        );
                         for info in infos {
                             let cmd = info.command.unwrap_or_default();
                             if cmd.is_empty() {

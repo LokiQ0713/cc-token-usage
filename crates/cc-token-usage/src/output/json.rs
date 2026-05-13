@@ -82,7 +82,8 @@ struct SessionSummaryJson {
     duration_minutes: f64,
     model: String,
     turn_count: usize,
-    agent_turn_count: usize,
+    #[serde(rename = "agentTurnCount")]
+    agent_turn_count: u64,
     output_tokens: u64,
     context_tokens: u64,
     max_context: u64,
@@ -132,7 +133,7 @@ fn build_overview_json(overview: &OverviewResult) -> OverviewJson {
             duration_minutes: s.duration_minutes,
             model: s.model.clone(),
             turn_count: s.turn_count,
-            agent_turn_count: s.agent_turn_count,
+            agent_turn_count: s.agent_turn_count as u64,
             output_tokens: s.output_tokens,
             context_tokens: s.context_tokens,
             max_context: s.max_context,
@@ -201,7 +202,8 @@ struct SessionJson {
     context_tokens: u64,
     cache_hit_rate: f64,
     // Agents (aggregate roll-ups; per-subagent detail lives in `subagents`)
-    agent_turns: usize,
+    #[serde(rename = "agentTurnCount")]
+    agent_turn_count: u64,
     agent_output_tokens: u64,
     agent_cost: f64,
     // Metadata
@@ -221,7 +223,8 @@ struct SessionJson {
 }
 
 /// JSON shape for one subagent. Mirrors the spec's `subagents[]` schema
-/// (camelCase, no `agent_turns` flat alias).
+/// (camelCase, no `agentTurns[]` flat alias — superseded by `agentTurnCount`
+/// scalar + `subagents[].turns[]` nested detail).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SubagentJson {
@@ -306,7 +309,7 @@ pub fn render_session_json(result: &SessionResult) -> String {
         output_tokens: result.total_tokens.output_tokens,
         context_tokens: ctx,
         cache_hit_rate,
-        agent_turns: result.agent_summary.total_agent_turns,
+        agent_turn_count: result.agent_summary.total_agent_turns as u64,
         agent_output_tokens: result.agent_summary.agent_output_tokens,
         agent_cost: result.agent_summary.agent_cost,
         title: result.title.clone(),
@@ -447,7 +450,8 @@ pub struct HtmlSessionSummary {
     pub id: String,
     pub project: Option<String>,
     pub turns: usize,
-    pub agent_turns: usize,
+    #[serde(rename = "agentTurnCount")]
+    pub agent_turn_count: u64,
     pub cost: f64,
     pub duration_minutes: Option<f64>,
     pub model: Option<String>,
@@ -624,7 +628,7 @@ fn build_html_session_summary(
         id: session.session_id.clone(),
         project: session.project.as_deref().map(project_display_name),
         turns: turn_count,
-        agent_turns: agent_turn_count,
+        agent_turn_count: agent_turn_count as u64,
         cost: total_cost,
         duration_minutes,
         model: primary_model,
