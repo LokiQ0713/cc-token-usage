@@ -95,6 +95,10 @@ export interface AgentBreakdown {
 /**
  * Full session detail (mock data / JSON --format output).
  * Contains per-turn detail in `turns: Turn[]`.
+ *
+ * Per-subagent detail lives in `subagents[]` (Phase 2). The legacy
+ * `agentTurns: ValidatedTurn[]` flat list was removed; only the aggregate
+ * `agentTurnCount` scalar is kept here.
  */
 export interface SessionDetail {
   session_id: string
@@ -107,7 +111,7 @@ export interface SessionDetail {
   output_tokens: number
   context_tokens: number
   cache_hit_rate: number
-  agent_turns: number
+  agentTurnCount: number
   agent_output_tokens: number
   agent_cost: number
   title?: string
@@ -119,6 +123,12 @@ export interface SessionDetail {
   service_tier?: string
   agents?: AgentBreakdown[]
   turns: Turn[]
+  // Phase 2 capability inventory. Backend emits these as arrays (possibly empty)
+  // so the contract is stable; empty / missing → frontend renders no chip row.
+  subagents?: Subagent[]
+  plugins?: PluginUsage[]
+  skills?: SkillUsage[]
+  hooks?: HookUsage[]
 }
 
 /**
@@ -130,7 +140,7 @@ export interface HtmlSessionSummary {
   id: string
   project?: string
   turns: number
-  agent_turns: number
+  agentTurnCount: number
   cost: number
   duration_minutes?: number
   model?: string
@@ -140,6 +150,56 @@ export interface HtmlSessionSummary {
   title?: string
   tags?: string[]
   mode?: string
+  // Phase 2 capability inventory. Backend emits these as arrays (possibly empty)
+  // so the contract is stable; empty / missing → frontend renders no chip row.
+  subagents?: Subagent[]
+  plugins?: PluginUsage[]
+  skills?: SkillUsage[]
+  hooks?: HookUsage[]
+}
+
+// ─── Phase 2 capability inventory (subagents / plugins / skills / hooks) ────
+//
+// Field names mirror the backend JSON output exactly:
+// - `Subagent` mirrors Rust `HtmlSubagentSummary` (rename_all = "camelCase")
+//   so child fields are camelCase. `turns` here is the count (number), not an
+//   array — the per-turn detail is only emitted from the `session` subcommand,
+//   not from the HTML dashboard payload.
+// - `PluginUsage`/`SkillUsage`/`HookUsage` mirror the Rust types of the same
+//   name (also rename_all = "camelCase").
+export interface Subagent {
+  agentId: string
+  agentType?: string
+  description?: string
+  turns: number
+  outputTokens: number
+  cost: number
+  firstTimestamp?: string
+  lastTimestamp?: string
+}
+
+export interface PluginUsage {
+  plugin: string
+  turns: number
+  cost: number
+  inputTokens: number
+  outputTokens: number
+}
+
+export interface SkillUsage {
+  skill: string
+  turns: number
+  cost: number
+  inputTokens: number
+  outputTokens: number
+}
+
+export interface HookUsage {
+  command: string
+  invocations: number
+  totalDurationMs: number
+  errorCount: number
+  preventedContinuationCount: number
 }
 
 /**

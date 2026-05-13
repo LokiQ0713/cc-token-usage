@@ -4,7 +4,14 @@ import KpiCard from '../components/KpiCard.vue'
 import DataTable from '../components/DataTable.vue'
 import FilterPills from '../components/FilterPills.vue'
 import type { Column } from '../components/DataTable.vue'
-import type { SessionEntry, AgentBreakdown } from '../types'
+import type {
+  SessionEntry,
+  AgentBreakdown,
+  Subagent,
+  PluginUsage,
+  SkillUsage,
+  HookUsage,
+} from '../types'
 import {
   getSessionId,
   getTurnCount,
@@ -63,6 +70,60 @@ function formatDate(ts: string): string {
 
 function getFirstTimestamp(session: SessionEntry): string {
   return getFirstTs(session)
+}
+
+// ─── Chip helpers (Phase 3: subagents/plugins/skills/hooks) ───────────────
+
+/** Truncate long chip labels (>40 chars) with an ellipsis. */
+function truncateChipLabel(label: string, max = 40): string {
+  if (label.length <= max) return label
+  return label.slice(0, max - 1) + '…'
+}
+
+function formatDurationMs(ms: number): string {
+  if (ms >= 1000) return (ms / 1000).toFixed(1) + 's'
+  return ms + 'ms'
+}
+
+function subagentLabel(sub: Subagent): string {
+  return truncateChipLabel(sub.agentType || sub.agentId)
+}
+
+function subagentTooltip(sub: Subagent): string {
+  const parts = [
+    `${sub.turns} ${t('common.turns')}`,
+    formatCost(sub.cost),
+  ]
+  if (sub.description) parts.push(truncateChipLabel(sub.description, 80))
+  return parts.join(' · ')
+}
+
+function pluginTooltip(p: PluginUsage): string {
+  return [
+    `${p.turns} ${t('common.turns')}`,
+    formatCost(p.cost),
+    `${formatTokens(p.inputTokens)} in / ${formatTokens(p.outputTokens)} out`,
+  ].join(' · ')
+}
+
+function skillTooltip(s: SkillUsage): string {
+  return [
+    `${s.turns} ${t('common.turns')}`,
+    formatCost(s.cost),
+    `${formatTokens(s.inputTokens)} in / ${formatTokens(s.outputTokens)} out`,
+  ].join(' · ')
+}
+
+function hookTooltip(h: HookUsage): string {
+  const parts = [
+    `${h.invocations} ${t('sessions.hook_invocations_unit')}`,
+    `${formatDurationMs(h.totalDurationMs)} total`,
+  ]
+  if (h.errorCount > 0) parts.push(`${h.errorCount} ${t('sessions.hook_errors_unit')}`)
+  if (h.preventedContinuationCount > 0) {
+    parts.push(`${h.preventedContinuationCount} ${t('sessions.hook_prevented_unit')}`)
+  }
+  return parts.join(' · ')
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────
@@ -151,7 +212,7 @@ const filteredSessions = computed(() => {
       break
     }
     case 'turns': {
-      result.sort((a, b) => (getTurnCount(b) + b.agent_turns) - (getTurnCount(a) + a.agent_turns))
+      result.sort((a, b) => (getTurnCount(b) + b.agentTurnCount) - (getTurnCount(a) + a.agentTurnCount))
       break
     }
   }
@@ -207,7 +268,7 @@ const sessionColumns = computed<Column<SessionEntry>[]>(() => [
     align: 'right',
     format: (row: SessionEntry) => {
       const main = getTurnCount(row)
-      if (row.agent_turns > 0) return `${main + row.agent_turns} (+${row.agent_turns})`
+      if (row.agentTurnCount > 0) return `${main + row.agentTurnCount} (+${row.agentTurnCount})`
       return String(main)
     },
   },
@@ -429,6 +490,66 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
                     <span class="meta-value">{{ row.service_tier }}</span>
                   </div>
                 </div>
+              </div>
+
+              <!-- Phase 2 capability chips: subagents / plugins / skills / hooks.
+                   Empty / missing arrays → no row is rendered (consistent with
+                   how PR-link / branch behave above). -->
+              <div
+                class="chip-row"
+                v-if="row.subagents && row.subagents.length > 0"
+              >
+                <span class="chip-row-label">{{ t('session.subagents') }}</span>
+                <span class="chip-row-list">
+                  <span
+                    v-for="sub in row.subagents"
+                    :key="sub.agentId"
+                    class="capability-chip subagent-chip"
+                    :title="subagentTooltip(sub)"
+                  >{{ subagentLabel(sub) }}</span>
+                </span>
+              </div>
+              <div
+                class="chip-row"
+                v-if="row.plugins && row.plugins.length > 0"
+              >
+                <span class="chip-row-label">{{ t('session.plugins') }}</span>
+                <span class="chip-row-list">
+                  <span
+                    v-for="p in row.plugins"
+                    :key="p.plugin"
+                    class="capability-chip plugin-chip"
+                    :title="pluginTooltip(p)"
+                  >{{ truncateChipLabel(p.plugin) }}</span>
+                </span>
+              </div>
+              <div
+                class="chip-row"
+                v-if="row.skills && row.skills.length > 0"
+              >
+                <span class="chip-row-label">{{ t('session.skills') }}</span>
+                <span class="chip-row-list">
+                  <span
+                    v-for="s in row.skills"
+                    :key="s.skill"
+                    class="capability-chip skill-chip"
+                    :title="skillTooltip(s)"
+                  >{{ truncateChipLabel(s.skill) }}</span>
+                </span>
+              </div>
+              <div
+                class="chip-row"
+                v-if="row.hooks && row.hooks.length > 0"
+              >
+                <span class="chip-row-label">{{ t('session.hooks') }}</span>
+                <span class="chip-row-list">
+                  <span
+                    v-for="h in row.hooks"
+                    :key="h.command"
+                    class="capability-chip hook-chip"
+                    :title="hookTooltip(h)"
+                  >{{ truncateChipLabel(h.command) }}</span>
+                </span>
               </div>
             </div>
           </template>
@@ -664,6 +785,66 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
 
 .error-highlight {
   color: #ef4444;
+}
+
+/* ─── Capability chip rows (Phase 3) ──────────────────────────────────────── */
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+}
+
+.chip-row-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.chip-row-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.capability-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.subagent-chip {
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #a78bfa;
+}
+
+.plugin-chip {
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #60a5fa;
+}
+
+.skill-chip {
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.hook-chip {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
 }
 
 /* ─── No Sessions ─────────────────────────────────────────────────────────── */

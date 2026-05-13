@@ -174,6 +174,15 @@ const messages: Record<string, Record<Locale, string>> = {
   'sessions.no_agents': { en: 'No agent data.', zh: '无 Agent 数据。' },
   'sessions.no_title': { en: '(untitled)', zh: '(无标题)' },
 
+  // Phase 2 capability inventory (session detail chip rows)
+  'session.subagents': { en: 'Subagents', zh: '子智能体' },
+  'session.plugins': { en: 'Plugins', zh: '插件' },
+  'session.skills': { en: 'Skills', zh: '技能' },
+  'session.hooks': { en: 'Hooks', zh: '钩子' },
+  'sessions.hook_invocations_unit': { en: 'invocations', zh: '次调用' },
+  'sessions.hook_errors_unit': { en: 'errors', zh: '错误' },
+  'sessions.hook_prevented_unit': { en: 'prevented', zh: '阻止' },
+
   // Common
   'common.coming_soon': { en: 'Coming soon', zh: '即将推出' },
   'common.theme_toggle': { en: 'Toggle theme', zh: '切换主题' },
