@@ -85,6 +85,72 @@ pub struct ValidatedTurn {
     pub inference_geo: Option<String>,
     pub tool_error_count: usize, // ToolResult blocks with is_error=true
     pub git_branch: Option<String>, // from the assistant entry's gitBranch field
+    /// 触发本 turn 的 plugin 名（如 "superpowers"，Claude Code 2.1.138+）
+    pub attribution_plugin: Option<String>,
+    /// 触发本 turn 的 skill 名（如 "superpowers:brainstorming"，Claude Code 2.1.138+）
+    pub attribution_skill: Option<String>,
+}
+
+/// A subagent invocation within a session, grouped from one agent JSONL file.
+///
+/// Each `Subagent` corresponds to one `agent-<id>.jsonl` file under a parent
+/// session. The struct itself is *not* `Serialize` because it embeds the
+/// internal `ValidatedTurn` analysis type; the JSON output layer builds its
+/// own purpose-shaped `SubagentJson` (see `output/json.rs`).
+#[derive(Debug, Clone)]
+pub struct Subagent {
+    /// Agent ID extracted from the agent JSONL file name (e.g. `agent-abc123`).
+    pub agent_id: String,
+    /// Agent type from `.meta.json`, e.g. "general-purpose".
+    pub agent_type: Option<String>,
+    /// Human-readable task description from `.meta.json`.
+    pub description: Option<String>,
+    /// All turns from this subagent, sorted by timestamp.
+    pub turns: Vec<ValidatedTurn>,
+    pub first_timestamp: Option<DateTime<Utc>>,
+    pub last_timestamp: Option<DateTime<Utc>>,
+}
+
+/// Per-plugin aggregation for one session.
+///
+/// Plugin name comes from `attributionPlugin` on assistant entries
+/// (Claude Code 2.1.138+).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginUsage {
+    pub plugin: String,
+    pub turns: u64,
+    pub cost: f64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// Per-skill aggregation for one session.
+///
+/// Skill name comes from `attributionSkill` on assistant entries
+/// (Claude Code 2.1.138+).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillUsage {
+    pub skill: String,
+    pub turns: u64,
+    pub cost: f64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+/// Per-hook aggregation for one session.
+///
+/// Hooks come from `system` entries with `subtype == "stop_hook_summary"`
+/// (Claude Code 2.1.104+). Grouped by `hookInfos[].command`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookUsage {
+    pub command: String,
+    pub invocations: u64,
+    pub total_duration_ms: u64,
+    pub error_count: u64,
+    pub prevented_continuation_count: u64,
 }
 
 /// Aggregated data from a single session.
@@ -93,7 +159,18 @@ pub struct SessionData {
     pub session_id: String,
     pub project: Option<String>,
     pub turns: Vec<ValidatedTurn>,
-    pub agent_turns: Vec<ValidatedTurn>,
+    /// Subagent groups for this session. Each entry corresponds to one
+    /// `agent-<id>.jsonl` file. Empty for sessions without subagents.
+    pub subagents: Vec<Subagent>,
+    /// Plugins used in this session (aggregated from main session turns'
+    /// `attributionPlugin`). Empty for pre-2.1.138 sessions.
+    pub plugins: Vec<PluginUsage>,
+    /// Skills used in this session (aggregated from main session turns'
+    /// `attributionSkill`). Empty for pre-2.1.138 sessions.
+    pub skills: Vec<SkillUsage>,
+    /// Hooks triggered in this session (from `stop_hook_summary` system
+    /// entries). Empty for sessions without hooks.
+    pub hooks: Vec<HookUsage>,
     pub first_timestamp: Option<DateTime<Utc>>,
     pub last_timestamp: Option<DateTime<Utc>>,
     pub version: Option<String>,
@@ -158,22 +235,25 @@ pub struct SessionMetadata {
 }
 
 impl SessionData {
-    /// All API responses (main + agent), sorted by timestamp.
+    /// All API responses (main + every subagent), sorted by timestamp.
     pub fn all_responses(&self) -> Vec<&ValidatedTurn> {
-        let mut all: Vec<&ValidatedTurn> =
-            self.turns.iter().chain(self.agent_turns.iter()).collect();
+        let mut all: Vec<&ValidatedTurn> = self
+            .turns
+            .iter()
+            .chain(self.subagents.iter().flat_map(|s| s.turns.iter()))
+            .collect();
         all.sort_by_key(|r| r.timestamp);
         all
     }
 
-    /// Total number of API responses (main + agent).
+    /// Total number of API responses (main + all subagent turns).
     pub fn total_turn_count(&self) -> usize {
-        self.turns.len() + self.agent_turns.len()
+        self.turns.len() + self.subagents.iter().map(|s| s.turns.len()).sum::<usize>()
     }
 
-    /// Number of agent API responses.
+    /// Total number of agent API responses (sum across all subagents).
     pub fn agent_turn_count(&self) -> usize {
-        self.agent_turns.len()
+        self.subagents.iter().map(|s| s.turns.len()).sum::<usize>()
     }
 }
 

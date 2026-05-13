@@ -78,7 +78,7 @@ fn main() -> Result<()> {
         .or_else(|| config.subscription.last().map(|p| p.monthly_price_usd));
 
     // 6. Load data
-    let (sessions, quality) = loader::load_all(&claude_home)
+    let (sessions, quality) = loader::load_all(&claude_home, &calc)
         .with_context(|| format!("failed to load data from {}", claude_home.display()))?;
 
     // 7. Determine output modes: None → both text + html; Json is exclusive

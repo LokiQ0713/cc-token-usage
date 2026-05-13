@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::analysis::project::project_display_name;
 use crate::analysis::wrapped::WrappedResult;
 use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
-use crate::data::models::SessionData;
+use crate::data::models::{HookUsage, PluginUsage, SessionData, SkillUsage};
 use crate::pricing::calculator::PricingCalculator;
 
 // ─── Overview JSON ──────────────────────────────────────────────────────────
@@ -200,7 +200,7 @@ struct SessionJson {
     output_tokens: u64,
     context_tokens: u64,
     cache_hit_rate: f64,
-    // Agents
+    // Agents (aggregate roll-ups; per-subagent detail lives in `subagents`)
     agent_turns: usize,
     agent_output_tokens: u64,
     agent_cost: f64,
@@ -209,8 +209,30 @@ struct SessionJson {
     title: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tags: Vec<String>,
-    // Turn details
+    // Turn details (main session only)
     turns: Vec<TurnJson>,
+    // Phase 2 capability inventory (always emitted as arrays, possibly empty).
+    // PluginUsage / SkillUsage / HookUsage serialize their inner fields as
+    // camelCase (matching the canonical Claude Code JSONL spelling).
+    subagents: Vec<SubagentJson>,
+    plugins: Vec<PluginUsage>,
+    skills: Vec<SkillUsage>,
+    hooks: Vec<HookUsage>,
+}
+
+/// JSON shape for one subagent. Mirrors the spec's `subagents[]` schema
+/// (camelCase, no `agent_turns` flat alias).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubagentJson {
+    agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    turns: usize,
+    output_tokens: u64,
+    cost: f64,
 }
 
 #[derive(Serialize)]
@@ -260,6 +282,19 @@ pub fn render_session_json(result: &SessionResult) -> String {
         })
         .collect();
 
+    let subagents: Vec<SubagentJson> = result
+        .subagents
+        .iter()
+        .map(|s| SubagentJson {
+            agent_id: s.agent_id.clone(),
+            agent_type: s.agent_type.clone(),
+            description: s.description.clone(),
+            turns: s.turns,
+            output_tokens: s.output_tokens,
+            cost: s.cost,
+        })
+        .collect();
+
     let json = SessionJson {
         session_id: result.session_id.clone(),
         project: result.project.clone(),
@@ -277,6 +312,10 @@ pub fn render_session_json(result: &SessionResult) -> String {
         title: result.title.clone(),
         tags: result.tags.clone(),
         turns,
+        subagents,
+        plugins: result.plugins.clone(),
+        skills: result.skills.clone(),
+        hooks: result.hooks.clone(),
     };
 
     serde_json::to_string_pretty(&json).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
@@ -422,6 +461,32 @@ pub struct HtmlSessionSummary {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     pub mode: Option<String>,
+    // Phase 2: session-level capability inventory. Always emitted as arrays
+    // (possibly empty) so the frontend type contract is stable.
+    pub subagents: Vec<HtmlSubagentSummary>,
+    pub plugins: Vec<PluginUsage>,
+    pub skills: Vec<SkillUsage>,
+    pub hooks: Vec<HookUsage>,
+}
+
+/// Per-subagent summary for the HTML dashboard. Mirrors `SubagentJson` but
+/// lives under `HtmlSessionSummary` rather than the standalone `session`
+/// subcommand output.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HtmlSubagentSummary {
+    pub agent_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub turns: usize,
+    pub output_tokens: u64,
+    pub cost: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_timestamp: Option<String>,
 }
 
 /// Heatmap data for the HTML dashboard.
@@ -532,6 +597,29 @@ fn build_html_session_summary(
         _ => None,
     };
 
+    let subagents: Vec<HtmlSubagentSummary> = session
+        .subagents
+        .iter()
+        .map(|sa| {
+            let mut output_tokens: u64 = 0;
+            let mut sa_cost = 0.0f64;
+            for t in &sa.turns {
+                output_tokens += t.usage.output_tokens.unwrap_or(0);
+                sa_cost += calc.calculate_turn_cost(&t.model, &t.usage).total;
+            }
+            HtmlSubagentSummary {
+                agent_id: sa.agent_id.clone(),
+                agent_type: sa.agent_type.clone(),
+                description: sa.description.clone(),
+                turns: sa.turns.len(),
+                output_tokens,
+                cost: sa_cost,
+                first_timestamp: sa.first_timestamp.map(|t| t.to_rfc3339()),
+                last_timestamp: sa.last_timestamp.map(|t| t.to_rfc3339()),
+            }
+        })
+        .collect();
+
     HtmlSessionSummary {
         id: session.session_id.clone(),
         project: session.project.as_deref().map(project_display_name),
@@ -546,6 +634,10 @@ fn build_html_session_summary(
         title: session.metadata.title.clone(),
         tags: session.metadata.tags.clone(),
         mode: session.metadata.mode.clone(),
+        subagents,
+        plugins: session.plugins.clone(),
+        skills: session.skills.clone(),
+        hooks: session.hooks.clone(),
     }
 }
 

@@ -4,7 +4,8 @@ use crate::data::models::SessionData;
 use crate::pricing::calculator::PricingCalculator;
 
 use super::{
-    AgentDetail, AgentSummary, AggregatedTokens, SessionResult, TurnCostBreakdown, TurnDetail,
+    AgentDetail, AgentSummary, AggregatedTokens, SessionResult, SubagentSummary, TurnCostBreakdown,
+    TurnDetail,
 };
 
 /// Agent metadata loaded from .meta.json files.
@@ -287,5 +288,45 @@ pub fn analyze_session(
             .map_or(0.0, |s| s.max_risk),
         // Attribution
         attribution: session.metadata.attribution.clone(),
+        // ── Phase 2: per-session capability inventory ──
+        subagents: build_subagent_summaries(session, calc),
+        plugins: session.plugins.clone(),
+        skills: session.skills.clone(),
+        hooks: session.hooks.clone(),
     }
+}
+
+/// Build one `SubagentSummary` per `Subagent`, costed via the pricing
+/// calculator. Sort order: by cost descending (most expensive first), matching
+/// the existing `agent_summary.agents` ordering convention.
+fn build_subagent_summaries(
+    session: &SessionData,
+    calc: &PricingCalculator,
+) -> Vec<SubagentSummary> {
+    let mut out: Vec<SubagentSummary> = session
+        .subagents
+        .iter()
+        .map(|sa| {
+            let mut output_tokens: u64 = 0;
+            let mut cost = 0.0f64;
+            for t in &sa.turns {
+                output_tokens += t.usage.output_tokens.unwrap_or(0);
+                cost += calc.calculate_turn_cost(&t.model, &t.usage).total;
+            }
+            SubagentSummary {
+                agent_id: sa.agent_id.clone(),
+                agent_type: sa.agent_type.clone(),
+                description: sa.description.clone(),
+                turns: sa.turns.len(),
+                output_tokens,
+                cost,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.cost
+            .partial_cmp(&a.cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
 }

@@ -226,6 +226,8 @@ mod tests {
             inference_geo: None,
             tool_error_count: 0,
             git_branch: None,
+            attribution_plugin: None,
+            attribution_skill: None,
         }
     }
 
@@ -238,7 +240,10 @@ mod tests {
             session_id: id.to_string(),
             project: Some("test-project".to_string()),
             turns,
-            agent_turns: vec![],
+            subagents: vec![],
+            plugins: vec![],
+            skills: vec![],
+            hooks: vec![],
             first_timestamp: first,
             last_timestamp: last,
             version: None,

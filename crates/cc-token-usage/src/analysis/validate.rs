@@ -491,10 +491,11 @@ pub fn validate_all(
                 }
 
                 // Turn count check
+                let pipeline_subagent_turn_count = session.agent_turn_count();
                 agent_checks.push(Check::compare(
                     "agent_turn_count (after cross-file dedup)",
                     expected_unique_agent_turns,
-                    session.agent_turns.len(),
+                    pipeline_subagent_turn_count,
                 ));
 
                 // If expected > 0 but pipeline has 0, that's a real issue
@@ -502,14 +503,15 @@ pub fn validate_all(
                     agent_checks.push(Check::compare(
                         "has_agent_turns (non-overlapping exist)",
                         "true",
-                        (!session.agent_turns.is_empty()).to_string(),
+                        (pipeline_subagent_turn_count > 0).to_string(),
                     ));
                 }
 
                 // Agent output token verification (pipeline vs raw, ±5% tolerance for ratio estimate)
                 let pipeline_agent_output: u64 = session
-                    .agent_turns
+                    .subagents
                     .iter()
+                    .flat_map(|s| s.turns.iter())
                     .map(|t| t.usage.output_tokens.unwrap_or(0))
                     .sum();
 
@@ -534,8 +536,12 @@ pub fn validate_all(
                     passed: agent_output_match,
                 });
 
-                // Verify all agent_turns have is_agent=true
-                let all_marked_agent = session.agent_turns.iter().all(|t| t.is_agent);
+                // Verify all subagent turns have is_agent=true
+                let all_marked_agent = session
+                    .subagents
+                    .iter()
+                    .flat_map(|s| s.turns.iter())
+                    .all(|t| t.is_agent);
                 agent_checks.push(Check::compare(
                     "all agent_turns have is_agent=true",
                     "true",
@@ -548,10 +554,10 @@ pub fn validate_all(
         let pipeline_total_output: u64 = session
             .turns
             .iter()
-            .chain(session.agent_turns.iter())
+            .chain(session.subagents.iter().flat_map(|s| s.turns.iter()))
             .map(|t| t.usage.output_tokens.unwrap_or(0))
             .sum();
-        let pipeline_total_turns = session.turns.len() + session.agent_turns.len();
+        let pipeline_total_turns = session.total_turn_count();
 
         // Verify total turn count matches all_responses()
         token_checks.push(Check::compare(
@@ -573,7 +579,7 @@ pub fn validate_all(
         let pipeline_cost: f64 = session
             .turns
             .iter()
-            .chain(session.agent_turns.iter())
+            .chain(session.subagents.iter().flat_map(|s| s.turns.iter()))
             .map(|t| calc.calculate_turn_cost(&t.model, &t.usage).total)
             .sum();
 
@@ -581,7 +587,7 @@ pub fn validate_all(
         let has_tokens = session
             .turns
             .iter()
-            .chain(session.agent_turns.iter())
+            .chain(session.subagents.iter().flat_map(|s| s.turns.iter()))
             .any(|t| {
                 t.usage.input_tokens.unwrap_or(0) > 0 || t.usage.output_tokens.unwrap_or(0) > 0
             });

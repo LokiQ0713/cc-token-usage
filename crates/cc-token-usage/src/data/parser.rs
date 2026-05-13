@@ -8,8 +8,8 @@ use std::path::Path;
 use cc_session_jsonl::types::{ApiMessage, AssistantEntry, ContentBlock, Entry, UserEntry};
 
 use super::models::{
-    AttributionData, CollapseCommit, CollapseSnapshot, DataQuality, PrLinkInfo, SessionMetadata,
-    TokenUsage, ValidatedTurn,
+    AttributionData, CollapseCommit, CollapseSnapshot, DataQuality, HookUsage, PrLinkInfo,
+    SessionMetadata, TokenUsage, ValidatedTurn,
 };
 
 // ─── Pipeline Stage 1: JSON Parse (now via cc-session-jsonl) ──────────────
@@ -79,6 +79,8 @@ struct ValidatedFields {
     speed: Option<String>,
     inference_geo: Option<String>,
     git_branch: Option<String>,
+    attribution_plugin: Option<String>,
+    attribution_skill: Option<String>,
 }
 
 fn validate_assistant(
@@ -144,6 +146,8 @@ fn validate_assistant(
         speed,
         inference_geo,
         git_branch: msg.git_branch,
+        attribution_plugin: msg.attribution_plugin,
+        attribution_skill: msg.attribution_skill,
     })
 }
 
@@ -238,14 +242,26 @@ fn dedup_by_request_id(turns: Vec<ValidatedTurn>) -> (Vec<ValidatedTurn>, usize)
 
 // ─── Pipeline Orchestrator ─────────────────────────────────────────────────
 
-/// Parse a session JSONL file into validated turns, quality metrics, and session metadata.
+/// Parse a session JSONL file into validated turns, quality metrics, session
+/// metadata, and aggregated hook usage.
 ///
 /// Pipeline: JSON parse → type filter → validation → content extraction → deduplication.
-/// Also collects metadata from non-assistant/user entries (titles, tags, mode, PR links, etc.).
+/// Also collects metadata from non-assistant/user entries (titles, tags, mode,
+/// PR links, etc.) and aggregates `system`/`stop_hook_summary` entries into
+/// per-command `HookUsage` records (Claude Code 2.1.104+).
+///
+/// The returned `Vec<HookUsage>` is keyed by `hookInfos[].command`. It is
+/// always empty for agent files (subagent JSONL files have no system entries
+/// in observed data); callers should still accept the value for symmetry.
 pub fn parse_session_file(
     path: &Path,
     is_agent: bool,
-) -> Result<(Vec<ValidatedTurn>, DataQuality, SessionMetadata)> {
+) -> Result<(
+    Vec<ValidatedTurn>,
+    DataQuality,
+    SessionMetadata,
+    Vec<HookUsage>,
+)> {
     let file = File::open(path)
         .with_context(|| format!("failed to open session file: {}", path.display()))?;
     let reader = BufReader::new(file);
@@ -257,6 +273,8 @@ pub fn parse_session_file(
     let mut last_user_text: Option<String> = None;
     let mut ai_title: Option<String> = None;
     let mut custom_title: Option<String> = None;
+    // Hook aggregation: command -> HookUsage accumulator
+    let mut hook_acc: HashMap<String, HookUsage> = HashMap::new();
 
     for line_result in reader.lines() {
         let line =
@@ -377,6 +395,44 @@ pub fn parse_session_file(
                 });
                 continue;
             }
+            Entry::System(sys) => {
+                // Aggregate stop_hook_summary entries by hookInfos[].command.
+                // Hook fields are only present when subtype == "stop_hook_summary"
+                // (Claude Code 2.1.104+). Older entries / other subtypes simply
+                // have None for hook_infos and fall through.
+                if sys.subtype.as_deref() == Some("stop_hook_summary") {
+                    let has_errors = sys
+                        .hook_errors
+                        .as_ref()
+                        .is_some_and(|errs| !errs.is_empty());
+                    let prevented = sys.prevented_continuation == Some(true);
+                    if let Some(infos) = sys.hook_infos {
+                        for info in infos {
+                            let cmd = info.command.unwrap_or_default();
+                            if cmd.is_empty() {
+                                continue;
+                            }
+                            let dur = info.duration_ms.unwrap_or(0);
+                            let entry = hook_acc.entry(cmd.clone()).or_insert_with(|| HookUsage {
+                                command: cmd,
+                                invocations: 0,
+                                total_duration_ms: 0,
+                                error_count: 0,
+                                prevented_continuation_count: 0,
+                            });
+                            entry.invocations += 1;
+                            entry.total_duration_ms += dur;
+                            if has_errors {
+                                entry.error_count += 1;
+                            }
+                            if prevented {
+                                entry.prevented_continuation_count += 1;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             Entry::AttributionSnapshot(a) => {
                 // last-wins semantics
                 let surface = a.surface.unwrap_or_default();
@@ -442,6 +498,8 @@ pub fn parse_session_file(
             inference_geo: fields.inference_geo,
             tool_error_count: extracted.tool_error_count,
             git_branch: fields.git_branch,
+            attribution_plugin: fields.attribution_plugin,
+            attribution_skill: fields.attribution_skill,
         });
     }
 
@@ -453,7 +511,11 @@ pub fn parse_session_file(
     // Finalize title: custom-title overrides ai-title
     metadata.title = custom_title.or(ai_title);
 
-    Ok((turns, quality, metadata))
+    // Flatten the hook accumulator into a Vec with stable ordering by command.
+    let mut hooks: Vec<HookUsage> = hook_acc.into_values().collect();
+    hooks.sort_by(|a, b| a.command.cmp(&b.command));
+
+    Ok((turns, quality, metadata, hooks))
 }
 
 #[cfg(test)]
@@ -476,7 +538,7 @@ mod tests {
     #[test]
     fn parse_valid_assistant_turn() {
         let f = write_jsonl(&[VALID_ASSISTANT]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1);
         assert_eq!(quality.valid_turns, 1);
@@ -490,7 +552,7 @@ mod tests {
     fn filters_synthetic_messages() {
         let synthetic = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"<synthetic>","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}"#;
         let f = write_jsonl(&[synthetic]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 0);
         assert_eq!(quality.skipped_synthetic, 1);
@@ -500,7 +562,7 @@ mod tests {
     fn filters_zero_usage() {
         let zero_usage = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}"#;
         let f = write_jsonl(&[zero_usage]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 0);
         assert_eq!(quality.skipped_invalid, 1);
@@ -509,7 +571,7 @@ mod tests {
     #[test]
     fn deduplicates_turns() {
         let f = write_jsonl(&[VALID_ASSISTANT, VALID_ASSISTANT]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1);
         assert_eq!(quality.duplicate_turns, 1);
@@ -518,7 +580,7 @@ mod tests {
     #[test]
     fn skips_malformed_lines() {
         let f = write_jsonl(&["not valid json at all", VALID_ASSISTANT]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1);
         assert_eq!(quality.skipped_parse_error, 1);
@@ -531,7 +593,7 @@ mod tests {
         let system = r#"{"type":"system","subtype":"turn_duration","durationMs":1234,"uuid":"u2","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1"}"#;
         let last_prompt = r#"{"type":"last-prompt","lastPrompt":"hello","sessionId":"s1"}"#;
         let f = write_jsonl(&[progress, system, last_prompt, VALID_ASSISTANT]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1);
         assert_eq!(
@@ -545,7 +607,7 @@ mod tests {
     fn parses_thinking_content_blocks() {
         let with_thinking = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"thinking","thinking":"hmm","signature":"sig"},{"type":"text","text":"answer"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}"#;
         let f = write_jsonl(&[with_thinking]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1);
         assert_eq!(quality.valid_turns, 1);
@@ -557,7 +619,7 @@ mod tests {
     fn filters_sidechain_turns() {
         let sidechain = r#"{"type":"assistant","uuid":"u2","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"text","text":"abandoned"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r2"}"#;
         let f = write_jsonl(&[sidechain, VALID_ASSISTANT]);
-        let (turns, quality, _meta) = parse_session_file(f.path(), false).unwrap();
+        let (turns, quality, _meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(turns.len(), 1, "sidechain turn should be filtered out");
         assert_eq!(quality.skipped_sidechain, 1);
@@ -586,6 +648,8 @@ mod tests {
             inference_geo: None,
             tool_error_count: 0,
             git_branch: None,
+            attribution_plugin: None,
+            attribution_skill: None,
         };
         let t2 = ValidatedTurn {
             uuid: "u2".into(),
@@ -605,6 +669,8 @@ mod tests {
             inference_geo: None,
             tool_error_count: 0,
             git_branch: None,
+            attribution_plugin: None,
+            attribution_skill: None,
         };
         let (result, dup) = dedup_by_request_id(vec![t1, t2]);
         assert_eq!(result.len(), 1);
@@ -694,7 +760,7 @@ mod tests {
             deq,
             VALID_ASSISTANT,
         ]);
-        let (_turns, _quality, meta) = parse_session_file(f.path(), false).unwrap();
+        let (_turns, _quality, meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         // custom-title overrides ai-title
         assert_eq!(meta.title.as_deref(), Some("My Custom Title"));
@@ -714,8 +780,45 @@ mod tests {
     fn counts_api_errors() {
         let error_entry = r#"{"type":"assistant","uuid":"err1","timestamp":"2026-03-16T10:00:00Z","sessionId":"s1","apiError":"rate_limit","error":"Rate limited"}"#;
         let f = write_jsonl(&[error_entry, VALID_ASSISTANT]);
-        let (_turns, _quality, meta) = parse_session_file(f.path(), false).unwrap();
+        let (_turns, _quality, meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 
         assert_eq!(meta.api_error_count, 1);
+    }
+
+    #[test]
+    fn parser_extracts_attribution_fields_to_turn() {
+        let with_attrib = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"text","text":"hi"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1","attributionPlugin":"superpowers","attributionSkill":"superpowers:brainstorming"}"#;
+        let f = write_jsonl(&[with_attrib]);
+        let (turns, _q, _m, _h) = parse_session_file(f.path(), false).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].attribution_plugin.as_deref(), Some("superpowers"));
+        assert_eq!(
+            turns[0].attribution_skill.as_deref(),
+            Some("superpowers:brainstorming")
+        );
+    }
+
+    #[test]
+    fn parser_aggregates_stop_hook_summary_entries() {
+        // Three stop_hook_summary entries with two distinct commands, one with
+        // errors, one with preventedContinuation=true.
+        let asst = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"text","text":"hi"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}"#;
+        let h1 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"alpha.sh","durationMs":10}],"hookErrors":[],"preventedContinuation":false,"sessionId":"s1"}"#;
+        let h2 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"alpha.sh","durationMs":20}],"hookErrors":[{"err":"e"}],"preventedContinuation":true,"sessionId":"s1"}"#;
+        let h3 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"beta.sh","durationMs":30}],"hookErrors":[],"preventedContinuation":false,"sessionId":"s1"}"#;
+        // A non-hook system entry should be ignored.
+        let irrelevant =
+            r#"{"type":"system","subtype":"turn_duration","durationMs":1234,"sessionId":"s1"}"#;
+        let f = write_jsonl(&[asst, h1, h2, h3, irrelevant]);
+        let (_t, _q, _m, hooks) = parse_session_file(f.path(), false).unwrap();
+        // Hooks are sorted by command name.
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].command, "alpha.sh");
+        assert_eq!(hooks[0].invocations, 2);
+        assert_eq!(hooks[0].total_duration_ms, 30);
+        assert_eq!(hooks[0].error_count, 1);
+        assert_eq!(hooks[0].prevented_continuation_count, 1);
+        assert_eq!(hooks[1].command, "beta.sh");
+        assert_eq!(hooks[1].invocations, 1);
     }
 }

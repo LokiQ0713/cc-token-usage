@@ -674,6 +674,75 @@ pub fn render_session(result: &SessionResult) -> String {
         }
     }
 
+    // ── Phase 2: session-level capability inventory ──
+    // Each row only renders when its data is non-empty (mirrors how metadata
+    // rows are gated). Old sessions (pre-2.1.104/2.1.138) emit nothing here.
+
+    if !result.subagents.is_empty() {
+        let parts: Vec<String> = result
+            .subagents
+            .iter()
+            .map(|sa| {
+                let label = sa
+                    .agent_type
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("unknown");
+                let desc = sa.description.as_deref().unwrap_or("");
+                let desc_trim = if desc.is_empty() {
+                    String::new()
+                } else if desc.chars().count() > 40 {
+                    let mut s: String = desc.chars().take(40).collect();
+                    s.push_str("...");
+                    format!(", \"{}\"", s)
+                } else {
+                    format!(", \"{}\"", desc)
+                };
+                format!(
+                    "{} ({} turns, {}{})",
+                    label,
+                    sa.turns,
+                    format_cost(sa.cost),
+                    desc_trim
+                )
+            })
+            .collect();
+        writeln!(out).unwrap();
+        writeln!(out, "  Subagents: {}", parts.join(" | ")).unwrap();
+    }
+
+    if !result.plugins.is_empty() {
+        let parts: Vec<String> = result
+            .plugins
+            .iter()
+            .map(|p| format!("{} ({} turns, {})", p.plugin, p.turns, format_cost(p.cost)))
+            .collect();
+        writeln!(out, "  Plugins:   {}", parts.join(" | ")).unwrap();
+    }
+
+    if !result.skills.is_empty() {
+        let parts: Vec<String> = result
+            .skills
+            .iter()
+            .map(|s| format!("{} ({} turns, {})", s.skill, s.turns, format_cost(s.cost)))
+            .collect();
+        writeln!(out, "  Skills:    {}", parts.join(" | ")).unwrap();
+    }
+
+    if !result.hooks.is_empty() {
+        let parts: Vec<String> = result
+            .hooks
+            .iter()
+            .map(|h| {
+                format!(
+                    "{} ({} invocations, {} ms total)",
+                    h.command, h.invocations, h.total_duration_ms
+                )
+            })
+            .collect();
+        writeln!(out, "  Hooks:     {}", parts.join(" | ")).unwrap();
+    }
+
     // ── Code Attribution section ──
     if let Some(ref attr) = result.attribution {
         writeln!(out).unwrap();

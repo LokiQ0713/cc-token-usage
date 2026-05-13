@@ -6,7 +6,9 @@ pub mod trend;
 pub mod validate;
 pub mod wrapped;
 
-use crate::data::models::{AttributionData, GlobalDataQuality, PrLinkInfo, TokenUsage};
+use crate::data::models::{
+    AttributionData, GlobalDataQuality, HookUsage, PluginUsage, PrLinkInfo, SkillUsage, TokenUsage,
+};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -175,6 +177,26 @@ pub struct SessionResult {
     pub collapse_max_risk: f64,
     // Attribution
     pub attribution: Option<AttributionData>,
+    // Phase 2: session-level capability inventory (Claude Code 2.1.104+/2.1.138+).
+    // All empty for older sessions; renderers skip the row when empty.
+    pub subagents: Vec<SubagentSummary>,
+    pub plugins: Vec<PluginUsage>,
+    pub skills: Vec<SkillUsage>,
+    pub hooks: Vec<HookUsage>,
+}
+
+/// One subagent's roll-up for the session detail view.
+///
+/// Distinct from the previous `AgentDetail` (which keyed off `turn.agent_id`):
+/// this is keyed off the **file-level grouping** (one entry per agent JSONL).
+#[derive(Debug, Serialize, Clone)]
+pub struct SubagentSummary {
+    pub agent_id: String,
+    pub agent_type: Option<String>,
+    pub description: Option<String>,
+    pub turns: usize,
+    pub output_tokens: u64,
+    pub cost: f64,
 }
 
 #[derive(Debug, Serialize)]
