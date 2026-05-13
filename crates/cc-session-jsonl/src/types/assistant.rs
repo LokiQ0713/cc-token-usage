@@ -528,4 +528,90 @@ mod tests {
         assert!(entry.is_sidechain.is_none());
         assert!(entry.message.is_none());
     }
+
+    // ── Layer A: Round-trip value assertions for v2.1 attribution fields ──
+
+    #[test]
+    fn parse_assistant_with_attribution_plugin_and_skill() {
+        // Verifies that camelCase JSON keys attributionPlugin and attributionSkill
+        // map to the snake_case Rust fields attribution_plugin and attribution_skill.
+        // The #[serde(rename_all = "camelCase")] on the struct handles this via the macro.
+        let json = r#"{
+            "type": "assistant",
+            "uuid": "a-attr-001",
+            "sessionId": "sess-attr",
+            "timestamp": "2026-05-13T10:00:00.000Z",
+            "attributionPlugin": "superpowers",
+            "attributionSkill": "superpowers:brainstorming",
+            "message": {
+                "model": "claude-opus-4-6",
+                "role": "assistant",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "content": [{"type": "text", "text": "Here is a brainstorming result"}]
+            }
+        }"#;
+
+        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            entry.attribution_plugin.as_deref(),
+            Some("superpowers"),
+            "attribution_plugin must be Some(\"superpowers\")"
+        );
+        assert_eq!(
+            entry.attribution_skill.as_deref(),
+            Some("superpowers:brainstorming"),
+            "attribution_skill must be Some(\"superpowers:brainstorming\")"
+        );
+        // Verify existing usage fields still parse correctly alongside new fields
+        let msg = entry.message.as_ref().unwrap();
+        let usage = msg.usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, Some(100));
+        assert_eq!(usage.output_tokens, Some(50));
+    }
+
+    #[test]
+    fn parse_assistant_legacy_no_attribution() {
+        // A v2.0 style assistant entry without attribution fields must parse cleanly
+        // and expose both attribution fields as None. Existing fields must not be affected.
+        let json = r#"{
+            "type": "assistant",
+            "uuid": "a-legacy-001",
+            "sessionId": "sess-legacy",
+            "timestamp": "2025-06-01T10:00:00Z",
+            "message": {
+                "model": "claude-sonnet-4-20250514",
+                "role": "assistant",
+                "stop_reason": "end_turn",
+                "usage": {
+                    "input_tokens": 500,
+                    "output_tokens": 100,
+                    "cache_creation_input_tokens": 200,
+                    "cache_read_input_tokens": 1500
+                },
+                "content": [{"type": "text", "text": "Here is my response"}]
+            },
+            "requestId": "req-legacy-001"
+        }"#;
+
+        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
+        // New v2.1 fields must be None for old entries
+        assert!(
+            entry.attribution_plugin.is_none(),
+            "attribution_plugin should be None for legacy (pre-2.1.138) entry"
+        );
+        assert!(
+            entry.attribution_skill.is_none(),
+            "attribution_skill should be None for legacy (pre-2.1.138) entry"
+        );
+        // Existing fields must continue to parse correctly
+        assert_eq!(entry.uuid.as_deref(), Some("a-legacy-001"));
+        assert_eq!(entry.request_id.as_deref(), Some("req-legacy-001"));
+        let msg = entry.message.as_ref().unwrap();
+        let usage = msg.usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, Some(500));
+        assert_eq!(usage.output_tokens, Some(100));
+        assert_eq!(usage.cache_creation_input_tokens, Some(200));
+        assert_eq!(usage.cache_read_input_tokens, Some(1500));
+    }
 }

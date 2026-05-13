@@ -237,4 +237,305 @@ mod tests {
             other => panic!("Expected Attachment, got: {other:?}"),
         }
     }
+
+    // ── Layer A: Round-trip value assertions for v2.1 new fields ──
+
+    #[test]
+    fn parse_user_with_is_meta_and_source_tool_use_id() {
+        // Tests two fields simultaneously: isMeta (bool) and sourceToolUseID (renamed field).
+        // The rename is critical — camelCase inference would map source_tool_use_id → sourceToolUseId
+        // (lowercase 'd'), not sourceToolUseID. Explicit #[serde(rename)] is required.
+        let json = r#"{
+            "type": "user",
+            "uuid": "u-meta-001",
+            "sessionId": "sess-meta",
+            "timestamp": "2026-05-13T10:00:00.000Z",
+            "isMeta": false,
+            "sourceToolUseID": "toolu_01XXXX"
+        }"#;
+
+        let entry: UserEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.is_meta, Some(false));
+        assert_eq!(entry.source_tool_use_id.as_deref(), Some("toolu_01XXXX"));
+        // Other new fields absent → None
+        assert!(entry.source_tool_assistant_uuid.is_none());
+        assert!(entry.permission_mode.is_none());
+        assert!(entry.tool_use_result.is_none());
+    }
+
+    #[test]
+    fn parse_user_with_source_tool_assistant_uuid_legacy() {
+        // sourceToolAssistantUUID uses the old naming convention. Both fields can coexist.
+        // This test also asserts the two ID fields are independent of each other.
+        let json = r#"{
+            "type": "user",
+            "uuid": "u-asst-uuid-001",
+            "sessionId": "sess-asst",
+            "sourceToolAssistantUUID": "asst_abcdef1234567890"
+        }"#;
+
+        let entry: UserEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            entry.source_tool_assistant_uuid.as_deref(),
+            Some("asst_abcdef1234567890")
+        );
+        // The new-style sourceToolUseID should be absent
+        assert!(entry.source_tool_use_id.is_none());
+    }
+
+    #[test]
+    fn parse_user_with_permission_mode_inline() {
+        // permissionMode as an inline field on a user entry is NOT the same as
+        // type="permission-mode" (a dedicated switch entry). The inline field on UserEntry
+        // records a snapshot of the active mode at turn time.
+        // This test asserts the entry is still classified as Entry::User, not Entry::PermissionMode.
+        let json = r#"{
+            "type": "user",
+            "uuid": "u-perm-001",
+            "sessionId": "sess-perm",
+            "permissionMode": "bypassPermissions",
+            "message": {"role": "user", "content": "run it"}
+        }"#;
+
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        match entry {
+            Entry::User(u) => {
+                assert_eq!(u.permission_mode.as_deref(), Some("bypassPermissions"));
+            }
+            Entry::PermissionMode(_) => {
+                panic!(
+                    "permissionMode inline on user entry was misclassified as PermissionMode entry"
+                );
+            }
+            other => panic!("Expected User, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_user_with_tool_use_result() {
+        // toolUseResult can be any JSON object. The parser must preserve the full structure.
+        // Round-trip: parse → access nested field by key.
+        let json = r#"{
+            "type": "user",
+            "uuid": "u-tur-001",
+            "sessionId": "sess-tur",
+            "toolUseResult": {"foo": "bar", "n": 42}
+        }"#;
+
+        let entry: UserEntry = serde_json::from_str(json).unwrap();
+        let result = entry
+            .tool_use_result
+            .as_ref()
+            .expect("tool_use_result must be Some");
+        assert!(result.is_object(), "toolUseResult must be Value::Object");
+        assert_eq!(result["foo"], "bar");
+        assert_eq!(result["n"], 42);
+    }
+
+    #[test]
+    fn parse_user_legacy_no_new_fields() {
+        // A v2.0 style user entry (no new fields) must parse fine and expose all 5 new fields as None.
+        let json = r#"{
+            "type": "user",
+            "uuid": "u-legacy-001",
+            "parentUuid": "p-legacy",
+            "isSidechain": false,
+            "timestamp": "2025-06-01T09:00:00.000Z",
+            "sessionId": "sess-legacy",
+            "cwd": "/home/user/project",
+            "version": "2.0.77",
+            "message": {"role": "user", "content": "Fix the build"}
+        }"#;
+
+        let entry: UserEntry = serde_json::from_str(json).unwrap();
+        // All 5 v2.1 UserEntry fields must be None
+        assert!(
+            entry.is_meta.is_none(),
+            "is_meta should be None for legacy entry"
+        );
+        assert!(
+            entry.permission_mode.is_none(),
+            "permission_mode should be None for legacy entry"
+        );
+        assert!(
+            entry.tool_use_result.is_none(),
+            "tool_use_result should be None for legacy entry"
+        );
+        assert!(
+            entry.source_tool_use_id.is_none(),
+            "source_tool_use_id should be None for legacy entry"
+        );
+        assert!(
+            entry.source_tool_assistant_uuid.is_none(),
+            "source_tool_assistant_uuid should be None for legacy entry"
+        );
+        // Existing fields still parse correctly
+        assert_eq!(entry.uuid.as_deref(), Some("u-legacy-001"));
+        assert_eq!(entry.version.as_deref(), Some("2.0.77"));
+    }
+
+    // ── System entry v2.1 new fields (Layer A) ──
+
+    #[test]
+    fn parse_system_stop_hook_summary() {
+        // Exact values from spec 1.3 real sample JSON.
+        // Asserts every field: hookCount, hookInfos[0].command, hookInfos[0].durationMs,
+        // preventedContinuation, level, toolUseID (note: capital ID, must use explicit rename).
+        let json = r#"{
+            "type": "system",
+            "uuid": "sys-hook-001",
+            "sessionId": "sess-hook",
+            "subtype": "stop_hook_summary",
+            "hookCount": 1,
+            "hookInfos": [
+                {
+                    "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/emit-event.sh",
+                    "durationMs": 20
+                }
+            ],
+            "hookErrors": [],
+            "preventedContinuation": false,
+            "level": "suggestion",
+            "toolUseID": "e7953fc8-1234-5678-abcd-ef1234567890"
+        }"#;
+
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.subtype.as_deref(), Some("stop_hook_summary"));
+        assert_eq!(entry.hook_count, Some(1));
+
+        let hook_infos = entry.hook_infos.as_ref().expect("hook_infos must be Some");
+        assert_eq!(hook_infos.len(), 1);
+        assert_eq!(
+            hook_infos[0].command.as_deref(),
+            Some("bash ${CLAUDE_PLUGIN_ROOT}/hooks/emit-event.sh")
+        );
+        assert_eq!(hook_infos[0].duration_ms, Some(20));
+
+        let hook_errors = entry
+            .hook_errors
+            .as_ref()
+            .expect("hook_errors must be Some");
+        assert_eq!(hook_errors.len(), 0);
+
+        assert_eq!(entry.prevented_continuation, Some(false));
+        assert_eq!(entry.level.as_deref(), Some("suggestion"));
+        assert_eq!(
+            entry.tool_use_id.as_deref(),
+            Some("e7953fc8-1234-5678-abcd-ef1234567890")
+        );
+    }
+
+    #[test]
+    fn parse_system_stop_hook_summary_with_errors() {
+        // hookErrors is non-empty. Asserts array length and first element structure.
+        // Uses Vec<Value> because error structure is not guaranteed stable.
+        let json = r#"{
+            "type": "system",
+            "uuid": "sys-hook-err-001",
+            "sessionId": "sess-hook-err",
+            "subtype": "stop_hook_summary",
+            "hookCount": 2,
+            "hookInfos": [
+                {"command": "hook1.sh", "durationMs": 100},
+                {"command": "hook2.sh", "durationMs": 50}
+            ],
+            "hookErrors": [{"message": "hook1.sh exited with code 1"}],
+            "preventedContinuation": true,
+            "level": "error",
+            "toolUseID": "tool-uuid-error"
+        }"#;
+
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.hook_count, Some(2));
+
+        let hook_errors = entry
+            .hook_errors
+            .as_ref()
+            .expect("hook_errors must be Some");
+        assert_eq!(hook_errors.len(), 1);
+        assert_eq!(hook_errors[0]["message"], "hook1.sh exited with code 1");
+
+        assert_eq!(entry.prevented_continuation, Some(true));
+        assert_eq!(entry.level.as_deref(), Some("error"));
+
+        let hook_infos = entry.hook_infos.as_ref().unwrap();
+        assert_eq!(hook_infos.len(), 2);
+        assert_eq!(hook_infos[0].command.as_deref(), Some("hook1.sh"));
+        assert_eq!(hook_infos[0].duration_ms, Some(100));
+        assert_eq!(hook_infos[1].command.as_deref(), Some("hook2.sh"));
+        assert_eq!(hook_infos[1].duration_ms, Some(50));
+    }
+
+    #[test]
+    fn parse_system_legacy_no_hook_fields() {
+        // A legacy SystemEntry (only message + subtype, no hook fields) must parse fine
+        // and expose all 8 new hook fields as None.
+        let json = r#"{
+            "type": "system",
+            "uuid": "sys-legacy-001",
+            "sessionId": "sess-legacy",
+            "subtype": "tool_result",
+            "durationMs": 500,
+            "message": {"role": "system", "content": "Tool completed"}
+        }"#;
+
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        // All 8 v2.1 SystemEntry fields must be None
+        assert!(
+            entry.hook_count.is_none(),
+            "hook_count should be None for legacy"
+        );
+        assert!(
+            entry.hook_infos.is_none(),
+            "hook_infos should be None for legacy"
+        );
+        assert!(
+            entry.hook_errors.is_none(),
+            "hook_errors should be None for legacy"
+        );
+        assert!(
+            entry.prevented_continuation.is_none(),
+            "prevented_continuation should be None for legacy"
+        );
+        assert!(
+            entry.stop_reason.is_none(),
+            "stop_reason should be None for legacy"
+        );
+        assert!(
+            entry.has_output.is_none(),
+            "has_output should be None for legacy"
+        );
+        assert!(entry.level.is_none(), "level should be None for legacy");
+        assert!(
+            entry.tool_use_id.is_none(),
+            "tool_use_id should be None for legacy"
+        );
+        // Existing fields parse correctly
+        assert_eq!(entry.subtype.as_deref(), Some("tool_result"));
+        assert_eq!(entry.duration_ms, Some(500));
+    }
+
+    #[test]
+    fn parse_system_stop_hook_summary_all_optional_fields() {
+        // Verify stop_reason and has_output parse correctly (they appear in newer versions).
+        let json = r#"{
+            "type": "system",
+            "uuid": "sys-hook-full-001",
+            "sessionId": "sess-hook-full",
+            "subtype": "stop_hook_summary",
+            "hookCount": 1,
+            "hookInfos": [{"command": "notify.sh", "durationMs": 5}],
+            "hookErrors": [],
+            "preventedContinuation": false,
+            "stopReason": "end_turn",
+            "hasOutput": true,
+            "level": "info",
+            "toolUseID": "tool-full-uuid"
+        }"#;
+
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(entry.has_output, Some(true));
+        assert_eq!(entry.hook_count, Some(1));
+    }
 }
