@@ -85,6 +85,30 @@ function formatDurationMs(ms: number): string {
   return ms + 'ms'
 }
 
+/**
+ * Format a wall-clock duration between two ISO timestamps as a human-readable
+ * string (e.g. "12m 34s", "1h 5m"). Returns null if either input is missing or
+ * unparsable, or if the range is non-positive — caller should omit the field.
+ */
+function formatTimeRangeDuration(firstIso?: string, lastIso?: string): string | null {
+  if (!firstIso || !lastIso) return null
+  const a = Date.parse(firstIso)
+  const b = Date.parse(lastIso)
+  if (Number.isNaN(a) || Number.isNaN(b)) return null
+  const ms = b - a
+  if (ms <= 0) return null
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  if (totalSec < 3600) {
+    const m = Math.floor(totalSec / 60)
+    const s = totalSec % 60
+    return s > 0 ? `${m}m ${s}s` : `${m}m`
+  }
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  return m > 0 ? `${h}h ${m}m` : `${h}h`
+}
+
 function subagentLabel(sub: Subagent): string {
   return truncateChipLabel(sub.agentType || sub.agentId)
 }
@@ -94,6 +118,8 @@ function subagentTooltip(sub: Subagent): string {
     `${sub.turns} ${t('common.turns')}`,
     formatCost(sub.cost),
   ]
+  const duration = formatTimeRangeDuration(sub.firstTimestamp, sub.lastTimestamp)
+  if (duration) parts.push(duration)
   if (sub.description) parts.push(truncateChipLabel(sub.description, 80))
   return parts.join(' · ')
 }

@@ -37,7 +37,7 @@ export interface SessionSummary {
   duration_minutes: number
   model: string
   turn_count: number
-  agent_turn_count: number
+  agentTurnCount: number
   output_tokens: number
   context_tokens: number
   max_context: number
@@ -162,9 +162,10 @@ export interface HtmlSessionSummary {
 //
 // Field names mirror the backend JSON output exactly:
 // - `Subagent` mirrors Rust `HtmlSubagentSummary` (rename_all = "camelCase")
-//   so child fields are camelCase. `turns` here is the count (number), not an
-//   array — the per-turn detail is only emitted from the `session` subcommand,
-//   not from the HTML dashboard payload.
+//   so child fields are camelCase. `turns` is a count (number). Per-turn detail
+//   for subagents is intentionally not emitted in either JSON shape —
+//   consumers needing turn-level subagent data should re-parse the agent
+//   JSONL files directly.
 // - `PluginUsage`/`SkillUsage`/`HookUsage` mirror the Rust types of the same
 //   name (also rename_all = "camelCase").
 export interface Subagent {
