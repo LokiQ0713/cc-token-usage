@@ -1,6 +1,6 @@
 [package]
 name = "cc-session-jsonl"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Parse and structure Claude Code session JSONL files — 25 entry types, 3 file layouts, forward-compatible"
 license = "MIT"
