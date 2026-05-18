@@ -90,7 +90,7 @@ const messages: Record<string, Record<Locale, string>> = {
   'heatmap.weekday_sat': { en: 'Sat', zh: '六' },
   'heatmap.weekday_sun': { en: 'Sun', zh: '日' },
   'heatmap.stats': { en: 'Statistics', zh: '统计' },
-  'heatmap.contributions_in_range': { en: 'contributions in the last year', zh: '次贡献（过去一年）' },
+  'heatmap.contributions_in_range': { en: 'total contributions', zh: '次累计贡献' },
 
   // Projects page
   'projects.kpi_total_projects': { en: 'Total Projects', zh: '项目总数' },
