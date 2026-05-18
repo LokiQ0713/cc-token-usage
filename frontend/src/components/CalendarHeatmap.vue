@@ -68,9 +68,15 @@ interface CellData {
 }
 
 const calendarGrid = computed(() => {
-  // Determine date range: last ~365 days ending at latest data or today
-  const today = new Date('2026-04-02')
-  const endDate = new Date(today)
+  // Determine date range: last ~365 days ending at latest data day or today
+  // (whichever is more recent). Falling back to a hardcoded date hid all
+  // real-data days that fell outside the window — see Heatmap.vue.
+  const today = new Date()
+  let endDate = today
+  for (const d of props.days) {
+    const cand = new Date(d.date + 'T00:00:00')
+    if (cand > endDate) endDate = cand
+  }
   // Go back ~365 days
   const startDate = new Date(endDate)
   startDate.setDate(startDate.getDate() - 364)

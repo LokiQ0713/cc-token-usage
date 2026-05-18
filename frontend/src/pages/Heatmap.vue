@@ -37,8 +37,16 @@ const totalContributions = computed(() => {
 })
 
 const currentStreak = computed(() => {
+  // Use the latest date present in the data (fall back to today) as the
+  // streak anchor — a hardcoded date hid recent streaks once real data
+  // arrived after that date.
+  const todayStr = new Date().toISOString().slice(0, 10)
+  let anchor = todayStr
+  for (const d of heatmapDays.value) {
+    if (d.date > anchor) anchor = d.date
+  }
   const sorted = [...heatmapDays.value]
-    .filter(d => d.date <= '2026-04-02')
+    .filter(d => d.date <= anchor)
     .sort((a, b) => b.date.localeCompare(a.date))
 
   let streak = 0
