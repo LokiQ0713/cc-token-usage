@@ -68,18 +68,26 @@ interface CellData {
 }
 
 const calendarGrid = computed(() => {
-  // Determine date range: last ~365 days ending at latest data day or today
-  // (whichever is more recent). Falling back to a hardcoded date hid all
-  // real-data days that fell outside the window — see Heatmap.vue.
+  // Span the full data range, not a fixed window. Earlier code clamped
+  // to the last 364 days, which hid pre-window history even when present.
   const today = new Date()
   let endDate = today
-  for (const d of props.days) {
-    const cand = new Date(d.date + 'T00:00:00')
-    if (cand > endDate) endDate = cand
+  let startDate = today
+  if (props.days.length > 0) {
+    let minTs = Infinity
+    let maxTs = -Infinity
+    for (const d of props.days) {
+      const ts = new Date(d.date + 'T00:00:00').getTime()
+      if (ts < minTs) minTs = ts
+      if (ts > maxTs) maxTs = ts
+    }
+    startDate = new Date(minTs)
+    endDate = new Date(Math.max(maxTs, today.getTime()))
+  } else {
+    // No data: fall back to a 365-day window ending today for a sensible placeholder.
+    startDate = new Date(today)
+    startDate.setDate(startDate.getDate() - 364)
   }
-  // Go back ~365 days
-  const startDate = new Date(endDate)
-  startDate.setDate(startDate.getDate() - 364)
 
   // Align startDate to preceding Monday (Mon=1 in getDay(), Sun=0)
   const startDow = startDate.getDay()
