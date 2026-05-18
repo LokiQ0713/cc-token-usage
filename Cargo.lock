@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "cc-token-usage"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "cc-session-jsonl",
