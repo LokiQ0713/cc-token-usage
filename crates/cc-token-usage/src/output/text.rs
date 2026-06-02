@@ -780,6 +780,45 @@ pub fn render_session(result: &SessionResult) -> String {
         writeln!(out, "  Hooks:     {}", parts.join(" | ")).unwrap();
     }
 
+    // ── Workflow runs section (Claude Code 2.1.159+) ──
+    // One block per `agent()` orchestration run discovered for this session.
+    // Shows the declared snapshot metadata alongside the measured (parsed)
+    // token/cost/agent totals so any drift is visible at a glance.
+    if !result.workflows.is_empty() {
+        writeln!(out).unwrap();
+        writeln!(out, "  ── Workflows ─────────────────────────────────").unwrap();
+        for wf in &result.workflows {
+            let name = wf.workflow_name.as_deref().unwrap_or(&wf.run_id);
+            let status = wf.status.as_deref().unwrap_or("?");
+            writeln!(out, "  {} [{}]", name, status).unwrap();
+            writeln!(
+                out,
+                "    agents: {} | turns: {} | output: {} tok | cost: {}",
+                wf.parsed_agent_count,
+                wf.parsed_turns,
+                format_number(wf.parsed_output_tokens),
+                format_cost(wf.parsed_cost)
+            )
+            .unwrap();
+            if let Some(snap_tokens) = wf.snapshot_total_tokens {
+                writeln!(
+                    out,
+                    "    snapshot: {} tok reported{}",
+                    format_number(snap_tokens),
+                    wf.snapshot_duration_ms
+                        .map(|d| format!(", {} ms", format_number(d)))
+                        .unwrap_or_default()
+                )
+                .unwrap();
+            }
+            for phase in &wf.phases {
+                if let Some(title) = phase.title.as_deref().filter(|t| !t.is_empty()) {
+                    writeln!(out, "    • {}", title).unwrap();
+                }
+            }
+        }
+    }
+
     // ── Code Attribution section ──
     if let Some(ref attr) = result.attribution {
         writeln!(out).unwrap();

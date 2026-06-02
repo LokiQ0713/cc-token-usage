@@ -205,9 +205,68 @@ pub struct SessionResult {
     /// derivable from `subagents` (per-agent_id) but exposed as a stable,
     /// pre-aggregated structure for the frontend / text renderer.
     pub subagent_types: Vec<SubagentTypeAggregate>,
+    /// Workflow runs (`agent()` orchestrations, Claude Code 2.1.159+) discovered
+    /// for this session under `<uuid>/subagents/workflows/wf_<runId>/`. Each
+    /// entry combines the run's `wf_<runId>.json` snapshot with the actually
+    /// parsed token/cost/agent totals (summed from `subagents` whose
+    /// `workflow_run_id` matches). Empty for sessions with no workflow runs.
+    pub workflows: Vec<WorkflowSummary>,
     /// Orphan session: scanner picked up subagent jsonl files whose parent
     /// main session jsonl was deleted. Totals still include this session.
     pub is_orphan: bool,
+}
+
+/// Summary of one workflow run within a session.
+///
+/// Combines two data sources:
+/// 1. **Declared** (from the `wf_<runId>.json` snapshot): `workflow_name`,
+///    `status`, `snapshot_duration_ms`, `snapshot_agent_count`,
+///    `snapshot_total_tokens`, `phases`. These are what Claude Code itself
+///    recorded for the run; they may be absent if the snapshot is missing.
+/// 2. **Measured** (re-aggregated from the parsed `agent-*.jsonl` transcripts
+///    whose `workflow_run_id == run_id`): `parsed_agent_count`, `parsed_turns`,
+///    `parsed_output_tokens`, `parsed_cost`. These are the ground-truth numbers
+///    the rest of the tool charges into session/overview totals.
+///
+/// Comparing the snapshot's `snapshot_total_tokens` with `parsed_*` lets the
+/// validator confirm workflow tokens are not lost (see `validate.rs`).
+///
+/// Serializes to camelCase — this is part of the frontend data contract.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowSummary {
+    /// The workflow run id, e.g. `wf_7c0e6255-566`.
+    pub run_id: String,
+    /// Human-readable workflow name from the snapshot (e.g. `code-review`).
+    pub workflow_name: Option<String>,
+    /// Run status from the snapshot, e.g. `completed`, `running`, `failed`.
+    pub status: Option<String>,
+    /// Wall-clock duration of the run in milliseconds, from the snapshot.
+    pub snapshot_duration_ms: Option<u64>,
+    /// Agent count as reported by the snapshot (`agentCount`).
+    pub snapshot_agent_count: Option<u64>,
+    /// Aggregate token count as reported by the snapshot (`totalTokens`).
+    pub snapshot_total_tokens: Option<u64>,
+    /// Declared phases of the workflow (title + detail), from the snapshot.
+    pub phases: Vec<WorkflowPhaseSummary>,
+    /// Number of agent transcripts actually parsed for this run.
+    pub parsed_agent_count: usize,
+    /// Total parsed assistant turns across this run's agents.
+    pub parsed_turns: usize,
+    /// Total parsed output tokens across this run's agents.
+    pub parsed_output_tokens: u64,
+    /// Total cost (USD) charged for this run's parsed turns.
+    pub parsed_cost: f64,
+}
+
+/// One declared workflow phase, surfaced for display.
+///
+/// Serializes to camelCase — part of the frontend data contract.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowPhaseSummary {
+    pub title: Option<String>,
+    pub detail: Option<String>,
 }
 
 /// One subagent's roll-up for the session detail view.

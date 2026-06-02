@@ -1,11 +1,12 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::data::models::SessionData;
 use crate::pricing::calculator::PricingCalculator;
 
 use super::{
     AgentDetail, AgentSummary, AggregatedTokens, SessionResult, SubagentSummary, TurnCostBreakdown,
-    TurnDetail,
+    TurnDetail, WorkflowPhaseSummary, WorkflowSummary,
 };
 
 /// Agent metadata loaded from .meta.json files.
@@ -19,6 +20,7 @@ pub fn analyze_session(
     session: &SessionData,
     calc: &PricingCalculator,
     agent_meta: &std::collections::HashMap<String, AgentMeta>,
+    claude_home: &Path,
 ) -> SessionResult {
     let all_turns = session.all_responses();
 
@@ -294,6 +296,7 @@ pub fn analyze_session(
         skills: session.skills.clone(),
         hooks: session.hooks.clone(),
         subagent_types: session.subagent_type_aggregates(calc),
+        workflows: build_workflow_summaries(session, calc, claude_home),
         is_orphan: session.is_orphan,
     }
 }
@@ -330,5 +333,86 @@ fn build_subagent_summaries(
             .partial_cmp(&a.cost)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    out
+}
+
+/// Build one [`WorkflowSummary`] per discovered workflow run for this session.
+///
+/// Snapshot metadata (`workflowName`, `status`, `durationMs`, `agentCount`,
+/// `totalTokens`, `phases`) comes from `scan_session_workflows`, which reads the
+/// `wf_<runId>.json` files. The *measured* totals (`parsed_*`) are re-aggregated
+/// from this session's own `subagents` whose `workflow_run_id == run_id`, so
+/// they reflect exactly what flows into the session/overview cost totals.
+///
+/// Runs are sorted by `run_id` for deterministic output. Returns an empty Vec
+/// when the session has no workflow runs (the common, pre-2.1.159 case).
+///
+/// Public so the HTML payload builder (`output/json.rs`) can reuse the identical
+/// contract instead of duplicating the aggregation.
+pub fn build_workflow_summaries(
+    session: &SessionData,
+    calc: &PricingCalculator,
+    claude_home: &Path,
+) -> Vec<WorkflowSummary> {
+    let runs =
+        match cc_session_jsonl::scanner::scan_session_workflows(&session.session_id, claude_home) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+    if runs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<WorkflowSummary> = runs
+        .into_iter()
+        .map(|run| {
+            // Measured totals: aggregate this session's parsed subagents that
+            // belong to this run (by workflow_run_id).
+            let mut parsed_agent_count = 0usize;
+            let mut parsed_turns = 0usize;
+            let mut parsed_output_tokens: u64 = 0;
+            let mut parsed_cost = 0.0f64;
+            for sa in &session.subagents {
+                if sa.workflow_run_id.as_deref() != Some(run.run_id.as_str()) {
+                    continue;
+                }
+                parsed_agent_count += 1;
+                parsed_turns += sa.turns.len();
+                for t in &sa.turns {
+                    parsed_output_tokens += t.usage.output_tokens.unwrap_or(0);
+                    parsed_cost += calc.calculate_turn_cost(&t.model, &t.usage).total;
+                }
+            }
+
+            let snapshot = run.snapshot.as_ref();
+            let phases = snapshot
+                .and_then(|s| s.phases.as_ref())
+                .map(|ps| {
+                    ps.iter()
+                        .map(|p| WorkflowPhaseSummary {
+                            title: p.title.clone(),
+                            detail: p.detail.clone(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            WorkflowSummary {
+                run_id: run.run_id.clone(),
+                workflow_name: snapshot.and_then(|s| s.workflow_name.clone()),
+                status: snapshot.and_then(|s| s.status.clone()),
+                snapshot_duration_ms: snapshot.and_then(|s| s.duration_ms),
+                snapshot_agent_count: snapshot.and_then(|s| s.agent_count),
+                snapshot_total_tokens: snapshot.and_then(|s| s.total_tokens),
+                phases,
+                parsed_agent_count,
+                parsed_turns,
+                parsed_output_tokens,
+                parsed_cost,
+            }
+        })
+        .collect();
+
+    out.sort_by(|a, b| a.run_id.cmp(&b.run_id));
     out
 }

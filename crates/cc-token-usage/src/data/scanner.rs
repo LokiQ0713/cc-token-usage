@@ -37,6 +37,27 @@ pub fn load_agent_meta(
         .collect()
 }
 
+/// Load workflow-agent metadata from `.meta.json` files under
+/// `<session_id>/subagents/workflows/wf_*/`.
+///
+/// Returns the same `(agentType, description)` tuple format as
+/// [`load_agent_meta`], keyed by agent id with the `agent-` prefix stripped.
+/// This complements [`load_agent_meta`], which only reads the first-level
+/// `subagents/agent-*.meta.json` sidecars and therefore misses workflow agents.
+pub fn load_workflow_agent_meta(
+    session_id: &str,
+    claude_home: &Path,
+) -> std::collections::HashMap<String, (String, String)> {
+    cc_session_jsonl::scanner::load_workflow_agent_meta(session_id, claude_home)
+        .into_iter()
+        .map(|(k, meta)| {
+            let agent_type = meta.agent_type.unwrap_or_else(|| "unknown".to_string());
+            let description = meta.description.unwrap_or_default();
+            (k, (agent_type, description))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -101,6 +101,10 @@ struct ParsedAgent {
     path: PathBuf,
     turns: Vec<super::models::ValidatedTurn>,
     quality: DataQuality,
+    /// The workflow run id (`wf_<runId>`) this agent file belongs to, if it was
+    /// discovered under `subagents/workflows/wf_<runId>/`. `None` for ordinary
+    /// (legacy / Task-tool) subagent files.
+    workflow_run_id: Option<String>,
 }
 
 /// Shared loading logic: parse files in parallel, group agent turns into
@@ -187,6 +191,7 @@ fn load_from_files(
                 path: sf.path.clone(),
                 turns,
                 quality,
+                workflow_run_id: sf.workflow_run_id.clone(),
             })
         })
         .collect();
@@ -237,7 +242,14 @@ fn load_from_files(
 
         // Load .meta.json sidecars once per parent. Keys are stripped of the
         // "agent-" prefix (matching cc-session-jsonl::load_agent_meta).
-        let agent_meta_map = crate::data::scanner::load_agent_meta(&target_id, claude_home);
+        // The first-level loader only scans `subagents/agent-*.meta.json`; merge
+        // in the workflow-agent sidecars under `subagents/workflows/wf_*/` so
+        // workflow agents also surface their agentType. First-level entries win
+        // on key collisions (none expected — agent ids are unique).
+        let mut agent_meta_map = crate::data::scanner::load_agent_meta(&target_id, claude_home);
+        for (k, v) in crate::data::scanner::load_workflow_agent_meta(&target_id, claude_home) {
+            agent_meta_map.entry(k).or_insert(v);
+        }
 
         let parent = sessions.get_mut(&target_id).unwrap();
         let existing_rids = request_id_set(&parent.turns);
@@ -299,6 +311,7 @@ fn load_from_files(
                 turns: kept_turns,
                 first_timestamp: first_ts,
                 last_timestamp: last_ts,
+                workflow_run_id: pa.workflow_run_id,
             });
         }
     }
@@ -865,6 +878,7 @@ mod tests {
                 turns: tlist,
                 first_timestamp: None,
                 last_timestamp: None,
+                workflow_run_id: None,
             }
         };
 
@@ -958,6 +972,7 @@ mod tests {
                 turns: vec![make_turn("t1")],
                 first_timestamp: None,
                 last_timestamp: None,
+                workflow_run_id: None,
             }],
             plugins: Vec::new(),
             skills: Vec::new(),
@@ -1017,6 +1032,149 @@ mod tests {
         );
         // Output tokens accumulated from the two orphan turns.
         assert_eq!(overview.total_output_tokens, 6000);
+    }
+
+    /// Task 0: a workflow agent transcript under
+    /// `<proj>/<uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl` must be
+    /// discovered by the scanner (Type 4), parsed as an agent, grouped under the
+    /// correct parent session, tagged with its `workflow_run_id`, and have its
+    /// tokens/cost flow into the parent's `all_responses()` total. The workflow
+    /// turns carry `isSidechain=true` (like all agent files) and must survive
+    /// the sidechain filter (is_agent=true) and cross-file dedup (their
+    /// requestIds do not appear in the main jsonl).
+    #[test]
+    fn workflow_agent_tokens_enter_parent_total_cost() {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("projects").join("-Users-test-proj");
+        fs::create_dir_all(&project).unwrap();
+
+        let session_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let main_path = project.join(format!("{}.jsonl", session_uuid));
+
+        // One ordinary main turn (requestId r-main-1).
+        let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-1"}"#;
+        fs::write(&main_path, format!("{}\n", main_turn)).unwrap();
+
+        // Workflow run directory: <uuid>/subagents/workflows/wf_run123/
+        let wf_dir = project
+            .join(session_uuid)
+            .join("subagents")
+            .join("workflows")
+            .join("wf_run123");
+        fs::create_dir_all(&wf_dir).unwrap();
+
+        // Two workflow agent transcripts, each with one sidechain assistant turn
+        // carrying real usage. Unique requestIds (not present in the main file).
+        let wf_agent_a = r#"{"type":"assistant","uuid":"wa1","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-a"}]},"sessionId":"agent-wfa","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-wf-a-1"}"#;
+        let wf_agent_b = r#"{"type":"assistant","uuid":"wb1","timestamp":"2026-05-01T10:06:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-b"}]},"sessionId":"agent-wfb","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-wf-b-1"}"#;
+        fs::write(wf_dir.join("agent-wfa.jsonl"), format!("{}\n", wf_agent_a)).unwrap();
+        fs::write(wf_dir.join("agent-wfb.jsonl"), format!("{}\n", wf_agent_b)).unwrap();
+        // Meta sidecar for agent A only (verify workflow meta hydration).
+        fs::write(
+            wf_dir.join("agent-wfa.meta.json"),
+            r#"{"agentType":"researcher","description":"gather facts"}"#,
+        )
+        .unwrap();
+
+        let calc = PricingCalculator::new();
+
+        // Baseline cost WITHOUT the workflow agents (main turn only): compute
+        // directly so we can assert the delta the workflow turns contribute.
+        let main_only_cost = {
+            let usage = TokenUsage {
+                input_tokens: Some(10),
+                output_tokens: Some(20),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                cache_creation: None,
+                server_tool_use: None,
+                service_tier: None,
+                speed: None,
+                inference_geo: None,
+            };
+            calc.calculate_turn_cost("claude-opus-4-6", &usage).total
+        };
+
+        let (sessions, _quality) = load_all(tmp.path(), &calc).unwrap();
+        assert_eq!(sessions.len(), 1, "one parent session");
+        let s = &sessions[0];
+        assert_eq!(s.session_id, session_uuid);
+
+        // The two workflow agents were grouped under the parent session.
+        assert_eq!(
+            s.subagents.len(),
+            2,
+            "two workflow agent files -> two subagents"
+        );
+        for sa in &s.subagents {
+            assert_eq!(
+                sa.workflow_run_id.as_deref(),
+                Some("wf_run123"),
+                "workflow subagent must carry its run id"
+            );
+        }
+        // Workflow meta sidecar hydrated agent A's type.
+        let agent_a = s
+            .subagents
+            .iter()
+            .find(|sa| sa.agent_id == "agent-wfa")
+            .expect("agent-wfa present");
+        assert_eq!(agent_a.agent_type.as_deref(), Some("researcher"));
+
+        // The workflow turns are present (not dropped by sidechain/dedup).
+        assert_eq!(s.agent_turn_count(), 2, "both workflow turns kept");
+        assert_eq!(s.total_turn_count(), 3, "1 main + 2 workflow");
+
+        // all_responses() includes main + workflow turns.
+        let all = s.all_responses();
+        assert_eq!(all.len(), 3);
+
+        // Total cost over all_responses() includes the workflow turns: it must
+        // exceed the main-only cost by exactly the two workflow turns' cost.
+        let total_cost: f64 = all
+            .iter()
+            .map(|t| calc.calculate_turn_cost(&t.model, &t.usage).total)
+            .sum();
+        let wf_a_cost = {
+            let usage = TokenUsage {
+                input_tokens: Some(1000),
+                output_tokens: Some(2000),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                cache_creation: None,
+                server_tool_use: None,
+                service_tier: None,
+                speed: None,
+                inference_geo: None,
+            };
+            calc.calculate_turn_cost("claude-opus-4-6", &usage).total
+        };
+        let wf_b_cost = {
+            let usage = TokenUsage {
+                input_tokens: Some(3000),
+                output_tokens: Some(4000),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+                cache_creation: None,
+                server_tool_use: None,
+                service_tier: None,
+                speed: None,
+                inference_geo: None,
+            };
+            calc.calculate_turn_cost("claude-opus-4-6", &usage).total
+        };
+        assert!(
+            (total_cost - (main_only_cost + wf_a_cost + wf_b_cost)).abs() < 1e-9,
+            "total {total_cost} must equal main {main_only_cost} + wf_a {wf_a_cost} + wf_b {wf_b_cost}"
+        );
+        assert!(
+            total_cost > main_only_cost,
+            "workflow tokens must increase total cost above main-only baseline"
+        );
+
+        // Workflow output tokens (2000 + 4000) are in the total.
+        let total_output: u64 = all.iter().map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
+        assert_eq!(total_output, 20 + 2000 + 4000);
     }
 
     #[test]

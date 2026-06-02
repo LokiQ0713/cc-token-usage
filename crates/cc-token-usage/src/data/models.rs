@@ -109,6 +109,11 @@ pub struct Subagent {
     pub turns: Vec<ValidatedTurn>,
     pub first_timestamp: Option<DateTime<Utc>>,
     pub last_timestamp: Option<DateTime<Utc>>,
+    /// The workflow run id (`wf_<runId>`) this subagent belongs to, if it was
+    /// discovered under `<uuid>/subagents/workflows/wf_<runId>/`. `None` for
+    /// ordinary (non-workflow) subagents. Used to distinguish workflow-spawned
+    /// agents from regular Task-tool subagents in analysis and output.
+    pub workflow_run_id: Option<String>,
 }
 
 /// Per-plugin aggregation for one session.

@@ -113,6 +113,7 @@ fn main() -> Result<()> {
                     &calc,
                     Some(&wrapped),
                     None,
+                    &claude_home,
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
@@ -158,6 +159,7 @@ fn main() -> Result<()> {
                     &calc,
                     Some(&wrapped),
                     None,
+                    &claude_home,
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
@@ -208,7 +210,7 @@ fn main() -> Result<()> {
                 })
                 .collect();
 
-            let result = analyze_session(session, &calc, &agent_meta);
+            let result = analyze_session(session, &calc, &agent_meta, &claude_home);
 
             if want_json {
                 println!("{}", render_session_json(&result));
@@ -231,6 +233,7 @@ fn main() -> Result<()> {
                     &calc,
                     Some(&wrapped),
                     Some(&session.session_id),
+                    &claude_home,
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-session-report.html")?;
@@ -308,6 +311,7 @@ fn main() -> Result<()> {
                     &calc,
                     Some(&wrapped),
                     None,
+                    &claude_home,
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
@@ -342,6 +346,7 @@ fn main() -> Result<()> {
                     &calc,
                     Some(&wrapped),
                     None,
+                    &claude_home,
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;

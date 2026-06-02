@@ -497,7 +497,10 @@ mod tests {
         let first = &result.pricing_warnings[0];
         assert_eq!(first.unknown_model, "claude-future-y-2");
         assert_eq!(first.turn_count, 1);
-        assert_eq!(first.fallback_to, "claude-opus-4-7");
+        assert_eq!(
+            first.fallback_to,
+            crate::pricing::calculator::LATEST_FALLBACK_MODEL
+        );
         // 2M input * $5 + 2M output * $25 = $60
         assert!(
             (first.fallback_cost - 60.0).abs() < 1e-9,
@@ -508,7 +511,10 @@ mod tests {
         let second = &result.pricing_warnings[1];
         assert_eq!(second.unknown_model, "claude-future-x-1");
         assert_eq!(second.turn_count, 2);
-        assert_eq!(second.fallback_to, "claude-opus-4-7");
+        assert_eq!(
+            second.fallback_to,
+            crate::pricing::calculator::LATEST_FALLBACK_MODEL
+        );
         // (1M+0.5M) * $5 input + (1M+0.5M) * $25 output = $7.5 + $37.5 = $45
         assert!(
             (second.fallback_cost - 45.0).abs() < 1e-9,

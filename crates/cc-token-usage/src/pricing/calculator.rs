@@ -11,7 +11,7 @@ pub const PRICING_SOURCE: &str = "platform.claude.com/docs/en/about-claude/prici
 
 /// Built-in model used to price unknown models when no exact/prefix match exists.
 /// Updated whenever a new "latest" Claude flagship is added to `builtin_prices()`.
-pub const LATEST_FALLBACK_MODEL: &str = "claude-opus-4-7";
+pub const LATEST_FALLBACK_MODEL: &str = "claude-opus-4-8";
 
 // ─── Data Structures ─────────────────────────────────────────────────────────
 
@@ -64,6 +64,16 @@ pub enum PriceSource {
 
 fn builtin_prices() -> HashMap<String, ModelPrice> {
     let entries: Vec<(&str, ModelPrice)> = vec![
+        (
+            "claude-opus-4-8",
+            ModelPrice {
+                base_input: 5.0,
+                cache_write_5m: 6.25,
+                cache_write_1h: 10.0,
+                cache_read: 0.50,
+                output: 25.0,
+            },
+        ),
         (
             "claude-opus-4-7",
             ModelPrice {
@@ -220,6 +230,17 @@ impl PricingCalculator {
     /// 4. Prefix match in built-in prices
     /// 5. Fallback to the latest built-in Claude (returns `PriceSource::Fallback`)
     pub fn get_price(&self, model: &str) -> Option<(&ModelPrice, PriceSource)> {
+        // Strip any trailing context-window suffix in square brackets, e.g.
+        // `claude-opus-4-8[1m]` → `claude-opus-4-8`. This is purely a routing
+        // affix appended by Claude Code to mark the active context window; it is
+        // not part of the priced model identity. Without stripping it, the
+        // bracketed name would miss the exact builtin entry and prefix-match an
+        // older generation (e.g. `claude-opus-4`), ~3x over-pricing the turn.
+        let model = match model.split_once('[') {
+            Some((base, rest)) if rest.ends_with(']') => base,
+            _ => model,
+        };
+
         // 1. Exact override
         if let Some(p) = self.overrides.get(model) {
             return Some((p, PriceSource::Config));
@@ -527,8 +548,47 @@ mod tests {
         assert_eq!(cost.price_source, PriceSource::Builtin);
     }
 
+    /// `claude-opus-4-8` (with and without a `[1m]` context-window suffix) must
+    /// resolve to the opus-4-6/4-7 generation pricing ($5 input / $25 output),
+    /// never the older `claude-opus-4` generation ($15/$75). The bracketed
+    /// variant previously prefix-matched `claude-opus-4`, ~3x over-pricing.
+    #[test]
+    fn opus_4_8_uses_opus_generation_pricing_not_opus_4() {
+        let calc = PricingCalculator::new();
+        let usage = make_usage(1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 0);
+
+        for model in [
+            "claude-opus-4-8",
+            "claude-opus-4-8[1m]",
+            "claude-opus-4-8[200k]",
+        ] {
+            let cost = calc.calculate_turn_cost(model, &usage);
+            // opus-4-6/4-7/4-8 rates: 5 + 6.25 + 0.50 + 25 = 36.75 (NOT 110.25 @ opus-4).
+            assert!(
+                (cost.input_cost - 5.0).abs() < 1e-9,
+                "{model} input_cost: {} (must be opus-gen $5, not opus-4 $15)",
+                cost.input_cost
+            );
+            assert!(
+                (cost.output_cost - 25.0).abs() < 1e-9,
+                "{model} output_cost: {} (must be opus-gen $25, not opus-4 $75)",
+                cost.output_cost
+            );
+            assert!(
+                (cost.total - 36.75).abs() < 1e-9,
+                "{model} total: {} (must be 36.75, not opus-4's 110.25)",
+                cost.total
+            );
+            assert_eq!(
+                cost.price_source,
+                PriceSource::Builtin,
+                "{model} must resolve to a builtin entry, not a fallback"
+            );
+        }
+    }
+
     /// An unknown model name with no prefix overlap with any built-in entry
-    /// must fall back to `LATEST_FALLBACK_MODEL` (currently claude-opus-4-7)
+    /// must fall back to `LATEST_FALLBACK_MODEL` (currently claude-opus-4-8)
     /// with a `PriceSource::Fallback` so the cost is not silently $0.
     ///
     /// Note: we pick "claude-future-x-1" deliberately — names like

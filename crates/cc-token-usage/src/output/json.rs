@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::analysis::heatmap::HeatmapResult;
 use crate::analysis::project::project_display_name;
 use crate::analysis::wrapped::WrappedResult;
-use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult};
+use crate::analysis::{OverviewResult, ProjectResult, SessionResult, TrendResult, WorkflowSummary};
 use crate::data::models::{HookUsage, PluginUsage, SessionData, SkillUsage, SubagentTypeAggregate};
 use crate::pricing::calculator::PricingCalculator;
 
@@ -250,6 +250,10 @@ struct SessionJson {
     /// SubagentTypeAggregate serializes to camelCase.
     #[serde(rename = "subagentTypes")]
     subagent_types: Vec<SubagentTypeAggregate>,
+    /// Workflow runs (`agent()` orchestrations, Claude Code 2.1.159+) for this
+    /// session. Always emitted (possibly empty). WorkflowSummary serializes to
+    /// camelCase. See `analysis::WorkflowSummary` for the field contract.
+    workflows: Vec<WorkflowSummary>,
     /// Orphan session: scanner reconstructed this session from subagent
     /// jsonl files only (parent jsonl deleted). Totals still include it.
     #[serde(rename = "isOrphan")]
@@ -354,6 +358,7 @@ pub fn render_session_json(result: &SessionResult) -> String {
         skills: result.skills.clone(),
         hooks: result.hooks.clone(),
         subagent_types: result.subagent_types.clone(),
+        workflows: result.workflows.clone(),
         is_orphan: result.is_orphan,
     };
 
@@ -581,6 +586,12 @@ pub struct HtmlSessionSummary {
     /// Per-`agent_type` rollup of `subagents[]` for chip rendering.
     #[serde(rename = "subagentTypes")]
     pub subagent_types: Vec<SubagentTypeAggregate>,
+    /// Workflow runs (`agent()` orchestrations, Claude Code 2.1.159+) for this
+    /// session. Always emitted (possibly empty). Each entry combines the run
+    /// snapshot (workflowName/status/durationMs/agentCount/totalTokens/phases)
+    /// with measured parsed totals (parsedAgentCount/parsedTurns/
+    /// parsedOutputTokens/parsedCost). WorkflowSummary serializes to camelCase.
+    pub workflows: Vec<WorkflowSummary>,
     /// Orphan session: scanner reconstructed this session from subagent
     /// jsonl files only (parent jsonl deleted). Totals still include it.
     #[serde(rename = "isOrphan")]
@@ -626,6 +637,7 @@ pub struct DailyActivity {
 ///
 /// Reuses existing `render_*_json` functions for overview/projects/trend,
 /// then builds session summaries and heatmap data directly from `SessionData`.
+#[allow(clippy::too_many_arguments)]
 pub fn render_html_payload(
     overview: &OverviewResult,
     projects: &ProjectResult,
@@ -634,6 +646,7 @@ pub fn render_html_payload(
     calc: &PricingCalculator,
     wrapped: Option<&WrappedResult>,
     active_session_id: Option<&str>,
+    claude_home: &std::path::Path,
 ) -> String {
     // Build typed structs and convert directly to serde_json::Value
     let overview_json: serde_json::Value =
@@ -646,7 +659,7 @@ pub fn render_html_payload(
     // Build per-session summaries
     let session_summaries: Vec<HtmlSessionSummary> = sessions
         .iter()
-        .map(|s| build_html_session_summary(s, calc))
+        .map(|s| build_html_session_summary(s, calc, claude_home))
         .collect();
 
     // Build heatmap by aggregating sessions per date
@@ -673,6 +686,7 @@ pub fn render_html_payload(
 fn build_html_session_summary(
     session: &SessionData,
     calc: &PricingCalculator,
+    claude_home: &std::path::Path,
 ) -> HtmlSessionSummary {
     let all = session.all_responses();
     let turn_count = all.len();
@@ -739,6 +753,7 @@ fn build_html_session_summary(
         .collect();
 
     let subagent_types = session.subagent_type_aggregates(calc);
+    let workflows = crate::analysis::session::build_workflow_summaries(session, calc, claude_home);
 
     HtmlSessionSummary {
         id: session.session_id.clone(),
@@ -759,6 +774,7 @@ fn build_html_session_summary(
         skills: session.skills.clone(),
         hooks: session.hooks.clone(),
         subagent_types,
+        workflows,
         is_orphan: session.is_orphan,
     }
 }
@@ -999,8 +1015,16 @@ mod tests {
         let overview = analyze_overview(&sessions, GlobalDataQuality::default(), &calc, None);
         let projects = analyze_projects(&sessions, &calc, 10);
         let trend = analyze_trend(&sessions, &calc, 0, false);
-        let payload =
-            render_html_payload(&overview, &projects, &trend, &sessions, &calc, None, None);
+        let payload = render_html_payload(
+            &overview,
+            &projects,
+            &trend,
+            &sessions,
+            &calc,
+            None,
+            None,
+            std::path::Path::new("/nonexistent-claude-home"),
+        );
         let v: serde_json::Value = serde_json::from_str(&payload).expect("must parse as JSON");
         let days = v["heatmap"]["days"]
             .as_array()

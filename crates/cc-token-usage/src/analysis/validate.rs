@@ -550,6 +550,87 @@ pub fn validate_all(
             }
         }
 
+        // --- Workflow validation (Claude Code 2.1.159+) ---
+        // For every discovered workflow run, reconcile what the pipeline parsed
+        // from the run's agent transcripts (the subagents whose workflow_run_id
+        // matches) against the run snapshot. The goal is to prove workflow tokens
+        // are not silently dropped from the pipeline totals.
+        //
+        // Two hard checks (must pass):
+        //   1. parsed tokens > 0 — the run's agents were actually parsed and fed
+        //      into the session/overview totals (no silent loss).
+        //   2. parsed agent count == snapshot `agentCount` — every agent the run
+        //      declared was found and parsed on disk.
+        //
+        // One informational check (always "passes", surfaces both numbers): the
+        // snapshot's `totalTokens` figure. Empirically the snapshot's token
+        // accounting does NOT equal any clean parsed sum (on observed 2.1.159
+        // data it tracks the cache-write/`cache_creation` tokens, not
+        // input+output+cache_read), so asserting equality would always fail. We
+        // report both so a human can eyeball drift without flagging a false
+        // failure. The real "no loss" guarantee comes from checks 1+2 plus the
+        // existing per-file agent_output / cross-file-dedup checks above, which
+        // already cover these workflow agent files (they are ordinary agent
+        // files in the independent re-scan).
+        let workflow_runs =
+            cc_session_jsonl::scanner::scan_session_workflows(&session.session_id, claude_home)
+                .unwrap_or_default();
+        for run in &workflow_runs {
+            // Parsed totals for this run, summed across matching subagents.
+            let mut parsed_input: u64 = 0;
+            let mut parsed_output: u64 = 0;
+            let mut parsed_cache_creation: u64 = 0;
+            let mut parsed_cache_read: u64 = 0;
+            let mut parsed_agent_count = 0usize;
+            for sa in &session.subagents {
+                if sa.workflow_run_id.as_deref() != Some(run.run_id.as_str()) {
+                    continue;
+                }
+                parsed_agent_count += 1;
+                for t in &sa.turns {
+                    parsed_input += t.usage.input_tokens.unwrap_or(0);
+                    parsed_output += t.usage.output_tokens.unwrap_or(0);
+                    parsed_cache_creation += t.usage.cache_creation_input_tokens.unwrap_or(0);
+                    parsed_cache_read += t.usage.cache_read_input_tokens.unwrap_or(0);
+                }
+            }
+            let parsed_total_tokens =
+                parsed_input + parsed_output + parsed_cache_creation + parsed_cache_read;
+
+            // Hard check 1: the run's agents contribute tokens to the totals.
+            agent_checks.push(Check::compare(
+                format!("workflow[{}] parsed tokens > 0 (no loss)", run.run_id),
+                "true",
+                (parsed_total_tokens > 0).to_string(),
+            ));
+
+            // Hard check 2: every declared agent was found and parsed.
+            if let Some(snap_agents) = run.snapshot.as_ref().and_then(|s| s.agent_count) {
+                agent_checks.push(Check::compare(
+                    format!("workflow[{}] agent_count == snapshot", run.run_id),
+                    snap_agents,
+                    parsed_agent_count as u64,
+                ));
+            }
+
+            // Informational: snapshot totalTokens vs parsed total (never fails).
+            if let Some(snap_tokens) = run.snapshot.as_ref().and_then(|s| s.total_tokens) {
+                agent_checks.push(Check::pass(
+                    format!(
+                        "workflow[{}] snapshot.totalTokens={} | parsed total={} (in={} out={} cw={} cr={})",
+                        run.run_id,
+                        snap_tokens,
+                        parsed_total_tokens,
+                        parsed_input,
+                        parsed_output,
+                        parsed_cache_creation,
+                        parsed_cache_read,
+                    ),
+                    parsed_total_tokens,
+                ));
+            }
+        }
+
         // --- Total (main + agent) verification ---
         let pipeline_total_output: u64 = session
             .turns
