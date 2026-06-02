@@ -1328,3 +1328,948 @@ fn real_e2e_lenient_reader_error_rate() {
         rate * 100.0
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEW QA TESTS — P0 / P1 / P2
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── P0: validate fail path — agent_count mismatch ───────────────────────────
+
+/// Negative test: snapshot declares agentCount:3 but only 1 agent transcript
+/// is present on disk. The `workflow[..] agent_count == snapshot` check must
+/// fail with expected="3" actual="1".
+///
+/// Verification logic: `Check::compare` sets `passed = (expected == actual)`.
+/// The snapshot's `agent_count = Some(3)` flows into `snap_agents = 3`.
+/// load_all scans the single agent file → `parsed_agent_count = 1`.
+/// `Check::compare("... agent_count == snapshot", 3u64, 1usize)` → "3" != "1"
+/// → `passed = false`.  The test asserts `passed == false` and checks the
+/// specific expected/actual strings.  If the test were always-true, the
+/// assertion `!wf_count_check.passed` would panic on the all-pass path
+/// (demonstrated by the sibling passing test above, which uses agentCount:1
+/// with 1 agent and asserts `passed == true`).
+#[test]
+fn validate_workflow_agent_count_mismatch_fails() {
+    let tmp = make_claude_home();
+    let session_uuid = "ffffffff-0000-1111-2222-333344445555";
+    let proj = tmp
+        .path()
+        .join("projects")
+        .join("-Users-wf-validate-mismatch");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_mismatch");
+    let wf_dir = proj.join(session_uuid).join("workflows");
+    fs::create_dir_all(&wf_run).unwrap();
+    fs::create_dir_all(&wf_dir).unwrap();
+
+    // Main session
+    let main = assistant_line(
+        "m1",
+        "2026-06-01T09:00:00Z",
+        "claude-opus-4-8",
+        10,
+        20,
+        false,
+        "req-mm1",
+        session_uuid,
+    );
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        format!("{}\n", main),
+    )
+    .unwrap();
+
+    // Snapshot declares agentCount:3 — but we only put 1 agent on disk.
+    fs::write(
+        wf_dir.join("wf_mismatch.json"),
+        r#"{"runId":"wf_mismatch","workflowName":"mismatch-wf","status":"completed","agentCount":3,"totalTokens":3000}"#,
+    )
+    .unwrap();
+
+    // Only ONE agent transcript (snapshot says 3)
+    let wf_line = assistant_line(
+        "w1",
+        "2026-06-01T10:00:00Z",
+        "claude-opus-4-8",
+        1000,
+        2000,
+        true,
+        "req-wmm1",
+        "agent-wfmm1",
+    );
+    fs::write(wf_run.join("agent-wfmm1.jsonl"), format!("{}\n", wf_line)).unwrap();
+
+    let calc = PricingCalculator::new();
+    let (sessions, quality) = load_all(tmp.path(), &calc).unwrap();
+
+    let session_refs: Vec<&cc_token_usage::data::models::SessionData> = sessions.iter().collect();
+    let report = cc_token_usage::analysis::validate::validate_all(
+        &session_refs,
+        &quality,
+        tmp.path(),
+        &calc,
+    )
+    .unwrap();
+
+    let sv = report
+        .session_results
+        .iter()
+        .find(|sv| sv.session_id == session_uuid)
+        .expect("session validation result must exist");
+
+    let wf_count_check = sv
+        .agent_checks
+        .iter()
+        .find(|c| c.name.contains("wf_mismatch") && c.name.contains("agent_count"))
+        .expect("workflow agent_count check must be present");
+
+    // This is the key assertion: the check MUST fail.
+    assert!(
+        !wf_count_check.passed,
+        "agent_count mismatch (snapshot=3, actual=1) must produce a FAILING check, got passed=true"
+    );
+    // Verify the expected value comes from the snapshot (3) and the actual from parsed (1).
+    assert_eq!(
+        wf_count_check.expected, "3",
+        "expected field must be snapshot agentCount=3"
+    );
+    assert_eq!(
+        wf_count_check.actual, "1",
+        "actual field must be parsed_agent_count=1"
+    );
+}
+
+// ─── P1: tighten bracket_at_front_is_not_stripped ────────────────────────────
+
+/// "[1m]claude-opus-4-8" — bracket at front.
+/// split_once('[') → ("", "1m]claude-opus-4-8").
+/// rest = "1m]claude-opus-4-8", ends_with(']') == false → no strip.
+/// Model stays "[1m]claude-opus-4-8".
+/// No builtin has this key, and prefix lookup requires model.starts_with(key),
+/// but "[1m]..." does not start with "claude-*" → no builtin prefix match.
+/// Falls through to Fallback.
+#[test]
+fn bracket_at_front_resolves_to_fallback_precisely() {
+    let calc = PricingCalculator::new();
+    let result = calc.get_price("[1m]claude-opus-4-8");
+    assert!(result.is_some(), "must return Some (fallback), not None");
+    let (_, source) = result.unwrap();
+    match source {
+        PriceSource::Fallback { requested, .. } => {
+            assert_eq!(
+                requested, "[1m]claude-opus-4-8",
+                "Fallback.requested must preserve the full model string with prefix bracket"
+            );
+        }
+        other => panic!(
+            "expected PriceSource::Fallback for '[1m]claude-opus-4-8', got {:?}",
+            other
+        ),
+    }
+}
+
+// ─── P1: json_output structural assertions ────────────────────────────────────
+
+/// Structured JSON assertion: parse the output and check actual field values
+/// in `workflows[0]`, not just substring presence.
+#[test]
+fn json_output_workflow_section_structured_assertions() {
+    use cc_token_usage::analysis::session::analyze_session;
+    use cc_token_usage::analysis::session::AgentMeta;
+    use cc_token_usage::output::json::render_session_json;
+
+    let tmp = make_claude_home();
+    let session_uuid = "cccc1111-2222-3333-4444-555566667788";
+    let proj = tmp.path().join("projects").join("-Users-wf-json-struct");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_struct01");
+    let wf_dir = proj.join(session_uuid).join("workflows");
+    fs::create_dir_all(&wf_run).unwrap();
+    fs::create_dir_all(&wf_dir).unwrap();
+
+    let main = assistant_line(
+        "m1",
+        "2026-06-01T09:00:00Z",
+        "claude-opus-4-8",
+        10,
+        20,
+        false,
+        "req-main-struct",
+        session_uuid,
+    );
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        format!("{}\n", main),
+    )
+    .unwrap();
+
+    fs::write(
+        wf_dir.join("wf_struct01.json"),
+        r#"{"runId":"wf_struct01","workflowName":"struct-test-wf","status":"completed","agentCount":1}"#,
+    )
+    .unwrap();
+
+    // Agent with known token counts so we can verify parsed_cost and parsed_turns
+    let wf_line = assistant_line(
+        "ws1",
+        "2026-06-01T10:00:00Z",
+        "claude-opus-4-8",
+        1000,
+        2000,
+        true,
+        "req-ws1",
+        "agent-wfs",
+    );
+    fs::write(wf_run.join("agent-wfs.jsonl"), format!("{}\n", wf_line)).unwrap();
+
+    let calc = PricingCalculator::new();
+    let (sessions, _quality) = load_all(tmp.path(), &calc).unwrap();
+    assert_eq!(sessions.len(), 1);
+
+    let agent_meta: HashMap<String, AgentMeta> = HashMap::new();
+    let result = analyze_session(&sessions[0], &calc, &agent_meta, tmp.path());
+    let json_str = render_session_json(&result);
+
+    // Must be valid JSON
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_str).expect("session JSON must be valid");
+
+    // Structural: workflows[0] must exist with correct field values
+    let workflows = parsed
+        .get("workflows")
+        .expect("top-level 'workflows' key must exist");
+    assert!(
+        workflows.is_array(),
+        "'workflows' must be an array, got: {workflows:?}"
+    );
+    let wf_arr = workflows.as_array().unwrap();
+    assert_eq!(
+        wf_arr.len(),
+        1,
+        "must have exactly 1 workflow, got {}",
+        wf_arr.len()
+    );
+
+    let wf0 = &wf_arr[0];
+
+    // runId (camelCase from #[serde(rename_all = "camelCase")])
+    assert_eq!(
+        wf0.get("runId").and_then(|v| v.as_str()),
+        Some("wf_struct01"),
+        "workflows[0].runId must be 'wf_struct01', got: {:?}",
+        wf0.get("runId")
+    );
+
+    // workflowName
+    assert_eq!(
+        wf0.get("workflowName").and_then(|v| v.as_str()),
+        Some("struct-test-wf"),
+        "workflows[0].workflowName must be 'struct-test-wf'"
+    );
+
+    // parsedTurns: 1 assistant turn in the agent transcript
+    assert_eq!(
+        wf0.get("parsedTurns").and_then(|v| v.as_u64()),
+        Some(1),
+        "workflows[0].parsedTurns must be 1"
+    );
+
+    // parsedCost must be > 0 (1000 input + 2000 output on claude-opus-4-8)
+    let parsed_cost = wf0
+        .get("parsedCost")
+        .and_then(|v| v.as_f64())
+        .expect("workflows[0].parsedCost must be a number");
+    assert!(
+        parsed_cost > 0.0,
+        "workflows[0].parsedCost must be > 0, got {parsed_cost}"
+    );
+}
+
+// ─── P1: resilience — malformed wf_*.json → snapshot:None, no panic ──────────
+
+/// A workflow snapshot file that contains invalid JSON must not cause a panic.
+/// `build_workflow_run` reads it with `.ok()`, so `snapshot` becomes `None`
+/// while `snapshot_path` remains `Some` (since the file exists).
+/// The run is still discoverable via the agent files.
+#[test]
+fn malformed_snapshot_json_yields_none_snapshot_no_panic() {
+    use cc_session_jsonl::scanner::scan_session_workflows;
+
+    let tmp = make_claude_home();
+    let session_uuid = "aaaa1111-bbbb-cccc-dddd-eeeeffff0001";
+    let proj = tmp.path().join("projects").join("-Users-wf-malformed-snap");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_badsnap");
+    let wf_dir = proj.join(session_uuid).join("workflows");
+    fs::create_dir_all(&wf_run).unwrap();
+    fs::create_dir_all(&wf_dir).unwrap();
+
+    // Main session
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user","uuid":"u1"}"#,
+    )
+    .unwrap();
+
+    // Malformed (non-JSON) snapshot file
+    fs::write(wf_dir.join("wf_badsnap.json"), b"NOT VALID JSON {{{{{").unwrap();
+
+    // Agent transcript so the run is still discoverable
+    fs::write(
+        wf_run.join("agent-x.jsonl"),
+        r#"{"type":"user","uuid":"x"}"#,
+    )
+    .unwrap();
+
+    // Must not panic
+    let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "run must be found despite malformed snapshot"
+    );
+    assert_eq!(runs[0].run_id, "wf_badsnap");
+
+    // snapshot is None because parse failed; snapshot_path is Some because
+    // the file exists
+    assert!(
+        runs[0].snapshot.is_none(),
+        "malformed snapshot JSON → snapshot must be None"
+    );
+    assert!(
+        runs[0].snapshot_path.is_some(),
+        "snapshot_path must be Some (file exists, even if unparseable)"
+    );
+    assert_eq!(runs[0].agent_files.len(), 1);
+}
+
+/// Malformed `.meta.json` sidecar must not cause load_workflow_agent_meta to
+/// panic — it is silently skipped.
+#[test]
+fn malformed_meta_json_is_skipped_no_panic() {
+    use cc_session_jsonl::scanner::load_workflow_agent_meta;
+
+    let tmp = make_claude_home();
+    let session_uuid = "aaaa2222-bbbb-cccc-dddd-eeeeffff0002";
+    let proj = tmp.path().join("projects").join("-Users-wf-malformed-meta");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_badmeta");
+    fs::create_dir_all(&wf_run).unwrap();
+
+    // Agent transcript
+    fs::write(
+        wf_run.join("agent-broken.jsonl"),
+        r#"{"type":"user","uuid":"y"}"#,
+    )
+    .unwrap();
+
+    // Malformed meta sidecar
+    fs::write(
+        wf_run.join("agent-broken.meta.json"),
+        b"this is not json at all!!!",
+    )
+    .unwrap();
+
+    // Good meta for another agent (must still be loaded)
+    fs::write(
+        wf_run.join("agent-good.jsonl"),
+        r#"{"type":"user","uuid":"z"}"#,
+    )
+    .unwrap();
+    fs::write(
+        wf_run.join("agent-good.meta.json"),
+        r#"{"agentType":"qa-type","description":"good agent"}"#,
+    )
+    .unwrap();
+
+    // Must not panic
+    let meta_map = load_workflow_agent_meta(session_uuid, tmp.path());
+
+    // broken agent's meta is skipped → not in the map
+    assert!(
+        meta_map.get("broken").is_none(),
+        "malformed meta must be skipped — not in map"
+    );
+
+    // good agent's meta is present
+    let good = meta_map.get("good").expect("good agent meta must load");
+    assert_eq!(good.agent_type.as_deref(), Some("qa-type"));
+    assert_eq!(good.description.as_deref(), Some("good agent"));
+}
+
+// ─── P1: text output — workflow section ──────────────────────────────────────
+
+/// Render a session with one workflow run via `render_session` and verify the
+/// "── Workflows ──" block is present with the expected content.
+/// Also verifies that a phase with an empty title is not emitted (text.rs:815).
+#[test]
+fn text_output_workflow_section_present_with_correct_content() {
+    use cc_token_usage::analysis::session::analyze_session;
+    use cc_token_usage::analysis::session::AgentMeta;
+    use cc_token_usage::output::text::render_session;
+
+    let tmp = make_claude_home();
+    let session_uuid = "bbbb1111-cccc-dddd-eeee-ffff00001234";
+    let proj = tmp.path().join("projects").join("-Users-wf-text-output");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_textout");
+    let wf_dir = proj.join(session_uuid).join("workflows");
+    fs::create_dir_all(&wf_run).unwrap();
+    fs::create_dir_all(&wf_dir).unwrap();
+
+    // Main session
+    let main = assistant_line(
+        "m1",
+        "2026-06-01T09:00:00Z",
+        "claude-opus-4-8",
+        10,
+        20,
+        false,
+        "req-textmain",
+        session_uuid,
+    );
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        format!("{}\n", main),
+    )
+    .unwrap();
+
+    // Snapshot with 3 phases: one real title, one empty title (should be filtered),
+    // one with a real title.
+    fs::write(
+        wf_dir.join("wf_textout.json"),
+        r#"{
+            "runId":"wf_textout",
+            "workflowName":"text-output-wf",
+            "status":"completed",
+            "agentCount":1,
+            "totalTokens":3000,
+            "durationMs":12345,
+            "phases":[
+                {"title":"Phase One","detail":"do step one"},
+                {"title":"","detail":"empty title phase"},
+                {"title":"Phase Three","detail":"do step three"}
+            ]
+        }"#,
+    )
+    .unwrap();
+
+    // Agent with 1000 input + 2000 output
+    let wf_line = assistant_line(
+        "wt1",
+        "2026-06-01T10:00:00Z",
+        "claude-opus-4-8",
+        1000,
+        2000,
+        true,
+        "req-wt1",
+        "agent-wft",
+    );
+    fs::write(wf_run.join("agent-wft.jsonl"), format!("{}\n", wf_line)).unwrap();
+
+    let calc = PricingCalculator::new();
+    let (sessions, _quality) = load_all(tmp.path(), &calc).unwrap();
+    assert_eq!(sessions.len(), 1);
+
+    let agent_meta: HashMap<String, AgentMeta> = HashMap::new();
+    let result = analyze_session(&sessions[0], &calc, &agent_meta, tmp.path());
+    let text = render_session(&result);
+
+    // Must have the workflow section header
+    assert!(
+        text.contains("── Workflows ──"),
+        "text output must contain '── Workflows ──' section header"
+    );
+
+    // Must contain the workflow name and status
+    assert!(
+        text.contains("text-output-wf"),
+        "text output must contain workflow name 'text-output-wf'"
+    );
+    assert!(
+        text.contains("completed"),
+        "text output must contain status 'completed'"
+    );
+
+    // Must contain agent/turn counts and cost
+    assert!(
+        text.contains("agents: 1"),
+        "text output must show 'agents: 1'"
+    );
+    assert!(
+        text.contains("turns: 1"),
+        "text output must show 'turns: 1'"
+    );
+    // output tokens (2000) should appear
+    assert!(
+        text.contains("2,000") || text.contains("2000"),
+        "text output must show 2000 output tokens"
+    );
+    // cost must be non-zero (some $x.xx format)
+    assert!(
+        text.contains("$") || text.contains("cost:"),
+        "text output must show cost"
+    );
+
+    // Phase One must appear
+    assert!(
+        text.contains("Phase One"),
+        "text output must contain phase title 'Phase One'"
+    );
+
+    // Phase Three must appear
+    assert!(
+        text.contains("Phase Three"),
+        "text output must contain phase title 'Phase Three'"
+    );
+
+    // Empty-title phase must NOT appear (text.rs:815 filters it)
+    assert!(
+        !text.contains("empty title phase"),
+        "text output must NOT emit a phase with empty title (text.rs:815 filters it)"
+    );
+}
+
+/// A session with NO workflow runs must NOT contain the "── Workflows ──"
+/// section header in the text output.
+#[test]
+fn text_output_no_workflow_section_when_no_workflows() {
+    use cc_token_usage::analysis::session::analyze_session;
+    use cc_token_usage::analysis::session::AgentMeta;
+    use cc_token_usage::output::text::render_session;
+
+    let tmp = make_claude_home();
+    let session_uuid = "bbbb2222-cccc-dddd-eeee-ffff00005678";
+    let proj = tmp.path().join("projects").join("-Users-no-wf-text");
+    fs::create_dir_all(&proj).unwrap();
+
+    let main = assistant_line(
+        "m1",
+        "2026-06-01T09:00:00Z",
+        "claude-opus-4-8",
+        10,
+        20,
+        false,
+        "req-nowf",
+        session_uuid,
+    );
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        format!("{}\n", main),
+    )
+    .unwrap();
+
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(tmp.path(), &calc).unwrap();
+    let agent_meta: HashMap<String, AgentMeta> = HashMap::new();
+    let result = analyze_session(&sessions[0], &calc, &agent_meta, tmp.path());
+    let text = render_session(&result);
+
+    assert!(
+        !text.contains("── Workflows ──"),
+        "session with no workflows must NOT have the Workflows section"
+    );
+}
+
+// ─── P1: deepen scan_workflows_global ────────────────────────────────────────
+
+/// Extends the existing `scan_workflows_global_finds_all_across_projects` test
+/// with deeper assertions: snapshot presence, agent_files count, and project
+/// attribution for each discovered run.
+#[test]
+fn scan_workflows_global_deep_assertions() {
+    use cc_session_jsonl::scanner::scan_workflows;
+
+    let tmp = make_claude_home();
+    let uuid_a = "dddd1111-aaaa-bbbb-cccc-000000000010";
+    let uuid_b = "dddd2222-aaaa-bbbb-cccc-000000000011";
+
+    // Project X: run wf_deep_a — 2 agents, snapshot present
+    {
+        let p = tmp.path().join("projects").join("-Users-qa-deep-x");
+        let wf_run = p
+            .join(uuid_a)
+            .join("subagents")
+            .join("workflows")
+            .join("wf_deep_a");
+        let wf_dir = p.join(uuid_a).join("workflows");
+        fs::create_dir_all(&wf_run).unwrap();
+        fs::create_dir_all(&wf_dir).unwrap();
+        fs::write(p.join(format!("{}.jsonl", uuid_a)), r#"{"type":"user"}"#).unwrap();
+        fs::write(
+            wf_dir.join("wf_deep_a.json"),
+            r#"{"runId":"wf_deep_a","workflowName":"deep-a","status":"completed","agentCount":2}"#,
+        )
+        .unwrap();
+        fs::write(wf_run.join("agent-da1.jsonl"), r#"{"type":"user"}"#).unwrap();
+        fs::write(wf_run.join("agent-da2.jsonl"), r#"{"type":"user"}"#).unwrap();
+    }
+
+    // Project Y: run wf_deep_b — 1 agent, snapshot present
+    {
+        let p = tmp.path().join("projects").join("-Users-qa-deep-y");
+        let wf_run = p
+            .join(uuid_b)
+            .join("subagents")
+            .join("workflows")
+            .join("wf_deep_b");
+        let wf_dir = p.join(uuid_b).join("workflows");
+        fs::create_dir_all(&wf_run).unwrap();
+        fs::create_dir_all(&wf_dir).unwrap();
+        fs::write(p.join(format!("{}.jsonl", uuid_b)), r#"{"type":"user"}"#).unwrap();
+        fs::write(
+            wf_dir.join("wf_deep_b.json"),
+            r#"{"runId":"wf_deep_b","workflowName":"deep-b","status":"running","agentCount":1}"#,
+        )
+        .unwrap();
+        fs::write(wf_run.join("agent-db1.jsonl"), r#"{"type":"user"}"#).unwrap();
+    }
+
+    let runs = scan_workflows(tmp.path()).unwrap();
+    assert_eq!(runs.len(), 2);
+
+    let run_a = runs
+        .iter()
+        .find(|r| r.run_id == "wf_deep_a")
+        .expect("wf_deep_a must be found");
+    let run_b = runs
+        .iter()
+        .find(|r| r.run_id == "wf_deep_b")
+        .expect("wf_deep_b must be found");
+
+    // run_a: 2 agents, snapshot Some, project = "-Users-qa-deep-x"
+    assert_eq!(
+        run_a.agent_files.len(),
+        2,
+        "wf_deep_a must have 2 agent files"
+    );
+    assert!(
+        run_a.snapshot.is_some(),
+        "wf_deep_a must have a parsed snapshot"
+    );
+    assert_eq!(
+        run_a.project.as_deref(),
+        Some("-Users-qa-deep-x"),
+        "wf_deep_a must be attributed to project -Users-qa-deep-x"
+    );
+    assert_eq!(
+        run_a.snapshot.as_ref().unwrap().workflow_name.as_deref(),
+        Some("deep-a")
+    );
+
+    // run_b: 1 agent, snapshot Some, project = "-Users-qa-deep-y"
+    assert_eq!(
+        run_b.agent_files.len(),
+        1,
+        "wf_deep_b must have 1 agent file"
+    );
+    assert!(
+        run_b.snapshot.is_some(),
+        "wf_deep_b must have a parsed snapshot"
+    );
+    assert_eq!(
+        run_b.project.as_deref(),
+        Some("-Users-qa-deep-y"),
+        "wf_deep_b must be attributed to project -Users-qa-deep-y"
+    );
+    assert_eq!(
+        run_b.snapshot.as_ref().unwrap().status.as_deref(),
+        Some("running")
+    );
+}
+
+// ─── P1: build_workflow_summaries — sparse snapshot ──────────────────────────
+
+/// Snapshot contains only `runId` with no workflowName/status/durationMs etc.
+/// build_workflow_summaries must:
+/// - degrade `workflow_name`, `status`, `snapshot_duration_ms`, etc. to None
+/// - still correctly fill `parsed_agent_count`, `parsed_turns`, `parsed_cost`
+///   from the actual agent transcript.
+#[test]
+fn build_workflow_summaries_sparse_snapshot_graceful_degradation() {
+    // Snapshot with only runId (all other declared fields absent)
+    let snap = r#"{"runId":"wf_sparse"}"#;
+    let (tmp, _session_uuid) = setup_workflow_tree_for_summaries("wf_sparse", Some(snap));
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(tmp.path(), &calc).unwrap();
+    let summaries = build_workflow_summaries(&sessions[0], &calc, tmp.path());
+
+    assert_eq!(summaries.len(), 1);
+    let ws = &summaries[0];
+    assert_eq!(ws.run_id, "wf_sparse");
+
+    // All snapshot-declared optional fields must be None
+    assert!(
+        ws.workflow_name.is_none(),
+        "workflow_name must be None when not in snapshot"
+    );
+    assert!(
+        ws.status.is_none(),
+        "status must be None when not in snapshot"
+    );
+    assert!(
+        ws.snapshot_duration_ms.is_none(),
+        "snapshot_duration_ms must be None"
+    );
+    assert!(
+        ws.snapshot_agent_count.is_none(),
+        "snapshot_agent_count must be None"
+    );
+    assert!(
+        ws.snapshot_total_tokens.is_none(),
+        "snapshot_total_tokens must be None"
+    );
+    assert!(
+        ws.phases.is_empty(),
+        "phases must be empty (not in snapshot)"
+    );
+
+    // Parsed stats must still be correctly populated from the agent transcript
+    // (setup_workflow_tree_for_summaries writes 1 agent with 1000 in / 2000 out)
+    assert_eq!(ws.parsed_agent_count, 1, "parsed_agent_count must be 1");
+    assert_eq!(ws.parsed_turns, 1, "parsed_turns must be 1");
+    assert!(
+        ws.parsed_cost > 0.0,
+        "parsed_cost must be > 0 (agent transcript was parsed)"
+    );
+}
+
+// ─── P2: pricing — precise assertions for edge bracket cases ─────────────────
+
+/// "claude-opus-4-8[]" — split_once('[') → ("claude-opus-4-8", "]").
+/// rest = "]", ends_with(']') == true → strip succeeds → base = "claude-opus-4-8".
+/// Exact builtin match → PriceSource::Builtin, base_input == 5.0.
+#[test]
+fn opus_4_8_empty_brackets_strips_to_exact_builtin() {
+    let calc = PricingCalculator::new();
+    let (price, source) = calc
+        .get_price("claude-opus-4-8[]")
+        .expect("must return Some");
+    // rest = "]", ends_with(']') == true → stripped to "claude-opus-4-8"
+    // → exact builtin match
+    assert_eq!(
+        source,
+        PriceSource::Builtin,
+        "claude-opus-4-8[] must resolve to Builtin after stripping '[]'"
+    );
+    assert!(
+        (price.base_input - 5.0).abs() < 1e-9,
+        "claude-opus-4-8[] base_input must be $5.0 (not fallback price)"
+    );
+}
+
+/// "claude-opus-4-8[1m" — split_once('[') → ("claude-opus-4-8", "1m").
+/// rest = "1m", ends_with(']') == false → no strip → model stays "claude-opus-4-8[1m".
+/// Prefix builtin lookup: "claude-opus-4-8[1m".starts_with("claude-opus-4-8") == true
+/// → PriceSource::Builtin, base_input == 5.0.
+#[test]
+fn bracket_no_closing_bracket_hits_prefix_builtin_exactly() {
+    let calc = PricingCalculator::new();
+    let (price, source) = calc
+        .get_price("claude-opus-4-8[1m")
+        .expect("must return Some");
+    // No strip; prefix lookup on "claude-opus-4-8[1m" matches "claude-opus-4-8" prefix
+    assert_eq!(
+        source,
+        PriceSource::Builtin,
+        "claude-opus-4-8[1m must match via prefix builtin lookup"
+    );
+    assert!(
+        (price.base_input - 5.0).abs() < 1e-9,
+        "claude-opus-4-8[1m base_input must be exactly $5.0 via prefix builtin"
+    );
+}
+
+// ─── P2: real-data e2e matrix (#[ignore]) ────────────────────────────────────
+
+/// session --latest × text — no panic, non-empty output.
+#[test]
+#[ignore]
+fn real_e2e_session_latest_text_no_panic() {
+    use cc_token_usage::analysis::session::analyze_session;
+    use cc_token_usage::analysis::session::AgentMeta;
+    use cc_token_usage::output::text::render_session;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    assert!(!sessions.is_empty());
+    let latest = sessions.iter().max_by_key(|s| s.last_timestamp).unwrap();
+    let agent_meta: HashMap<String, AgentMeta> = HashMap::new();
+    let result = analyze_session(latest, &calc, &agent_meta, &claude_home);
+    let text = render_session(&result);
+    assert!(!text.is_empty(), "session text output must be non-empty");
+}
+
+/// session --latest × json — valid JSON.
+#[test]
+#[ignore]
+fn real_e2e_session_latest_json_valid() {
+    use cc_token_usage::analysis::session::analyze_session;
+    use cc_token_usage::analysis::session::AgentMeta;
+    use cc_token_usage::output::json::render_session_json;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    let latest = sessions.iter().max_by_key(|s| s.last_timestamp).unwrap();
+    let agent_meta: HashMap<String, AgentMeta> = HashMap::new();
+    let result = analyze_session(latest, &calc, &agent_meta, &claude_home);
+    let json_str = render_session_json(&result);
+    let _: serde_json::Value =
+        serde_json::from_str(&json_str).expect("session JSON must be valid JSON");
+}
+
+/// project × text — no panic.
+#[test]
+#[ignore]
+fn real_e2e_project_text_no_panic() {
+    use cc_token_usage::analysis::project::analyze_projects;
+    use cc_token_usage::output::text::render_projects;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    let result = analyze_projects(&sessions, &calc, 20);
+    let text = render_projects(&result);
+    assert!(!text.is_empty());
+}
+
+/// project × json — valid JSON.
+#[test]
+#[ignore]
+fn real_e2e_project_json_valid() {
+    use cc_token_usage::analysis::project::analyze_projects;
+    use cc_token_usage::output::json::render_projects_json;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    let result = analyze_projects(&sessions, &calc, 20);
+    let json_str = render_projects_json(&result);
+    let _: serde_json::Value =
+        serde_json::from_str(&json_str).expect("project JSON must be valid JSON");
+}
+
+/// trend × text — no panic.
+#[test]
+#[ignore]
+fn real_e2e_trend_text_no_panic() {
+    use cc_token_usage::analysis::trend::analyze_trend;
+    use cc_token_usage::output::text::render_trend;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    let result = analyze_trend(&sessions, &calc, 7, false);
+    let text = render_trend(&result);
+    assert!(!text.is_empty());
+}
+
+/// trend × json — valid JSON.
+#[test]
+#[ignore]
+fn real_e2e_trend_json_valid() {
+    use cc_token_usage::analysis::trend::analyze_trend;
+    use cc_token_usage::output::json::render_trend_json;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    let result = analyze_trend(&sessions, &calc, 7, false);
+    let json_str = render_trend_json(&result);
+    let _: serde_json::Value =
+        serde_json::from_str(&json_str).expect("trend JSON must be valid JSON");
+}
+
+/// wrapped × text — no panic.
+#[test]
+#[ignore]
+fn real_e2e_wrapped_text_no_panic() {
+    use cc_token_usage::analysis::wrapped::analyze_wrapped;
+    use cc_token_usage::output::text::render_wrapped;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, _) = load_all(&claude_home, &calc).expect("load_all");
+    let result = analyze_wrapped(&sessions, &calc, 2025);
+    let text = render_wrapped(&result);
+    assert!(!text.is_empty());
+}
+
+/// overview × html — contains <html tag and </html>.
+#[test]
+#[ignore]
+fn real_e2e_overview_html_valid() {
+    use cc_token_usage::analysis::overview::analyze_overview;
+    use cc_token_usage::analysis::project::analyze_projects;
+    use cc_token_usage::analysis::trend::analyze_trend;
+    use cc_token_usage::output::html_new::render_vue_dashboard;
+    use cc_token_usage::output::json::render_html_payload;
+
+    let claude_home = match real_claude_home() {
+        Some(h) => h,
+        None => return,
+    };
+    let calc = PricingCalculator::new();
+    let (sessions, quality) = load_all(&claude_home, &calc).expect("load_all");
+    let overview = analyze_overview(&sessions, quality, &calc, None);
+    let projects = analyze_projects(&sessions, &calc, 20);
+    let trend = analyze_trend(&sessions, &calc, 30, false);
+    let json_payload = render_html_payload(
+        &overview,
+        &projects,
+        &trend,
+        &sessions,
+        &calc,
+        None,
+        None,
+        &claude_home,
+    );
+    let html = render_vue_dashboard(&json_payload);
+    assert!(
+        html.contains("<html"),
+        "HTML output must contain opening <html tag"
+    );
+    assert!(
+        html.contains("</html>"),
+        "HTML output must contain closing </html> tag"
+    );
+    assert!(!html.is_empty(), "HTML output must be non-empty");
+}
