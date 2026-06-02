@@ -233,9 +233,12 @@ impl PricingCalculator {
         // Strip any trailing context-window suffix in square brackets, e.g.
         // `claude-opus-4-8[1m]` → `claude-opus-4-8`. This is purely a routing
         // affix appended by Claude Code to mark the active context window; it is
-        // not part of the priced model identity. Without stripping it, the
-        // bracketed name would miss the exact builtin entry and prefix-match an
-        // older generation (e.g. `claude-opus-4`), ~3x over-pricing the turn.
+        // not part of the priced model identity. Stripping makes the name resolve
+        // via the exact builtin entry (`PriceSource::Builtin`) instead of relying
+        // on prefix matching, and is robust to malformed/multiple brackets. (The
+        // longest-prefix lookup below would still land on `claude-opus-4-8` once
+        // that builtin exists; the older ~3x mispricing against `claude-opus-4`
+        // only occurred before the `claude-opus-4-8` entry was added.)
         let model = match model.split_once('[') {
             Some((base, rest)) if rest.ends_with(']') => base,
             _ => model,

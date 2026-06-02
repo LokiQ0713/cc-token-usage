@@ -553,12 +553,21 @@ pub fn validate_all(
         // --- Workflow validation (Claude Code 2.1.159+) ---
         // For every discovered workflow run, reconcile what the pipeline parsed
         // from the run's agent transcripts (the subagents whose workflow_run_id
-        // matches) against the run snapshot. The goal is to prove workflow tokens
-        // are not silently dropped from the pipeline totals.
+        // matches) against the run snapshot.
         //
-        // Two hard checks (must pass):
-        //   1. parsed tokens > 0 — the run's agents were actually parsed and fed
-        //      into the session/overview totals (no silent loss).
+        // IMPORTANT: these are *supplementary reconciliation* checks against
+        // Claude Code's own self-reported snapshot — they are NOT an independent
+        // token re-count and do not by themselves prove "no loss". The genuine
+        // independent no-loss guarantee comes from the pre-existing per-file
+        // `agent_output` (±5%) and cross-file-dedup checks above, which re-count
+        // every agent file from raw JSON via the independent `count_raw_tokens`
+        // path — and those now automatically cover these workflow agent files,
+        // because the scanner records them as ordinary `is_agent` files that the
+        // independent re-scan picks up.
+        //
+        // Two checks flagged on mismatch:
+        //   1. parsed tokens > 0 — the run's agents were parsed and fed into the
+        //      session/overview totals (catches a wholesale drop of the run).
         //   2. parsed agent count == snapshot `agentCount` — every agent the run
         //      declared was found and parsed on disk.
         //
@@ -568,10 +577,7 @@ pub fn validate_all(
         // data it tracks the cache-write/`cache_creation` tokens, not
         // input+output+cache_read), so asserting equality would always fail. We
         // report both so a human can eyeball drift without flagging a false
-        // failure. The real "no loss" guarantee comes from checks 1+2 plus the
-        // existing per-file agent_output / cross-file-dedup checks above, which
-        // already cover these workflow agent files (they are ordinary agent
-        // files in the independent re-scan).
+        // failure.
         let workflow_runs =
             cc_session_jsonl::scanner::scan_session_workflows(&session.session_id, claude_home)
                 .unwrap_or_default();
