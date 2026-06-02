@@ -18,6 +18,7 @@ CLI tool that analyzes your Claude Code session data locally -- token usage, cos
 - **Terminal Reports** -- rich tables via comfy-table, works anywhere
 - **Heatmap** -- GitHub-style terminal activity heatmap (`░▒▓█`)
 - **Wrapped** -- Spotify-style annual summary with developer archetypes
+- **Workflow Support** -- parses Claude Code 2.1.159+ script-orchestrated `agent()` runs and counts their tokens/cost (previously missed entirely)
 - **Project Drill-Down** -- rank projects by cost, filter by name, drill into sessions and turns
 - **Trend Analysis** -- daily/monthly cost trends, month-over-month comparison
 - **Context Collapse Detection** -- identify sessions where context was compacted and assess risk
@@ -175,9 +176,11 @@ Built with Vue 3 + TailwindCSS + Chart.js. Supports dark/light theme toggle and 
 
 Reads `~/.claude/projects/` directly. Parses every JSONL session file, including subagent files (both legacy flat-style and new nested-style). Validates data, deduplicates by `requestId`, attributes orphan agents, detects context compactions.
 
-**Parsing library:** The `cc-session-jsonl` crate handles all JSONL parsing independently -- 23 entry types, 3 file layout formats, forward-compatible with `Unknown` variant. Available as a standalone crate on [crates.io](https://crates.io/crates/cc-session-jsonl).
+**Parsing library:** The `cc-session-jsonl` crate handles all JSONL parsing independently -- 25 entry types, 4 file layout formats (main session, legacy agent, new-style subagent, and workflow agent), forward-compatible with `Unknown` variant. Available as a standalone crate on [crates.io](https://crates.io/crates/cc-session-jsonl).
 
-**Pricing:** Uses official Anthropic rates from [platform.claude.com](https://platform.claude.com/docs/en/about-claude/pricing). Distinguishes 5-minute vs 1-hour cache TTL for accurate cost calculation.
+**Workflow support (Claude Code 2.1.159+):** Script-orchestrated `agent()` runs store each agent's transcript outside the main session JSONL, under `<session-id>/subagents/workflows/wf_<runId>/`. Those tokens were previously missed entirely; they are now discovered, counted into cost totals, and surfaced per run in `session` output and the dashboard. See [docs/workflow-support.md](docs/workflow-support.md).
+
+**Pricing:** Uses official Anthropic rates from [platform.claude.com](https://platform.claude.com/docs/en/about-claude/pricing). Distinguishes 5-minute vs 1-hour cache TTL for accurate cost calculation. Model names with a context-window suffix (e.g. `claude-opus-4-8[1m]`) resolve to the same price as the base model -- `claude-opus-4-8` is priced correctly at the opus-4-6 tier (a prior ~3x overcharge from prefix-matching `claude-opus-4` is fixed).
 
 ## Configuration
 
@@ -220,9 +223,10 @@ cd frontend
 npm install
 npm run dev      # dev server with HMR
 npm run build    # build single-file HTML → dist/index.html
+cp dist/index.html ../crates/cc-token-usage/src/output/template.html
 ```
 
-After building, the Rust binary embeds `frontend/dist/index.html` via `include_str!` -- no separate file needed at runtime.
+After building, copy `dist/index.html` to `crates/cc-token-usage/src/output/template.html`; the Rust binary embeds that committed copy via `include_str!` -- no separate file needed at runtime.
 
 ## Tech Stack
 
