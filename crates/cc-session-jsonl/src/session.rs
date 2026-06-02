@@ -6,7 +6,7 @@ use std::io;
 use std::path::Path;
 
 use crate::parser::SessionReader;
-use crate::scanner::{self, AgentMeta, SessionFile};
+use crate::scanner::{self, AgentMeta, SessionFile, WorkflowRun};
 use crate::types::Entry;
 
 /// A raw session with all its entries and metadata, ready for downstream analysis.
@@ -19,7 +19,15 @@ pub struct RawSession {
     /// All entries from the main session JSONL file.
     pub main_entries: Vec<Entry>,
     /// Agent files associated with this session.
+    ///
+    /// This includes workflow agent files (discovered under
+    /// `subagents/workflows/wf_*/`); those carry a `workflow_run_id` on their
+    /// originating [`SessionFile`], but are aggregated here alongside ordinary
+    /// subagents so their tokens are counted uniformly.
     pub agent_files: Vec<AgentFile>,
+    /// Workflow runs belonging to this session (snapshots, scripts, journals,
+    /// and the locations of per-agent transcripts). Symmetric to `agent_files`.
+    pub workflow_runs: Vec<WorkflowRun>,
     /// Titles extracted from `ai-title` and `custom-title` entries.
     pub titles: Vec<String>,
     /// Tags extracted from `tag` entries.
@@ -82,12 +90,17 @@ fn extract_metadata(entries: &[Entry]) -> (Vec<String>, Vec<String>, Option<Stri
 
 /// Load a single session from its `SessionFile` metadata and associated agent files.
 ///
-/// `agent_session_files` should contain only the agent files that belong to this session.
-/// `agent_meta_map` provides metadata loaded from `.meta.json` sidecar files.
+/// `agent_session_files` should contain only the agent files that belong to this session
+/// (including any workflow agent files, which carry a `workflow_run_id`).
+/// `agent_meta_map` provides metadata loaded from `.meta.json` sidecar files (both ordinary
+/// subagent sidecars and workflow agent sidecars).
+/// `workflow_runs` is the list of workflow runs discovered for this session
+/// (see [`scanner::scan_session_workflows`]).
 pub fn load_session(
     main_file: &SessionFile,
     agent_session_files: &[&SessionFile],
     agent_meta_map: &HashMap<String, AgentMeta>,
+    workflow_runs: Vec<WorkflowRun>,
 ) -> io::Result<RawSession> {
     let main_entries = load_entries(&main_file.path)?;
     let (titles, tags, mode) = extract_metadata(&main_entries);
@@ -109,6 +122,7 @@ pub fn load_session(
         project: main_file.project.clone(),
         main_entries,
         agent_files,
+        workflow_runs,
         titles,
         tags,
         mode,
@@ -140,14 +154,25 @@ pub fn load_all_sessions(claude_home: &Path) -> io::Result<Vec<RawSession>> {
     let mut sessions = Vec::new();
     for main_idx in main_indices {
         let main_file = &files[main_idx];
-        let meta_map = scanner::load_agent_meta(&main_file.session_id, claude_home);
+
+        // Merge ordinary subagent meta with workflow agent meta so that workflow
+        // agent files (which live under subagents/workflows/wf_*/) also resolve
+        // their `.meta.json` sidecars.
+        let mut meta_map = scanner::load_agent_meta(&main_file.session_id, claude_home);
+        meta_map.extend(scanner::load_workflow_agent_meta(
+            &main_file.session_id,
+            claude_home,
+        ));
 
         let agent_refs: Vec<&SessionFile> = agent_map
             .get(&main_file.session_id)
             .map(|indices| indices.iter().map(|&i| &files[i]).collect())
             .unwrap_or_default();
 
-        match load_session(main_file, &agent_refs, &meta_map) {
+        let workflow_runs =
+            scanner::scan_session_workflows(&main_file.session_id, claude_home).unwrap_or_default();
+
+        match load_session(main_file, &agent_refs, &meta_map, workflow_runs) {
             Ok(session) => sessions.push(session),
             Err(_) => continue, // Skip sessions that fail to load
         }

@@ -166,3 +166,61 @@ fn real_data_parse_all_sessions() {
         "Expected to find at least some entries in real data"
     );
 }
+
+/// Real-data check: the known session `ae289b37` ran 3 workflows. Scan its
+/// directory and confirm `scan_session_workflows` discovers all 3 runs with
+/// snapshots, agent transcripts and journals.
+///
+/// Run with:
+/// `cargo test -p cc-session-jsonl --all-features -- --ignored real_data_workflow_runs`
+#[cfg(feature = "scanner")]
+#[test]
+#[ignore]
+fn real_data_workflow_runs() {
+    use cc_session_jsonl::scan_session_workflows;
+
+    let projects_dir = match claude_projects_dir() {
+        Some(p) => p,
+        None => {
+            eprintln!("Skipping real_data_workflow_runs: ~/.claude/projects/ not found");
+            return;
+        }
+    };
+    // claude_home is the parent of `projects`.
+    let claude_home = projects_dir.parent().unwrap();
+
+    let session_id = "ae289b37-f19a-4797-b14c-52b5ada582ed";
+    let runs = scan_session_workflows(session_id, claude_home).unwrap();
+
+    if runs.is_empty() {
+        eprintln!("Skipping real_data_workflow_runs: session {session_id} not present locally");
+        return;
+    }
+
+    eprintln!("\n=== Workflow runs for {session_id} ===");
+    for r in &runs {
+        eprintln!(
+            "  {} — snapshot={} agents={} scripts={} journal={} totalTokens={:?}",
+            r.run_id,
+            r.snapshot.is_some(),
+            r.agent_files.len(),
+            r.script_paths.len(),
+            r.journal_path.is_some(),
+            r.snapshot.as_ref().and_then(|s| s.total_tokens),
+        );
+    }
+    eprintln!("=======================================\n");
+
+    assert_eq!(runs.len(), 3, "expected 3 workflow runs for {session_id}");
+    let run_ids: Vec<&str> = runs.iter().map(|r| r.run_id.as_str()).collect();
+    assert!(run_ids.contains(&"wf_7c0e6255-566"));
+    assert!(run_ids.contains(&"wf_81719e41-156"));
+    assert!(run_ids.contains(&"wf_c210842b-3d9"));
+
+    // Every run should have a parsed snapshot, agent transcripts and a journal.
+    for r in &runs {
+        assert!(r.snapshot.is_some(), "{} snapshot must parse", r.run_id);
+        assert!(!r.agent_files.is_empty(), "{} must have agents", r.run_id);
+        assert!(r.journal_path.is_some(), "{} must have journal", r.run_id);
+    }
+}

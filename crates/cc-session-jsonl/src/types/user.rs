@@ -27,6 +27,15 @@ transcript_entry! {
         pub message: Option<serde_json::Value>,
         pub subtype: Option<String>,
         pub duration_ms: Option<u64>,
+        /// turn_duration / local_command 等子类型携带的文本内容（Claude Code 2.1.159+）
+        pub content: Option<serde_json::Value>,
+        /// 标记 meta 性质的 system entry（如 turn_duration，Claude Code 2.1.159+）
+        pub is_meta: Option<bool>,
+        // ── 仅在 subtype = turn_duration 时出现（Claude Code 2.1.159+）──
+        /// 本 turn 的消息数
+        pub message_count: Option<u64>,
+        /// turn 结束时尚未完成的 workflow 数量
+        pub pending_workflow_count: Option<u64>,
         // ── 仅在 subtype = stop_hook_summary 时出现（Claude Code 2.1.104+）──
         /// 本次 stop hook 触发的钩子总数
         pub hook_count: Option<u64>,
@@ -59,7 +68,22 @@ pub struct HookInfo {
 transcript_entry! {
     /// An attachment entry in a Claude Code session.
     pub struct AttachmentEntry {
+        /// 旧版顶层字段（部分早期版本将内容放在 `message`，保留以兼容）。
         pub message: Option<serde_json::Value>,
+        /// 附件实体（Claude Code 2.1.159+）。真实数据中附件内容位于顶层
+        /// `attachment` 对象内，其子类型由嵌套的 `attachment.type` 标识
+        /// （如 `hook_success`、`skill_listing`、`file`、`task_reminder` 等）。
+        /// 结构因子类型而异，用 `Value` 兜底；可用 [`AttachmentEntry::attachment_subtype`]
+        /// 读取子类型标识。
+        pub attachment: Option<serde_json::Value>,
+    }
+}
+
+impl AttachmentEntry {
+    /// 读取附件子类型标识（嵌套 `attachment.type`），如 `hook_success`、
+    /// `skill_listing`、`file`、`task_reminder`、`queued_command` 等。
+    pub fn attachment_subtype(&self) -> Option<&str> {
+        self.attachment.as_ref()?.get("type")?.as_str()
     }
 }
 
@@ -236,6 +260,168 @@ mod tests {
             }
             other => panic!("Expected Attachment, got: {other:?}"),
         }
+    }
+
+    // ── SystemEntry v2.1.159 subtypes: turn_duration / local_command / away_summary ──
+
+    #[test]
+    fn parse_system_turn_duration() {
+        // Real shape: durationMs + isMeta + messageCount (+ pendingWorkflowCount sometimes).
+        let json = r#"{
+            "type": "system",
+            "subtype": "turn_duration",
+            "uuid": "s-td-001",
+            "sessionId": "sess-td",
+            "durationMs": 131122,
+            "isMeta": false,
+            "messageCount": 18,
+            "pendingWorkflowCount": 2
+        }"#;
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.subtype.as_deref(), Some("turn_duration"));
+        assert_eq!(entry.duration_ms, Some(131122));
+        assert_eq!(entry.is_meta, Some(false));
+        assert_eq!(entry.message_count, Some(18));
+        assert_eq!(entry.pending_workflow_count, Some(2));
+    }
+
+    #[test]
+    fn parse_system_turn_duration_without_pending_workflow_count() {
+        // pendingWorkflowCount is only present on some turns.
+        let json = r#"{
+            "type": "system",
+            "subtype": "turn_duration",
+            "uuid": "s-td-002",
+            "sessionId": "sess-td",
+            "durationMs": 500,
+            "isMeta": false,
+            "messageCount": 4
+        }"#;
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.message_count, Some(4));
+        assert!(entry.pending_workflow_count.is_none());
+    }
+
+    #[test]
+    fn parse_system_local_command() {
+        // Real shape: content (string) + level "info".
+        let json = r#"{
+            "type": "system",
+            "subtype": "local_command",
+            "uuid": "s-lc-001",
+            "sessionId": "sess-lc",
+            "content": "<command-name>/workflows</command-name>\n            <command-message>workflows</command-message>\n            <command-args></command-args>",
+            "level": "info",
+            "isMeta": false
+        }"#;
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.subtype.as_deref(), Some("local_command"));
+        assert_eq!(entry.level.as_deref(), Some("info"));
+        assert_eq!(entry.is_meta, Some(false));
+        let content = entry.content.as_ref().expect("content must be Some");
+        assert!(content.is_string());
+        assert!(content.as_str().unwrap().contains("/workflows"));
+    }
+
+    #[test]
+    fn parse_system_away_summary() {
+        // Real shape: content (string), no level.
+        let json = r#"{
+            "type": "system",
+            "subtype": "away_summary",
+            "uuid": "s-as-001",
+            "sessionId": "sess-as",
+            "content": "你想在 Claude Code 监控里感知 API 错误。已确认有 StopFailure hook。",
+            "isMeta": false
+        }"#;
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.subtype.as_deref(), Some("away_summary"));
+        let content = entry.content.as_ref().expect("content must be Some");
+        assert!(content.is_string());
+        assert!(content.as_str().unwrap().contains("StopFailure"));
+        // away_summary carries no level in real data
+        assert!(entry.level.is_none());
+    }
+
+    // ── AttachmentEntry: nested `attachment` object + subtype helper ──
+
+    #[test]
+    fn parse_attachment_hook_success_top_level_field() {
+        // Real v2.1.159 data: attachment content is in the top-level `attachment`
+        // object, NOT `message`. The subtype lives at `attachment.type`.
+        let json = r#"{
+            "type": "attachment",
+            "uuid": "att-hs-001",
+            "sessionId": "sess-att",
+            "attachment": {
+                "type": "hook_success",
+                "command": "bash hook.sh",
+                "hookEvent": "PostToolUse",
+                "hookName": "emit-event",
+                "exitCode": 0,
+                "durationMs": 20,
+                "stdout": "ok",
+                "stderr": "",
+                "content": "done",
+                "toolUseID": "toolu_01"
+            }
+        }"#;
+        let entry: AttachmentEntry = serde_json::from_str(json).unwrap();
+        assert!(
+            entry.message.is_none(),
+            "real data uses `attachment`, not `message`"
+        );
+        assert!(entry.attachment.is_some());
+        assert_eq!(entry.attachment_subtype(), Some("hook_success"));
+        // nested fields preserved
+        let att = entry.attachment.as_ref().unwrap();
+        assert_eq!(att["exitCode"], 0);
+        assert_eq!(att["hookEvent"], "PostToolUse");
+    }
+
+    #[test]
+    fn parse_attachment_skill_listing_subtype() {
+        let json = r#"{
+            "type": "attachment",
+            "uuid": "att-sl-001",
+            "sessionId": "sess-att",
+            "attachment": {
+                "type": "skill_listing",
+                "isInitial": true,
+                "skillCount": 3,
+                "names": ["a", "b", "c"],
+                "content": "skills"
+            }
+        }"#;
+        let entry: AttachmentEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.attachment_subtype(), Some("skill_listing"));
+        assert_eq!(entry.attachment.as_ref().unwrap()["skillCount"], 3);
+    }
+
+    #[test]
+    fn attachment_subtype_none_when_no_attachment() {
+        // Legacy / empty attachment entries → helper returns None, no panic.
+        let json = r#"{"type":"attachment","uuid":"att-empty","sessionId":"s"}"#;
+        let entry: AttachmentEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.attachment.is_none());
+        assert!(entry.attachment_subtype().is_none());
+    }
+
+    #[test]
+    fn parse_system_legacy_no_subtype_meta_fields() {
+        // A pre-2.1.159 system entry must parse with the new fields all None.
+        let json = r#"{
+            "type": "system",
+            "uuid": "s-legacy-159",
+            "sessionId": "sess-legacy",
+            "subtype": "tool_result",
+            "message": {"role": "system", "content": "done"}
+        }"#;
+        let entry: SystemEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.content.is_none());
+        assert!(entry.is_meta.is_none());
+        assert!(entry.message_count.is_none());
+        assert!(entry.pending_workflow_count.is_none());
     }
 
     // ── Layer A: Round-trip value assertions for v2.1 new fields ──

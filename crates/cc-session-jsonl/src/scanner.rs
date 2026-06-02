@@ -8,6 +8,8 @@ use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+use crate::types::WorkflowRunSnapshot;
+
 /// Metadata about a session JSONL file on disk.
 #[derive(Debug, Clone)]
 pub struct SessionFile {
@@ -21,6 +23,10 @@ pub struct SessionFile {
     pub is_agent: bool,
     /// The parent session ID for agent files.
     pub parent_session_id: Option<String>,
+    /// The workflow run id (`wf_<runId>`) this agent file belongs to, if it was
+    /// discovered under `<uuid>/subagents/workflows/wf_<runId>/`. `None` for
+    /// ordinary (non-workflow) session and agent files.
+    pub workflow_run_id: Option<String>,
 }
 
 /// Metadata about a sub-agent, loaded from `.meta.json` sidecar files.
@@ -33,6 +39,48 @@ pub struct AgentMeta {
     pub description: Option<String>,
     /// The worktree path associated with this agent, if any.
     pub worktree_path: Option<String>,
+}
+
+/// A single agent transcript belonging to a workflow run.
+///
+/// The transcript itself (`path`) is a plain session JSONL file and should be
+/// parsed via the regular [`crate::parser::SessionReader`] / [`crate::types::Entry`]
+/// path. `agent_id` carries no `agent-` prefix (it is stripped from the file stem,
+/// matching the rest of the scanner).
+#[derive(Debug, Clone)]
+pub struct WorkflowAgentFile {
+    /// The agent id, with the `agent-` prefix stripped (e.g. `a4df3aac3c00e0e09`).
+    pub agent_id: String,
+    /// Full path to the agent's `.jsonl` transcript.
+    pub path: PathBuf,
+    /// Full path to the agent's `.meta.json` sidecar, if it exists.
+    pub meta_path: Option<PathBuf>,
+}
+
+/// A discovered workflow run, located under a session directory.
+///
+/// Combines the run snapshot (`workflows/wf_<runId>.json`), script source files
+/// (`workflows/scripts/*-wf_<runId>.js`), the per-agent transcripts
+/// (`subagents/workflows/wf_<runId>/agent-*.jsonl`) and the journal
+/// (`subagents/workflows/wf_<runId>/journal.jsonl`).
+#[derive(Debug, Clone)]
+pub struct WorkflowRun {
+    /// The workflow run id, e.g. `wf_7c0e6255-566`.
+    pub run_id: String,
+    /// The owning session UUID.
+    pub session_id: String,
+    /// The project directory name (e.g. `-Users-loki-myproject`).
+    pub project: Option<String>,
+    /// The parsed run snapshot, if `workflows/wf_<runId>.json` existed and parsed.
+    pub snapshot: Option<WorkflowRunSnapshot>,
+    /// Path to the `workflows/wf_<runId>.json` snapshot file, if present.
+    pub snapshot_path: Option<PathBuf>,
+    /// Paths to the workflow's script source files (`workflows/scripts/*-wf_<runId>.js`).
+    pub script_paths: Vec<PathBuf>,
+    /// The agent transcripts produced by this run.
+    pub agent_files: Vec<WorkflowAgentFile>,
+    /// Path to the run's `journal.jsonl`, if present.
+    pub journal_path: Option<PathBuf>,
 }
 
 /// Check if a string looks like a UUID (8-4-4-4-12 hex pattern).
@@ -94,6 +142,7 @@ pub fn scan_sessions(claude_home: &Path) -> io::Result<Vec<SessionFile>> {
                         path: entry_path,
                         is_agent: false,
                         parent_session_id: None,
+                        workflow_run_id: None,
                     });
                 } else if stem.starts_with("agent-") {
                     // Type 2: Legacy agent — <project>/agent-<id>.jsonl
@@ -103,6 +152,7 @@ pub fn scan_sessions(claude_home: &Path) -> io::Result<Vec<SessionFile>> {
                         path: entry_path,
                         is_agent: true,
                         parent_session_id: None,
+                        workflow_run_id: None,
                     });
                 }
             } else if entry_path.is_dir() {
@@ -136,8 +186,25 @@ pub fn scan_sessions(claude_home: &Path) -> io::Result<Vec<SessionFile>> {
                                     path: sub_path,
                                     is_agent: true,
                                     parent_session_id: Some(parent_uuid.clone()),
+                                    workflow_run_id: None,
                                 });
                             }
+                        }
+
+                        // Type 4: Workflow agents — <uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl
+                        // These live one directory deeper than ordinary new-style
+                        // agents and carry a workflow_run_id. They reuse the existing
+                        // agent归集 channel (is_agent + parent_session_id) so their
+                        // tokens are counted, but the workflow_run_id keeps them
+                        // distinguishable from ordinary subagents.
+                        let wf_root = subagents_dir.join("workflows");
+                        if wf_root.is_dir() {
+                            collect_workflow_agent_files(
+                                &wf_root,
+                                &parent_uuid,
+                                &project_name,
+                                &mut results,
+                            )?;
                         }
                     }
                 }
@@ -146,6 +213,56 @@ pub fn scan_sessions(claude_home: &Path) -> io::Result<Vec<SessionFile>> {
     }
 
     Ok(results)
+}
+
+/// Walk `<uuid>/subagents/workflows/` and push every
+/// `wf_<runId>/agent-*.jsonl` transcript into `results` as a workflow agent file.
+///
+/// Each discovered file is recorded as `is_agent = true`,
+/// `parent_session_id = Some(<uuid>)` and `workflow_run_id = Some("wf_<runId>")`,
+/// so it flows through the ordinary agent grouping while staying distinguishable.
+fn collect_workflow_agent_files(
+    wf_root: &Path,
+    parent_uuid: &str,
+    project_name: &str,
+    results: &mut Vec<SessionFile>,
+) -> io::Result<()> {
+    let run_dirs = fs::read_dir(wf_root)?;
+    for run_dir in run_dirs {
+        let run_dir = run_dir?;
+        let run_path = run_dir.path();
+        if !run_path.is_dir() {
+            continue;
+        }
+        let run_id = run_dir.file_name().to_string_lossy().into_owned();
+        if !run_id.starts_with("wf_") {
+            continue;
+        }
+
+        let agent_entries = fs::read_dir(&run_path)?;
+        for agent_entry in agent_entries {
+            let agent_entry = agent_entry?;
+            let agent_path = agent_entry.path();
+            let agent_name = agent_entry.file_name().to_string_lossy().into_owned();
+
+            if !agent_path.is_file() || !agent_name.ends_with(".jsonl") {
+                continue;
+            }
+
+            let agent_stem = agent_name.trim_end_matches(".jsonl");
+            if agent_stem.starts_with("agent-") {
+                results.push(SessionFile {
+                    session_id: agent_stem.to_string(),
+                    project: Some(project_name.to_string()),
+                    path: agent_path,
+                    is_agent: true,
+                    parent_session_id: Some(parent_uuid.to_string()),
+                    workflow_run_id: Some(run_id.clone()),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// For legacy agent files that have no `parent_session_id` yet, read the first
@@ -212,6 +329,272 @@ pub fn load_agent_meta(session_id: &str, claude_home: &Path) -> HashMap<String, 
             if let Ok(content) = fs::read_to_string(sub_entry.path()) {
                 if let Ok(meta) = serde_json::from_str::<AgentMeta>(&content) {
                     result.insert(agent_id.to_string(), meta);
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Build a [`WorkflowRun`] for `run_id` under `session_dir` by scanning its
+/// snapshot, scripts, agent transcripts and journal. Returns `None` only if the
+/// run has no discoverable files at all (neither a snapshot nor agent transcripts).
+fn build_workflow_run(
+    session_dir: &Path,
+    session_id: &str,
+    project: Option<&str>,
+    run_id: &str,
+) -> Option<WorkflowRun> {
+    // Snapshot: workflows/wf_<runId>.json
+    let snapshot_path = session_dir.join("workflows").join(format!("{run_id}.json"));
+    let (snapshot, snapshot_path) = if snapshot_path.is_file() {
+        let snap = fs::read_to_string(&snapshot_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<WorkflowRunSnapshot>(&c).ok());
+        (snap, Some(snapshot_path))
+    } else {
+        (None, None)
+    };
+
+    // Scripts: workflows/scripts/*-wf_<runId>.js (suffix match on the run id).
+    let mut script_paths = Vec::new();
+    let scripts_dir = session_dir.join("workflows").join("scripts");
+    if let Ok(script_entries) = fs::read_dir(&scripts_dir) {
+        for script_entry in script_entries.flatten() {
+            let script_path = script_entry.path();
+            if !script_path.is_file() {
+                continue;
+            }
+            let name = script_entry.file_name().to_string_lossy().into_owned();
+            // File names look like `<workflow-name>-wf_<runId>.js`.
+            if name.ends_with(".js") && name.trim_end_matches(".js").ends_with(run_id) {
+                script_paths.push(script_path);
+            }
+        }
+    }
+    script_paths.sort();
+
+    // Agent transcripts + journal: subagents/workflows/wf_<runId>/
+    let run_dir = session_dir.join("subagents").join("workflows").join(run_id);
+    let mut agent_files = Vec::new();
+    let mut journal_path = None;
+    if let Ok(run_entries) = fs::read_dir(&run_dir) {
+        for run_entry in run_entries.flatten() {
+            let path = run_entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = run_entry.file_name().to_string_lossy().into_owned();
+            if name == "journal.jsonl" {
+                journal_path = Some(path);
+            } else if name.ends_with(".jsonl") && name.starts_with("agent-") {
+                let agent_id = name.trim_end_matches(".jsonl").trim_start_matches("agent-");
+                let meta_path = run_dir.join(format!("agent-{agent_id}.meta.json"));
+                let meta_path = if meta_path.is_file() {
+                    Some(meta_path)
+                } else {
+                    None
+                };
+                agent_files.push(WorkflowAgentFile {
+                    agent_id: agent_id.to_string(),
+                    path,
+                    meta_path,
+                });
+            }
+        }
+    }
+    agent_files.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+
+    if snapshot_path.is_none() && agent_files.is_empty() {
+        return None;
+    }
+
+    Some(WorkflowRun {
+        run_id: run_id.to_string(),
+        session_id: session_id.to_string(),
+        project: project.map(|p| p.to_string()),
+        snapshot,
+        snapshot_path,
+        script_paths,
+        agent_files,
+        journal_path,
+    })
+}
+
+/// Discover the set of workflow run ids present under a session directory by
+/// looking at both `workflows/wf_*.json` and `subagents/workflows/wf_*/`.
+fn discover_run_ids(session_dir: &Path) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut ids: BTreeSet<String> = BTreeSet::new();
+
+    // From workflows/wf_*.json
+    if let Ok(entries) = fs::read_dir(session_dir.join("workflows")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(stem) = name.strip_suffix(".json") {
+                if stem.starts_with("wf_") {
+                    ids.insert(stem.to_string());
+                }
+            }
+        }
+    }
+
+    // From subagents/workflows/wf_*/
+    if let Ok(entries) = fs::read_dir(session_dir.join("subagents").join("workflows")) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("wf_") {
+                ids.insert(name);
+            }
+        }
+    }
+
+    ids.into_iter().collect()
+}
+
+/// Discover all workflow runs belonging to a single session.
+///
+/// Searches every project directory for `<session_id>/` and resolves the
+/// workflow snapshots (`workflows/wf_*.json`), script sources, agent transcripts
+/// and journals beneath it. Returns one [`WorkflowRun`] per discovered run id.
+pub fn scan_session_workflows(
+    session_id: &str,
+    claude_home: &Path,
+) -> io::Result<Vec<WorkflowRun>> {
+    let projects_dir = claude_home.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut runs = Vec::new();
+    for project_entry in fs::read_dir(&projects_dir)?.flatten() {
+        let project_path = project_entry.path();
+        if !project_path.is_dir() {
+            continue;
+        }
+        let session_dir = project_path.join(session_id);
+        if !session_dir.is_dir() {
+            continue;
+        }
+        let project_name = project_entry.file_name().to_string_lossy().into_owned();
+
+        for run_id in discover_run_ids(&session_dir) {
+            if let Some(run) =
+                build_workflow_run(&session_dir, session_id, Some(&project_name), &run_id)
+            {
+                runs.push(run);
+            }
+        }
+    }
+
+    Ok(runs)
+}
+
+/// Discover all workflow runs across every session in a Claude home directory.
+///
+/// Scans `<claude_home>/projects/<project>/<uuid>/` directories, resolving each
+/// session's workflow runs the same way as [`scan_session_workflows`].
+pub fn scan_workflows(claude_home: &Path) -> io::Result<Vec<WorkflowRun>> {
+    let projects_dir = claude_home.join("projects");
+    if !projects_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut runs = Vec::new();
+    for project_entry in fs::read_dir(&projects_dir)?.flatten() {
+        let project_path = project_entry.path();
+        if !project_path.is_dir() {
+            continue;
+        }
+        let project_name = project_entry.file_name().to_string_lossy().into_owned();
+
+        for session_entry in fs::read_dir(&project_path)?.flatten() {
+            let session_path = session_entry.path();
+            if !session_path.is_dir() {
+                continue;
+            }
+            let session_id = session_entry.file_name().to_string_lossy().into_owned();
+            if !is_uuid(&session_id) {
+                continue;
+            }
+
+            for run_id in discover_run_ids(&session_path) {
+                if let Some(run) =
+                    build_workflow_run(&session_path, &session_id, Some(&project_name), &run_id)
+                {
+                    runs.push(run);
+                }
+            }
+        }
+    }
+
+    Ok(runs)
+}
+
+/// Load agent metadata for a session's workflow agents from their `.meta.json`
+/// sidecars under `<session_id>/subagents/workflows/wf_*/agent-*.meta.json`.
+///
+/// Returns a map of agent id (the `agent-` prefix stripped) to [`AgentMeta`].
+/// This complements [`load_agent_meta`], which only reads the non-workflow
+/// `subagents/agent-*.meta.json` sidecars.
+pub fn load_workflow_agent_meta(
+    session_id: &str,
+    claude_home: &Path,
+) -> HashMap<String, AgentMeta> {
+    let mut result = HashMap::new();
+    let projects_dir = claude_home.join("projects");
+    if !projects_dir.exists() {
+        return result;
+    }
+
+    let entries = match fs::read_dir(&projects_dir) {
+        Ok(e) => e,
+        Err(_) => return result,
+    };
+
+    for entry in entries.flatten() {
+        let wf_root = entry
+            .path()
+            .join(session_id)
+            .join("subagents")
+            .join("workflows");
+        if !wf_root.is_dir() {
+            continue;
+        }
+
+        let run_dirs = match fs::read_dir(&wf_root) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for run_dir in run_dirs.flatten() {
+            if !run_dir.path().is_dir() {
+                continue;
+            }
+            let meta_entries = match fs::read_dir(run_dir.path()) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for meta_entry in meta_entries.flatten() {
+                let name = meta_entry.file_name().to_string_lossy().to_string();
+                if !name.ends_with(".meta.json") {
+                    continue;
+                }
+                let agent_id = name
+                    .trim_start_matches("agent-")
+                    .trim_end_matches(".meta.json");
+                if let Ok(content) = fs::read_to_string(meta_entry.path()) {
+                    if let Ok(meta) = serde_json::from_str::<AgentMeta>(&content) {
+                        result.insert(agent_id.to_string(), meta);
+                    }
                 }
             }
         }

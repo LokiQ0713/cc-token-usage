@@ -4,6 +4,7 @@ pub mod metadata;
 pub mod progress;
 pub mod tracking;
 pub mod user;
+pub mod workflow;
 
 pub use assistant::*;
 pub use context::*;
@@ -11,6 +12,7 @@ pub use metadata::*;
 pub use progress::*;
 pub use tracking::*;
 pub use user::*;
+pub use workflow::*;
 
 use serde::{Deserialize, Serialize};
 

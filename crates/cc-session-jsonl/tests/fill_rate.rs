@@ -115,6 +115,37 @@ where
     (parsed_count, top_level_grep)
 }
 
+fn count_attachment_field<F>(fixture: &str, grep_key: &str, field_predicate: F) -> (usize, usize)
+where
+    F: Fn(&cc_session_jsonl::types::AttachmentEntry) -> bool,
+{
+    let top_level_grep = fixture
+        .lines()
+        .filter(|l| !l.trim().is_empty() && l.contains(grep_key))
+        .filter(|l| {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(l) {
+                if let Some(obj) = v.as_object() {
+                    obj.get("type").and_then(|t| t.as_str()) == Some("attachment")
+                        && obj.contains_key(grep_key.trim_matches('"'))
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        })
+        .count();
+
+    let parsed_count = fixture
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
+        .filter(|e| matches!(e, Entry::Attachment(a) if field_predicate(a)))
+        .count();
+
+    (parsed_count, top_level_grep)
+}
+
 // ── Layer B: v2.1.140 new-field parity tests ──
 
 const FIXTURE_NEW: &str = include_str!("fixtures/real_v2_1_140.jsonl");
@@ -353,6 +384,82 @@ fn fill_rate_hook_errors_if_present() {
             top_level_grep, parsed
         );
     }
+}
+
+// ── v2.1.159 SystemEntry / AttachmentEntry fields ──
+
+#[test]
+fn fill_rate_message_count() {
+    // turn_duration system entries carry messageCount. Renamed field
+    // (message_count → messageCount); parity guards the rename spelling.
+    let (parsed, top_level) =
+        count_system_field(FIXTURE_NEW, "messageCount", |s| s.message_count.is_some());
+    assert_eq!(
+        top_level, parsed,
+        "messageCount fill-rate mismatch: JSONL has {} top-level occurrences in system entries, \
+         parser produced {} Some values",
+        top_level, parsed
+    );
+    assert!(
+        parsed > 0,
+        "fixture must contain at least one messageCount in a system entry"
+    );
+}
+
+#[test]
+fn fill_rate_attachment_top_level_field() {
+    // Critical: in v2.1.159+ every attachment entry carries its content under the
+    // top-level `attachment` object (NOT `message`). If the field is named wrong,
+    // all attachment content is silently dropped. Parity must hold and be > 0.
+    let (parsed, top_level) =
+        count_attachment_field(FIXTURE_NEW, "attachment", |a| a.attachment.is_some());
+    assert_eq!(
+        top_level, parsed,
+        "attachment fill-rate mismatch: JSONL has {} top-level occurrences in attachment \
+         entries, parser produced {} Some values. \
+         Check the AttachmentEntry `attachment` field name.",
+        top_level, parsed
+    );
+    assert!(
+        parsed > 0,
+        "fixture must contain at least one attachment entry with a top-level `attachment` object"
+    );
+}
+
+#[test]
+fn fill_rate_attachment_subtype_resolves() {
+    // The nested `attachment.type` subtype must be readable via the helper for
+    // every attachment entry that has an `attachment` object.
+    let with_subtype = FIXTURE_NEW
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
+        .filter(|e| matches!(e, Entry::Attachment(a) if a.attachment_subtype().is_some()))
+        .count();
+
+    let grep_subtype = FIXTURE_NEW
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| {
+            v.get("type").and_then(|t| t.as_str()) == Some("attachment")
+                && v.get("attachment")
+                    .and_then(|a| a.get("type"))
+                    .and_then(|t| t.as_str())
+                    .is_some()
+        })
+        .count();
+
+    assert_eq!(
+        grep_subtype, with_subtype,
+        "attachment subtype resolution mismatch: {} JSONL entries have attachment.type, \
+         helper resolved {}",
+        grep_subtype, with_subtype
+    );
+    assert!(
+        with_subtype > 0,
+        "fixture must contain at least one attachment with a nested subtype"
+    );
 }
 
 // ── Layer B: Legacy fixture — new fields must all be absent ──

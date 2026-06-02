@@ -320,4 +320,235 @@ GARBAGE LINE HERE
         assert_eq!(sessions[0].main_entries.len(), 3);
         assert_eq!(sessions[0].titles, vec!["Test"]);
     }
+
+    // ── Workflow discovery tests ──
+
+    use cc_session_jsonl::{scan_session_workflows, scan_sessions, scan_workflows};
+
+    /// Build a session directory tree containing one main session, one ordinary
+    /// new-style subagent, and one workflow run (snapshot + script + two workflow
+    /// agents + journal + meta sidecars). Returns the TempDir and the session UUID.
+    fn setup_workflow_tree() -> (TempDir, String) {
+        let tmp = setup_claude_home();
+        let project_dir = tmp.path().join("projects").join("-Users-tester-wfproj");
+        fs::create_dir_all(&project_dir).unwrap();
+        let session_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string();
+
+        // Main session file
+        fs::write(
+            project_dir.join(format!("{session_id}.jsonl")),
+            format!(r#"{{"type":"user","uuid":"u1","sessionId":"{session_id}","message":{{"role":"user","content":"go"}}}}"#),
+        )
+        .unwrap();
+
+        // Ordinary new-style subagent: <uuid>/subagents/agent-*.jsonl
+        let subagents_dir = project_dir.join(&session_id).join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        fs::write(
+            subagents_dir.join("agent-ordinary001.jsonl"),
+            r#"{"type":"user","uuid":"oa1","sessionId":"sub","message":{"role":"user","content":"x"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            subagents_dir.join("agent-ordinary001.meta.json"),
+            r#"{"agentType":"ordinary"}"#,
+        )
+        .unwrap();
+
+        // Workflow snapshot: <uuid>/workflows/wf_x.json
+        let workflows_dir = project_dir.join(&session_id).join("workflows");
+        fs::create_dir_all(&workflows_dir).unwrap();
+        fs::write(
+            workflows_dir.join("wf_x.json"),
+            r#"{
+                "runId": "wf_x",
+                "workflowName": "demo-workflow",
+                "status": "completed",
+                "agentCount": 2,
+                "totalTokens": 12345,
+                "totalToolCalls": 7,
+                "phases": [{"title": "phase one", "detail": "first"}],
+                "workflowProgress": [{"type":"workflow_phase","index":1,"title":"phase one"}]
+            }"#,
+        )
+        .unwrap();
+
+        // Workflow script: <uuid>/workflows/scripts/demo-workflow-wf_x.js
+        let scripts_dir = workflows_dir.join("scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+        fs::write(
+            scripts_dir.join("demo-workflow-wf_x.js"),
+            "export const meta = { name: 'demo-workflow' }",
+        )
+        .unwrap();
+
+        // Workflow agents + journal: <uuid>/subagents/workflows/wf_x/
+        let wf_run_dir = subagents_dir.join("workflows").join("wf_x");
+        fs::create_dir_all(&wf_run_dir).unwrap();
+        fs::write(
+            wf_run_dir.join("agent-wfa001.jsonl"),
+            r#"{"type":"user","uuid":"wa1","sessionId":"sub","message":{"role":"user","content":"a"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            wf_run_dir.join("agent-wfa001.meta.json"),
+            r#"{"agentType":"demo:worker"}"#,
+        )
+        .unwrap();
+        fs::write(
+            wf_run_dir.join("agent-wfa002.jsonl"),
+            r#"{"type":"user","uuid":"wa2","sessionId":"sub","message":{"role":"user","content":"b"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            wf_run_dir.join("agent-wfa002.meta.json"),
+            r#"{"agentType":"demo:worker"}"#,
+        )
+        .unwrap();
+        fs::write(
+            wf_run_dir.join("journal.jsonl"),
+            "{\"type\":\"started\",\"key\":\"v2:abc\",\"agentId\":\"wfa001\"}\n{\"type\":\"result\",\"key\":\"v2:abc\",\"agentId\":\"wfa001\",\"result\":\"done\"}",
+        )
+        .unwrap();
+
+        (tmp, session_id)
+    }
+
+    #[test]
+    fn scan_discovers_workflow_agents_with_run_id() {
+        let (tmp, session_id) = setup_workflow_tree();
+        let files = scan_sessions(tmp.path()).unwrap();
+
+        // main + ordinary subagent + 2 workflow agents = 4
+        assert_eq!(files.len(), 4, "expected 4 session files, got: {files:?}");
+
+        // Ordinary subagent: parent set, no workflow_run_id
+        let ordinary = files
+            .iter()
+            .find(|f| f.session_id == "agent-ordinary001")
+            .expect("ordinary subagent must be found");
+        assert!(ordinary.is_agent);
+        assert_eq!(
+            ordinary.parent_session_id.as_deref(),
+            Some(session_id.as_str())
+        );
+        assert!(
+            ordinary.workflow_run_id.is_none(),
+            "ordinary subagent must not carry a workflow_run_id"
+        );
+
+        // Workflow agents: parent set AND workflow_run_id = Some("wf_x")
+        let wf_agents: Vec<_> = files
+            .iter()
+            .filter(|f| f.workflow_run_id.as_deref() == Some("wf_x"))
+            .collect();
+        assert_eq!(wf_agents.len(), 2, "expected 2 workflow agent files");
+        for wf in &wf_agents {
+            assert!(wf.is_agent);
+            assert_eq!(wf.parent_session_id.as_deref(), Some(session_id.as_str()));
+            assert!(wf.session_id.starts_with("agent-wfa"));
+        }
+    }
+
+    #[test]
+    fn scan_session_workflows_resolves_run() {
+        let (tmp, session_id) = setup_workflow_tree();
+        let runs = scan_session_workflows(&session_id, tmp.path()).unwrap();
+        assert_eq!(runs.len(), 1, "expected 1 workflow run");
+
+        let run = &runs[0];
+        assert_eq!(run.run_id, "wf_x");
+        assert_eq!(run.session_id, session_id);
+        assert_eq!(run.project.as_deref(), Some("-Users-tester-wfproj"));
+        assert!(run.snapshot_path.is_some());
+        assert_eq!(run.script_paths.len(), 1);
+        assert!(run.journal_path.is_some());
+        assert_eq!(run.agent_files.len(), 2);
+
+        // agent_files carry meta_path and stripped agent ids
+        let ids: Vec<&str> = run
+            .agent_files
+            .iter()
+            .map(|a| a.agent_id.as_str())
+            .collect();
+        assert!(ids.contains(&"wfa001") && ids.contains(&"wfa002"));
+        assert!(run.agent_files.iter().all(|a| a.meta_path.is_some()));
+
+        // Snapshot key fields parse
+        let snap = run.snapshot.as_ref().expect("snapshot must parse");
+        assert_eq!(snap.workflow_name.as_deref(), Some("demo-workflow"));
+        assert_eq!(snap.total_tokens, Some(12345));
+        assert_eq!(snap.agent_count, Some(2));
+        let phases = snap.phases.as_ref().expect("phases present");
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0].title.as_deref(), Some("phase one"));
+    }
+
+    #[test]
+    fn scan_workflows_finds_run_across_home() {
+        let (tmp, session_id) = setup_workflow_tree();
+        let runs = scan_workflows(tmp.path()).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, "wf_x");
+        assert_eq!(runs[0].session_id, session_id);
+    }
+
+    #[test]
+    fn load_all_sessions_includes_workflow_runs_and_agents() {
+        let (tmp, _session_id) = setup_workflow_tree();
+        let sessions = load_all_sessions(tmp.path()).unwrap();
+        assert_eq!(sessions.len(), 1);
+
+        let session = &sessions[0];
+        // Workflow runs populated on RawSession
+        assert_eq!(session.workflow_runs.len(), 1);
+        assert_eq!(session.workflow_runs[0].run_id, "wf_x");
+
+        // Agent files include the ordinary subagent + 2 workflow agents = 3
+        assert_eq!(session.agent_files.len(), 3);
+        // Workflow agent meta was merged in (agentType "demo:worker")
+        let worker_metas = session
+            .agent_files
+            .iter()
+            .filter(|a| {
+                a.meta.as_ref().and_then(|m| m.agent_type.as_deref()) == Some("demo:worker")
+            })
+            .count();
+        assert_eq!(
+            worker_metas, 2,
+            "both workflow agents must resolve their meta"
+        );
+    }
+
+    #[test]
+    fn existing_three_layouts_do_not_regress_with_workflow_scanner() {
+        // Re-assert the classic 3-layout scan still finds exactly main + legacy +
+        // new-style agent, unaffected by the new workflow branch.
+        let tmp = setup_claude_home();
+        let project_dir = tmp.path().join("projects").join("-Users-tester-classic");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let main_uuid = "b1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        fs::write(
+            project_dir.join(format!("{main_uuid}.jsonl")),
+            format!(r#"{{"type":"user","sessionId":"{main_uuid}"}}"#),
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("agent-legacy01.jsonl"),
+            r#"{"type":"user","sessionId":"parent-x"}"#,
+        )
+        .unwrap();
+        let subagents_dir = project_dir.join(main_uuid).join("subagents");
+        fs::create_dir_all(&subagents_dir).unwrap();
+        fs::write(
+            subagents_dir.join("agent-newstyle01.jsonl"),
+            r#"{"type":"user","sessionId":"sub"}"#,
+        )
+        .unwrap();
+
+        let files = scan_sessions(tmp.path()).unwrap();
+        assert_eq!(files.len(), 3);
+        assert!(files.iter().all(|f| f.workflow_run_id.is_none()));
+    }
 }
