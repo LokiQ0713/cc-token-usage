@@ -132,6 +132,8 @@ export interface SessionDetail {
   hooks?: HookUsage[]
   // Phase 3: per-agentType rollup of `subagents[]`. Chips render this.
   subagentTypes?: SubagentTypeAggregate[]
+  // Script-orchestrated workflow runs (always emitted by backend, may be empty).
+  workflows?: WorkflowSummary[]
   // True when the parent main session jsonl was deleted but subagent files
   // remain on disk. Totals still include the session.
   isOrphan?: boolean
@@ -164,6 +166,9 @@ export interface HtmlSessionSummary {
   hooks?: HookUsage[]
   // Phase 3: per-agentType rollup of `subagents[]`. Chips render this.
   subagentTypes?: SubagentTypeAggregate[]
+  // Script-orchestrated workflow runs. Backend always emits this array (may be
+  // empty); empty / missing → frontend renders no workflows block.
+  workflows?: WorkflowSummary[]
   // True when the parent main session jsonl was deleted but subagent files
   // remain on disk. Totals still include the session.
   isOrphan?: boolean
@@ -230,6 +235,34 @@ export interface HookUsage {
   totalDurationMs: number
   errorCount: number
   preventedContinuationCount: number
+}
+
+// ─── Workflow drill-down (script-orchestrated agent runs) ───────────────────
+//
+// Mirrors the backend `WorkflowSummary` / phases shape (camelCase). A workflow
+// is a script-orchestrated run (e.g. `session-review-self`) — distinct from a
+// Task-tool subagent. `snapshot*` fields come from the workflow's own metadata
+// snapshot (best-effort, possibly null). `parsed*` fields are measured from the
+// actual JSONL turns belonging to that run and are authoritative. Note:
+// `snapshotTotalTokens` is approximately cache-write tokens, NOT a precise
+// in+out total — render it de-emphasized / annotated, never as a headline.
+export interface WorkflowPhase {
+  title: string | null
+  detail: string | null
+}
+
+export interface WorkflowSummary {
+  runId: string
+  workflowName: string | null
+  status: string | null
+  snapshotDurationMs: number | null
+  snapshotAgentCount: number | null
+  snapshotTotalTokens: number | null
+  phases: WorkflowPhase[]
+  parsedAgentCount: number
+  parsedTurns: number
+  parsedOutputTokens: number
+  parsedCost: number
 }
 
 /**

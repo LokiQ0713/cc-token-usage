@@ -11,6 +11,7 @@ import type {
   SkillUsage,
   HookUsage,
   SubagentTypeAggregate,
+  WorkflowSummary,
 } from '../types'
 import {
   getSessionId,
@@ -168,6 +169,32 @@ function hookTooltip(h: HookUsage): string {
     parts.push(`${h.preventedContinuationCount} ${t('sessions.hook_prevented_unit')}`)
   }
   return parts.join(' · ')
+}
+
+// ─── Workflow helpers (script-orchestrated agent runs) ────────────────────
+
+/** Display label for a workflow run: name if present, else the run id. */
+function workflowLabel(wf: WorkflowSummary): string {
+  return truncateChipLabel(wf.workflowName ?? wf.runId, 60)
+}
+
+/**
+ * Localized status text. Known statuses (completed/running/failed) get i18n
+ * strings; anything else is shown verbatim. Returns null when status is absent.
+ */
+function workflowStatusText(wf: WorkflowSummary): string | null {
+  if (!wf.status) return null
+  const key = `sessions.workflow_status_${wf.status.toLowerCase()}`
+  const translated = t(key)
+  // t() returns the key itself when no message exists → fall back to raw status.
+  return translated === key ? wf.status : translated
+}
+
+/** CSS modifier class for the status badge, normalized to a known set. */
+function workflowStatusClass(wf: WorkflowSummary): string {
+  const s = (wf.status ?? '').toLowerCase()
+  if (s === 'completed' || s === 'running' || s === 'failed') return `wf-status-${s}`
+  return 'wf-status-other'
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────
@@ -568,6 +595,66 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
                   >{{ subagentTypeLabel(agg) }}</span>
                 </span>
               </div>
+              <!-- Workflows: script-orchestrated agent runs. Visually distinct
+                   from the Task-tool subagent chips above (full cards, not
+                   chips). Rendered only when at least one run exists. -->
+              <div
+                class="detail-section"
+                v-if="row.workflows && row.workflows.length > 0"
+              >
+                <h3 class="detail-section-title">{{ t('session.workflows') }}</h3>
+                <div class="workflow-list">
+                  <div
+                    v-for="wf in row.workflows"
+                    :key="wf.runId"
+                    class="workflow-card"
+                  >
+                    <div class="workflow-header">
+                      <span class="workflow-name">{{ workflowLabel(wf) }}</span>
+                      <span
+                        v-if="workflowStatusText(wf)"
+                        class="workflow-status"
+                        :class="workflowStatusClass(wf)"
+                      >{{ workflowStatusText(wf) }}</span>
+                    </div>
+                    <div class="workflow-stats">
+                      <span class="workflow-stat">
+                        {{ wf.parsedAgentCount }} {{ t('sessions.workflow_agents_unit') }}
+                      </span>
+                      <span class="workflow-stat">
+                        {{ wf.parsedTurns }} {{ t('sessions.workflow_turns_unit') }}
+                      </span>
+                      <span class="workflow-stat workflow-stat-cost">
+                        {{ formatCost(wf.parsedCost) }}
+                      </span>
+                      <span class="workflow-stat">
+                        {{ formatTokens(wf.parsedOutputTokens) }} out
+                      </span>
+                      <span
+                        v-if="wf.snapshotTotalTokens != null"
+                        class="workflow-stat workflow-stat-muted"
+                        :title="t('sessions.workflow_snapshot_tokens_note')"
+                      >
+                        ~{{ formatTokens(wf.snapshotTotalTokens) }} {{ t('sessions.workflow_snapshot_tokens') }}
+                      </span>
+                    </div>
+                    <ol
+                      v-if="wf.phases && wf.phases.length > 0"
+                      class="workflow-phases"
+                    >
+                      <li
+                        v-for="(phase, i) in wf.phases"
+                        :key="i"
+                        class="workflow-phase"
+                      >
+                        <span v-if="phase.title" class="workflow-phase-title">{{ phase.title }}</span>
+                        <span v-if="phase.detail" class="workflow-phase-detail">{{ phase.detail }}</span>
+                      </li>
+                    </ol>
+                  </div>
+                </div>
+              </div>
+
               <div
                 class="chip-row"
                 v-if="row.plugins && row.plugins.length > 0"
@@ -904,6 +991,118 @@ const agentColumns = computed<Column<AgentBreakdown>[]>(() => [
 .hook-chip {
   border-color: rgba(245, 158, 11, 0.4);
   color: #fbbf24;
+}
+
+/* ─── Workflows (script-orchestrated runs) ────────────────────────────────── */
+
+.workflow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Cyan accent + left rail to visually separate orchestrated workflows from the
+   purple Task-tool subagent chips. */
+.workflow-card {
+  padding: 12px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid #22d3ee;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflow-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.workflow-name {
+  font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #67e8f9;
+}
+
+.workflow-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.wf-status-completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.wf-status-running {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.wf-status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.wf-status-other {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.workflow-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.workflow-stat {
+  white-space: nowrap;
+}
+
+.workflow-stat-cost {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.workflow-stat-muted {
+  color: var(--text-tertiary);
+  font-style: italic;
+  cursor: help;
+}
+
+.workflow-phases {
+  list-style: decimal;
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workflow-phase {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.workflow-phase-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.workflow-phase-detail {
+  margin-left: 6px;
+  color: var(--text-tertiary);
 }
 
 /* ─── Orphan Banner ───────────────────────────────────────────────────────── */

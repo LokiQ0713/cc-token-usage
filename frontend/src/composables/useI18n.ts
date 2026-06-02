@@ -193,6 +193,20 @@ const messages: Record<string, Record<Locale, string>> = {
     zh: '孤儿会话：父级 jsonl 已被删除，但子智能体文件仍存在。该会话的统计仍计入全局总计。'
   },
 
+  // Workflows (script-orchestrated agent runs, distinct from Task subagents)
+  'session.workflows': { en: 'Workflows', zh: '工作流' },
+  'sessions.workflow_status_completed': { en: 'completed', zh: '已完成' },
+  'sessions.workflow_status_running': { en: 'running', zh: '运行中' },
+  'sessions.workflow_status_failed': { en: 'failed', zh: '失败' },
+  'sessions.workflow_agents_unit': { en: 'agents', zh: '个 Agent' },
+  'sessions.workflow_turns_unit': { en: 'turns', zh: '轮次' },
+  'sessions.workflow_phases': { en: 'Phases', zh: '阶段' },
+  'sessions.workflow_snapshot_tokens': { en: 'snapshot tokens', zh: '快照 token' },
+  'sessions.workflow_snapshot_tokens_note': {
+    en: '≈ cache-write tokens (snapshot estimate, not a precise in+out total)',
+    zh: '≈ 缓存写入 token（快照估算，非精确的输入+输出总量）'
+  },
+
   // Common
   'common.coming_soon': { en: 'Coming soon', zh: '即将推出' },
   'common.theme_toggle': { en: 'Toggle theme', zh: '切换主题' },
