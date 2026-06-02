@@ -300,6 +300,11 @@ export function hasDetailedTurns(s: SessionEntry): s is SessionDetail {
   return Array.isArray(s.turns)
 }
 
+/** Number of script-orchestrated workflow runs in this session (0 if none). */
+export function getWorkflowCount(s: SessionEntry): number {
+  return s.workflows?.length ?? 0
+}
+
 /** Returns the project name, normalizing Option<String> from Rust. */
 export function getProject(s: SessionEntry): string {
   return s.project ?? ''

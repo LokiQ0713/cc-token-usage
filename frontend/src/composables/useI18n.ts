@@ -143,7 +143,7 @@ const messages: Record<string, Record<Locale, string>> = {
   'sessions.sort_by_date': { en: 'By Date', zh: '按日期' },
   'sessions.sort_by_turns': { en: 'By Turns', zh: '按轮次' },
   'sessions.filter_all': { en: 'All', zh: '全部' },
-  'sessions.col_session_id': { en: 'Session ID', zh: '会话 ID' },
+  'sessions.col_session_id': { en: 'Session', zh: '会话' },
   'sessions.col_project': { en: 'Project', zh: '项目' },
   'sessions.col_turns': { en: 'Turns', zh: '轮次' },
   'sessions.col_duration': { en: 'Duration', zh: '时长' },
@@ -188,6 +188,8 @@ const messages: Record<string, Record<Locale, string>> = {
   'sessions.chip_and_more': { en: '...and {n} more', zh: '...另外 {n} 个' },
   // Orphan session display
   'sessions.orphan_tag': { en: '(orphan)', zh: '(孤儿)' },
+  // Inline marker for sessions that ran one or more script-orchestrated workflows
+  'sessions.workflow_tag': { en: '(workflow)', zh: '(workflow)' },
   'sessions.orphan_banner': {
     en: 'Orphaned session: parent jsonl was deleted but subagent files remain on disk. Totals still include this session.',
     zh: '孤儿会话：父级 jsonl 已被删除，但子智能体文件仍存在。该会话的统计仍计入全局总计。'

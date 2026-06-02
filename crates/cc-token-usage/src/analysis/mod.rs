@@ -331,6 +331,10 @@ pub struct AgentDetail {
 pub struct SessionSummary {
     pub session_id: String,
     pub project_display_name: String,
+    /// Human-readable title (`custom-title` > `ai-title`), if Claude Code
+    /// recorded one. Mirrors `HtmlSessionSummary.title` so the standalone JSON
+    /// export carries the same field as the HTML dashboard payload.
+    pub title: Option<String>,
     pub first_timestamp: Option<DateTime<Utc>>,
     pub duration_minutes: f64,
     pub model: String, // 主要使用的模型

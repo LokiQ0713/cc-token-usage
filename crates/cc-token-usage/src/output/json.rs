@@ -91,6 +91,8 @@ struct SessionSummaryJson {
     session_id: String,
     project: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     first_timestamp: Option<String>,
     duration_minutes: f64,
     model: String,
@@ -144,6 +146,7 @@ fn build_overview_json(overview: &OverviewResult) -> OverviewJson {
         .map(|s| SessionSummaryJson {
             session_id: s.session_id.clone(),
             project: s.project_display_name.clone(),
+            title: s.title.clone(),
             first_timestamp: s.first_timestamp.map(|t| t.to_rfc3339()),
             duration_minutes: s.duration_minutes,
             model: s.model.clone(),

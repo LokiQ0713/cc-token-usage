@@ -381,6 +381,7 @@ fn build_session_summary(session: &SessionData, calc: &PricingCalculator) -> Ses
     SessionSummary {
         session_id,
         project_display_name,
+        title: session.metadata.title.clone(),
         first_timestamp: session.first_timestamp,
         duration_minutes,
         model,

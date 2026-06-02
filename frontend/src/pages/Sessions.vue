@@ -23,6 +23,7 @@ import {
   getModel,
   getCacheHitRate,
   getDurationMinutes,
+  getWorkflowCount,
 } from '../types'
 import { useData } from '../composables/useData'
 import { useI18n } from '../composables/useI18n'
@@ -317,7 +318,17 @@ const sessionColumns = computed<Column<SessionEntry>[]>(() => [
     label: t('sessions.col_session_id'),
     sortable: true,
     align: 'left',
-    format: (row: SessionEntry) => getSessionId(row).slice(0, 8),
+    format: (row: SessionEntry) => {
+      // Promote the human-readable title to the primary column: a UUID prefix
+      // tells the user nothing about what the session did. Fall back to the
+      // 8-char id only when no title was recorded (Claude Code's ai-title /
+      // a manual custom-title). The full id stays searchable + in the deep-link.
+      const id = getSessionId(row).slice(0, 8)
+      const label = row.title ? truncateChipLabel(row.title, 48) : id
+      // Inline workflow marker, mirroring the orphan tag pattern: a plain-text
+      // flag so users spot orchestrated sessions without expanding the row.
+      return getWorkflowCount(row) > 0 ? `${label} ${t('sessions.workflow_tag')}` : label
+    },
   },
   {
     key: 'project',
