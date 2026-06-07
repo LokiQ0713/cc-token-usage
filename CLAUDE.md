@@ -33,13 +33,25 @@ cargo run -p cc-token-usage -- wrapped --year 2025  # specific year
 cargo run -p cc-token-usage -- project --name foo   # filter by project name
 
 # Test
-cargo test --workspace --all-features               # all tests (164+: 98 parsing + 61 analysis + 5 integration)
-cargo test -p cc-session-jsonl --all-features        # parsing library (98 tests)
-cargo test -p cc-token-usage                         # analysis tool (61+ tests)
+cargo test --workspace --all-features               # all tests (324+ pass, 16 #[ignore]'d real-data)
+cargo test -p cc-session-jsonl --all-features        # parsing library
+cargo test -p cc-token-usage                         # analysis tool
+
+# Pre-release: run real-data e2e against your local ~/.claude.
+# REQUIRE_REAL_DATA=1 turns silent-skip into panic, so a missing reference
+# session (e.g. ae289b37) becomes a test failure instead of a silent pass.
+scripts/run-real-e2e.sh                              # MANDATORY before any version bump
 
 # Lint & format
 cargo clippy --workspace --all-features -- -D warnings
 cargo fmt
+
+# Snapshot tests (text.rs renderer)
+cargo test -p cc-token-usage --test text_snapshots   # overview / projects / trend lock
+# When intentional rendering changes:
+#   cargo install cargo-insta    # one-time
+#   cargo insta review           # accept/reject each .snap diff
+# Commit the updated .snap file alongside the renderer change.
 
 # Frontend (Vue dashboard)
 cd frontend && npm install && npm run dev            # dev server with HMR
@@ -115,10 +127,11 @@ Vue 3 + Vite + TailwindCSS + Chart.js dashboard. Builds to self-contained single
 
 ## Release Workflow
 
-1. Bump version in `crates/cc-token-usage/Cargo.toml` and `npm-package/package.json`
-2. `npm version patch/minor/major` (creates git tag)
-3. `git push && git push --tags`
-4. GitHub Actions builds cross-platform binaries and publishes to npm
+1. Run `scripts/run-real-e2e.sh` — must exit 0. This is the only validation that exercises the loader/scanner against real ~/.claude history; CI cannot run it.
+2. Bump version in `crates/cc-token-usage/Cargo.toml` and `npm-package/package.json`
+3. `npm version patch/minor/major` (creates git tag)
+4. `git push && git push --tags`
+5. GitHub Actions builds cross-platform binaries and publishes to npm
 
 **Important**: Always commit `Cargo.lock` in release commits. Never delete and re-create release tags; always bump the version.
 

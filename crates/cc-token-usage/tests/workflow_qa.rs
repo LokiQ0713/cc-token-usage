@@ -1089,11 +1089,29 @@ fn json_output_contains_workflow_section() {
 
 // ─── Layer 3: Real data e2e (#[ignore]) ──────────────────────────────────────
 
+/// `REQUIRE_REAL_DATA=1` switches the real-data tests from "skip silently"
+/// to "panic loudly". Used by `scripts/run-real-e2e.sh` (developer pre-release
+/// validation) so that a missing ~/.claude or a missing reference session
+/// becomes a test failure, not a silent pass.
+fn require_real_data() -> bool {
+    std::env::var("REQUIRE_REAL_DATA").as_deref() == Ok("1")
+}
+
 fn real_claude_home() -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = match std::env::var("HOME").ok() {
+        Some(h) => h,
+        None => {
+            if require_real_data() {
+                panic!("REQUIRE_REAL_DATA=1 but $HOME is unset");
+            }
+            return None;
+        }
+    };
     let ch = std::path::PathBuf::from(home).join(".claude");
     if ch.is_dir() {
         Some(ch)
+    } else if require_real_data() {
+        panic!("REQUIRE_REAL_DATA=1 but {:?} does not exist", ch);
     } else {
         None
     }
@@ -1146,6 +1164,12 @@ fn real_workflow_session_ae289b37_cost_included() {
     let session = match sessions.iter().find(|s| s.session_id == target_id) {
         Some(s) => s,
         None => {
+            if require_real_data() {
+                panic!(
+                    "REQUIRE_REAL_DATA=1 but reference session {} not present locally",
+                    target_id
+                );
+            }
             eprintln!("Skipping: session {} not present locally", target_id);
             return;
         }

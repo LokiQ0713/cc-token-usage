@@ -914,15 +914,29 @@ mod scanner_qa {
     /// Real session ae289b37 contains 3 workflow runs (wf_7c0e6255-566,
     /// wf_81719e41-156, wf_c210842b-3d9). Verify the scanner finds them all,
     /// each has a snapshot, agents and a journal.
+    /// See `crates/cc-token-usage/tests/workflow_qa.rs` for the same pattern
+    /// and the rationale: `REQUIRE_REAL_DATA=1` turns silent-skip into panic.
+    fn require_real_data() -> bool {
+        std::env::var("REQUIRE_REAL_DATA").as_deref() == Ok("1")
+    }
+
     #[test]
     #[ignore]
     fn real_session_ae289b37_workflow_scan() {
         let home = match std::env::var("HOME").ok() {
             Some(h) => std::path::PathBuf::from(h),
-            None => return,
+            None => {
+                if require_real_data() {
+                    panic!("REQUIRE_REAL_DATA=1 but $HOME is unset");
+                }
+                return;
+            }
         };
         let claude_home = home.join(".claude");
         if !claude_home.is_dir() {
+            if require_real_data() {
+                panic!("REQUIRE_REAL_DATA=1 but {:?} not found", claude_home);
+            }
             eprintln!("Skipping: ~/.claude not found");
             return;
         }
@@ -931,6 +945,12 @@ mod scanner_qa {
         let runs = scan_session_workflows(session_id, &claude_home).unwrap();
 
         if runs.is_empty() {
+            if require_real_data() {
+                panic!(
+                    "REQUIRE_REAL_DATA=1 but reference session {} not present locally",
+                    session_id
+                );
+            }
             eprintln!("Skipping: session {} not present locally", session_id);
             return;
         }
