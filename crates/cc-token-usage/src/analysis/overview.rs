@@ -532,4 +532,133 @@ mod tests {
             "known model leaked into pricing_warnings"
         );
     }
+
+    /// Empty input → all zeros, no panics. This is the loader's "no sessions
+    /// found" path and must never crash.
+    #[test]
+    fn empty_sessions_produce_zero_totals() {
+        let calc = PricingCalculator::new();
+        let result = analyze_overview(&[], GlobalDataQuality::default(), &calc, None);
+
+        assert_eq!(result.total_sessions, 0);
+        assert_eq!(result.total_turns, 0);
+        assert_eq!(result.total_agent_turns, 0);
+        assert!((result.total_cost - 0.0).abs() < 1e-9);
+        assert!(result.cost_by_model.is_empty());
+        assert!(result.tokens_by_model.is_empty());
+        assert!(result.pricing_warnings.is_empty());
+        assert_eq!(result.total_output_tokens, 0);
+    }
+
+    /// Two models on the same session produce two distinct `cost_by_model`
+    /// rows. Per-model cost must match what `calculate_turn_cost` would
+    /// produce in isolation, and the sum across rows must equal `total_cost`.
+    #[test]
+    fn multi_model_breakdown_sums_to_total_cost() {
+        let calc = PricingCalculator::new();
+        let session = make_session(vec![
+            make_turn("claude-opus-4-6", 1_000_000, 1_000_000), // contributes 1M+1M
+            make_turn("claude-opus-4-6", 500_000, 500_000),     // contributes 0.5M+0.5M
+            make_turn("claude-sonnet-4-5", 1_000_000, 1_000_000), // sonnet rate
+        ]);
+        let result = analyze_overview(&[session], GlobalDataQuality::default(), &calc, None);
+
+        assert_eq!(
+            result.cost_by_model.len(),
+            2,
+            "two distinct models => two cost rows"
+        );
+
+        // Sum across cost_by_model must equal total_cost.
+        let breakdown_total: f64 = result.cost_by_model.values().sum();
+        assert!(
+            (breakdown_total - result.total_cost).abs() < 1e-6,
+            "cost_by_model sum {} != total_cost {}",
+            breakdown_total,
+            result.total_cost
+        );
+
+        // opus-4-6 row aggregates both turns:
+        // 1.5M input @ $5/MTok = $7.5; 1.5M output @ $25/MTok = $37.5; total = $45.
+        let opus_cost = *result
+            .cost_by_model
+            .get("claude-opus-4-6")
+            .expect("opus-4-6 row missing");
+        assert!(
+            (opus_cost - 45.0).abs() < 1e-6,
+            "opus-4-6 cost: expected $45, got {}",
+            opus_cost
+        );
+    }
+
+    /// `total_turns` counts main turns; `total_agent_turns` counts subagent
+    /// turns. A session with only main turns must report 0 agent turns.
+    #[test]
+    fn main_only_session_has_zero_agent_turns() {
+        let calc = PricingCalculator::new();
+        let session = make_session(vec![
+            make_turn("claude-opus-4-6", 100, 200),
+            make_turn("claude-opus-4-6", 100, 200),
+            make_turn("claude-opus-4-6", 100, 200),
+        ]);
+        let result = analyze_overview(&[session], GlobalDataQuality::default(), &calc, None);
+
+        assert_eq!(result.total_sessions, 1);
+        assert_eq!(result.total_turns, 3);
+        assert_eq!(result.total_agent_turns, 0);
+    }
+
+    /// `cost_by_category` (input/output/cache_write/cache_read) must sum to
+    /// `total_cost`. Drift here means a category was dropped from the
+    /// breakdown or double-counted.
+    #[test]
+    fn cost_by_category_sums_to_total() {
+        let calc = PricingCalculator::new();
+        let session = make_session(vec![make_turn("claude-opus-4-6", 1_000_000, 1_000_000)]);
+        let result = analyze_overview(&[session], GlobalDataQuality::default(), &calc, None);
+
+        let cb = &result.cost_by_category;
+        let cat_sum = cb.input_cost
+            + cb.output_cost
+            + cb.cache_write_5m_cost
+            + cb.cache_write_1h_cost
+            + cb.cache_read_cost;
+
+        assert!(
+            (cat_sum - result.total_cost).abs() < 1e-6,
+            "cost_by_category sum {} != total_cost {}",
+            cat_sum,
+            result.total_cost
+        );
+    }
+
+    /// When `subscription_price` is provided, `subscription_value` is
+    /// populated; when absent, it is None. Guards the optional ROI path.
+    #[test]
+    fn subscription_price_populates_value_field() {
+        let calc = PricingCalculator::new();
+        let session = make_session(vec![make_turn("claude-opus-4-6", 1_000_000, 1_000_000)]);
+
+        let without = analyze_overview(
+            std::slice::from_ref(&session),
+            GlobalDataQuality::default(),
+            &calc,
+            None,
+        );
+        assert!(
+            without.subscription_value.is_none(),
+            "no subscription_price => subscription_value must be None"
+        );
+
+        let with = analyze_overview(
+            &[session],
+            GlobalDataQuality::default(),
+            &calc,
+            Some(20.0),
+        );
+        assert!(
+            with.subscription_value.is_some(),
+            "subscription_price=20 => subscription_value must be Some"
+        );
+    }
 }
