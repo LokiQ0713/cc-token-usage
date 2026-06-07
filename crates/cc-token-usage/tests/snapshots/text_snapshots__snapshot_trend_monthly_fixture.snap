@@ -1,0 +1,11 @@
+---
+source: crates/cc-token-usage/tests/text_snapshots.rs
+assertion_line: 152
+expression: rendered
+---
+Usage by Month
+
+  2025-03        2 sess       5 turns      $0.10  $0.019/t  sonnet-4-5   ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇
+  2025-04        1 sess       1 turns      $0.01  $0.011/t  opus-4-6     ▇▇
+
+  Total: $0.11  (6 turns, avg $0.018/turn)

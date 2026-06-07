@@ -1,0 +1,46 @@
+---
+source: crates/cc-token-usage/tests/text_snapshots.rs
+assertion_line: 130
+expression: rendered
+---
+Claude Code Token Report
+
+
+  3 conversations, 6 rounds of back-and-forth
+
+  Claude read  8,300 tokens
+  Claude wrote 3,700 tokens
+
+  Cache saved you $0.00 (0% of reads were free)
+  All that would cost $0.11 at API rates
+
+  Model                      Wrote        Rounds     Cost
+  ---------------------------------------------------------
+  opus-4-6                       1,800         4     $0.07
+  sonnet-4-5                     1,900         2     $0.04
+
+  Cost Breakdown
+    Output:          $0.07  (69%)
+    Cache Write:     $0.00  (0%)
+    Input:           $0.03  (31%)
+    Cache Read:      $0.00  (0%)
+
+  Efficiency
+    Output ratio:       44.58% (3,700 output / 8,300 input)
+    Cost per turn:      $0.018/turn
+    Output per turn:    616 tokens/turn avg
+
+  Top Projects                              Sessions   Turns    Cost
+  -------------------------------------------------------------------
+  ~/alpha                                      2       4     $0.07
+  ~/beta                                       1       2     $0.04
+  Compactions: 2 total across 2 sessions
+  Peak context: 3,000 tokens
+  Avg session: 26h15m
+
+  Most Expensive Sessions
+    11111111 ~/alpha     3 turns  52h0m  $0.06
+    22222222 ~/beta     2 turns  30m  $0.04
+    33333333 ~/alpha     1 turns  0s  $0.01
+
+  Data: 0 session files, 0 agent files

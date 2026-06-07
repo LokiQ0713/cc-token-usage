@@ -1,0 +1,13 @@
+---
+source: crates/cc-token-usage/tests/text_snapshots.rs
+assertion_line: 141
+expression: rendered
+---
+Projects by Cost
+
+  #   Project                          Sessions  Turns  Agent  $/Sess  Model          Cost
+  ─────────────────────────────────────────────────────────────────────────────────────────
+   1. ~/alpha                            2       4      0   $0.03  opus-4-6          $0.07
+   2. ~/beta                             1       2      0   $0.04  sonnet-4-5        $0.04
+
+  Total: 2 projects, $0.11
