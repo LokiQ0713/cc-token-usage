@@ -76,8 +76,11 @@ pub fn load_all(
 /// Parsed result from a single main session file, ready for serial assembly.
 struct ParsedMain {
     session_id: String,
+    /// Path to the main session JSONL file.
+    source_path: PathBuf,
     project: Option<String>,
     turns: Vec<super::models::ValidatedTurn>,
+    user_entries: Vec<super::models::ValidatedUserEntry>,
     version: Option<String>,
     first_ts: Option<DateTime<Utc>>,
     last_ts: Option<DateTime<Utc>>,
@@ -126,14 +129,16 @@ fn load_from_files(
     let parsed_mains: Vec<Result<ParsedMain>> = main_files
         .par_iter()
         .map(|sf| {
-            let (turns, quality, metadata, hooks) = parse_session_file(&sf.path, false)
+            let (turns, user_entries, quality, metadata, hooks) = parse_session_file(&sf.path, false)
                 .with_context(|| format!("failed to parse session: {}", sf.path.display()))?;
             let version = extract_version(&sf.path);
             let (first_ts, last_ts) = time_range(turns.iter().map(|t| &t.timestamp));
             Ok(ParsedMain {
                 session_id: sf.session_id.clone(),
+                source_path: sf.path.clone(),
                 project: sf.project.clone(),
                 turns,
+            user_entries,
                 version,
                 first_ts,
                 last_ts,
@@ -158,8 +163,10 @@ fn load_from_files(
             pm.session_id.clone(),
             SessionData {
                 session_id: pm.session_id,
+                source_path: pm.source_path,
                 project: pm.project,
                 turns: pm.turns,
+                user_entries: pm.user_entries,
                 subagents: Vec::new(),
                 plugins: Vec::new(),
                 skills: Vec::new(),
@@ -178,7 +185,7 @@ fn load_from_files(
     let parsed_agents: Vec<Result<ParsedAgent>> = agent_files
         .par_iter()
         .map(|sf| {
-            let (turns, quality, _meta, _hooks) = parse_session_file(&sf.path, true)
+            let (turns, _user_entries, quality, _meta, _hooks) = parse_session_file(&sf.path, true)
                 .with_context(|| format!("failed to parse agent file: {}", sf.path.display()))?;
             let target_id = sf
                 .parent_session_id
@@ -223,8 +230,10 @@ fn load_from_files(
                 target_id.clone(),
                 SessionData {
                     session_id: target_id.clone(),
+                    source_path: PathBuf::new(), // orphan — no main session file
                     project,
                     turns: Vec::new(),
+                    user_entries: vec![],
                     subagents: Vec::new(),
                     plugins: Vec::new(),
                     skills: Vec::new(),
@@ -438,6 +447,7 @@ mod tests {
     ) -> ValidatedTurn {
         ValidatedTurn {
             uuid: format!("u-{ts}"),
+            parent_uuid: None,
             request_id: Some(format!("r-{ts}")),
             timestamp: ts.parse().unwrap(),
             model: "claude-opus-4-6".into(),
@@ -841,6 +851,7 @@ mod tests {
             for i in 0..turns {
                 tlist.push(ValidatedTurn {
                     uuid: format!("{}-{}", agent_id, i),
+            parent_uuid: None,
                     request_id: Some(format!("{}-r-{}", agent_id, i)),
                     timestamp: "2026-05-01T10:00:00Z".parse().unwrap(),
                     model: "claude-opus-4-6".into(),
@@ -884,8 +895,10 @@ mod tests {
 
         let session = SessionData {
             session_id: "s1".into(),
+            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             project: Some("p".into()),
             turns: Vec::new(),
+            user_entries: vec![],
             subagents: vec![
                 make_agent("agent-aaa", Some("builder"), Some("task A"), 2),
                 make_agent("agent-bbb", Some("builder"), Some("task B"), 3),
@@ -931,6 +944,7 @@ mod tests {
         let calc = PricingCalculator::new();
         let make_turn = |id: &str| ValidatedTurn {
             uuid: id.to_string(),
+            parent_uuid: None,
             request_id: Some(format!("r-{}", id)),
             timestamp: "2026-05-01T10:00:00Z".parse().unwrap(),
             model: "claude-opus-4-6".into(),
@@ -963,8 +977,10 @@ mod tests {
 
         let session = SessionData {
             session_id: "s1".into(),
+            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             project: Some("p".into()),
             turns: Vec::new(),
+            user_entries: vec![],
             subagents: vec![Subagent {
                 agent_id: "agent-no-meta".into(),
                 agent_type: None, // .meta.json missing

@@ -65,10 +65,27 @@ impl From<cc_session_jsonl::types::Usage> for TokenUsage {
 
 // ─── Validated Data Layer ────────────────────────────────────────────────────
 
+/// A lightweight record of a user JSONL entry for DAG construction.
+#[derive(Debug, Clone)]
+pub struct ValidatedUserEntry {
+    pub uuid: String,
+    pub parent_uuid: Option<String>,
+    pub timestamp: DateTime<Utc>,
+    /// User prompt text (only for text-type user entries, not tool_results).
+    pub text: Option<String>,
+    /// The tool_use_id this entry is a result for (only for tool_result entries).
+    pub tool_use_id: Option<String>,
+    /// Whether this is a tool_result user entry (isSidechain-aware for agents).
+    pub is_tool_result: bool,
+    pub is_sidechain: bool,
+    pub agent_id: Option<String>,
+}
+
 /// A single validated assistant turn, ready for analysis.
 #[derive(Debug, Clone)]
 pub struct ValidatedTurn {
     pub uuid: String,
+    pub parent_uuid: Option<String>,
     pub request_id: Option<String>,
     pub timestamp: DateTime<Utc>,
     pub model: String,
@@ -162,8 +179,15 @@ pub struct HookUsage {
 #[derive(Debug, Clone)]
 pub struct SessionData {
     pub session_id: String,
+    /// Path to the main session JSONL file, used by the DAG builder to
+    /// re-read raw entries without parser dedup/filtering.
+    pub source_path: std::path::PathBuf,
     pub project: Option<String>,
     pub turns: Vec<ValidatedTurn>,
+    /// User entries from the session JSONL (both text prompts and
+    /// tool_result entries), for DAG construction. Empty in legacy
+    /// sessions or when user entry parsing is disabled.
+    pub user_entries: Vec<ValidatedUserEntry>,
     /// Subagent groups for this session. Each entry corresponds to one
     /// `agent-<id>.jsonl` file. Empty for sessions without subagents.
     pub subagents: Vec<Subagent>,
@@ -489,7 +513,7 @@ mod tests {
     fn test_parse_unknown_entry_type() {
         let json = r#"{"type":"some-future-type","data":"whatever","uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z"}"#;
         let entry: cc_session_jsonl::types::Entry = serde_json::from_str(json).unwrap();
-        assert!(matches!(entry, cc_session_jsonl::types::Entry::Unknown));
+        assert!(matches!(entry, cc_session_jsonl::types::Entry::Ignored));
     }
 
     #[test]

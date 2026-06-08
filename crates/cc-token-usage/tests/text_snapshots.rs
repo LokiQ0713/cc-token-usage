@@ -31,6 +31,7 @@ use chrono::{DateTime, Utc};
 fn turn(uuid: &str, ts: &str, model: &str, input: u64, output: u64) -> ValidatedTurn {
     ValidatedTurn {
         uuid: uuid.into(),
+        parent_uuid: None,
         request_id: Some(format!("req-{uuid}")),
         timestamp: ts.parse::<DateTime<Utc>>().unwrap(),
         model: model.into(),
@@ -66,9 +67,11 @@ fn session(id: &str, project: &str, turns: Vec<ValidatedTurn>) -> SessionData {
     let first = turns.iter().map(|t| t.timestamp).min();
     let last = turns.iter().map(|t| t.timestamp).max();
     SessionData {
+        source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
         session_id: id.into(),
         project: Some(project.into()),
         turns,
+        user_entries: vec![],
         subagents: vec![],
         plugins: vec![],
         skills: vec![],

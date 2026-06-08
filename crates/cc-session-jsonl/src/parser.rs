@@ -92,8 +92,9 @@ impl LenientReader {
         self.errors_skipped
     }
 
-    /// Number of entries successfully parsed as [`Entry::Unknown`] (type field
-    /// present but not recognized by this library version).
+    /// Number of entries successfully parsed as [`Entry::Passthrough`]
+    /// (unrecognized type that carries `uuid` + `sessionId` — DAG continuity
+    /// preserved) or [`Entry::Ignored`] (unrecognized type without DAG fields).
     ///
     /// A non-zero value here is an early signal of Claude Code JSONL format
     /// drift: Anthropic has added a new entry type since this library's types
@@ -115,7 +116,7 @@ impl Iterator for LenientReader {
             }
             match parse_entry(&line) {
                 Ok(entry) => {
-                    if matches!(entry, Entry::Unknown) {
+                    if matches!(entry, Entry::Passthrough(_) | Entry::Ignored) {
                         self.unknown_count += 1;
                     }
                     return Some(entry);
@@ -178,10 +179,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_entry_unknown_type() {
+    fn parse_entry_unknown_no_dag_fields_becomes_ignored() {
+        // No uuid / sessionId → Ignored
         let line = r#"{"type":"never-seen-before","data":"x"}"#;
         let entry = parse_entry(line).unwrap();
-        assert!(matches!(entry, Entry::Unknown));
+        assert!(matches!(entry, Entry::Ignored));
+    }
+
+    #[test]
+    fn parse_entry_unknown_with_dag_fields_becomes_passthrough() {
+        // Has uuid + sessionId → Passthrough (DAG continuity)
+        let line = r#"{"type":"future-feature","uuid":"u1","sessionId":"s1","data":"x"}"#;
+        let entry = parse_entry(line).unwrap();
+        assert!(matches!(entry, Entry::Passthrough(_)));
     }
 
     // ── SessionReader tests ──
@@ -342,18 +352,18 @@ GARBAGE LINE
 
     #[test]
     fn lenient_reader_counts_unknown_entries() {
-        // Mix: 2 recognized, 2 unknown-type, 1 garbage
+        // Mix: 2 recognized, 2 unknown (1 Ignored + 1 Passthrough), 1 garbage
         let content = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":"ok"}}
 {"type":"future-type-alpha","sessionId":"s1","data":1}
 GARBAGE
-{"type":"future-type-beta","sessionId":"s1"}
+{"type":"future-type-beta","uuid":"u2","sessionId":"s2"}
 {"type":"tag","sessionId":"s1","tag":"t"}"#;
         let file = write_temp_file(content);
         let reader = SessionReader::open(file.path()).unwrap();
         let mut lenient = reader.lenient();
         let entries: Vec<_> = lenient.by_ref().collect();
-        assert_eq!(entries.len(), 4); // user + 2 unknown + tag
+        assert_eq!(entries.len(), 4); // user + 2 unknown (Ignored + Passthrough) + tag
         assert_eq!(lenient.errors_skipped(), 1); // 1 garbage line
-        assert_eq!(lenient.unknown_count(), 2);
+        assert_eq!(lenient.unknown_count(), 2); // 1 Ignored + 1 Passthrough
     }
 }

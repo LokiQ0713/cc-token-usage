@@ -124,7 +124,7 @@ fn parse_entry_roundtrip_all_types() {
 
     // Unknown type
     let unknown = parse_entry(r#"{"type":"future-type","data":1}"#).unwrap();
-    assert!(matches!(unknown, Entry::Unknown));
+    assert!(matches!(unknown, Entry::Ignored));
 }
 
 #[test]

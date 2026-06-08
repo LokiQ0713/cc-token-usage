@@ -35,6 +35,7 @@ fn make_turn(
 ) -> ValidatedTurn {
     ValidatedTurn {
         uuid: uuid.into(),
+            parent_uuid: None,
         request_id: Some(format!("req-{uuid}")),
         timestamp: ts.parse().unwrap(),
         model: model.into(),
@@ -85,9 +86,11 @@ fn make_subagent(
 
 fn empty_session(session_id: &str) -> SessionData {
     SessionData {
+        source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
         session_id: session_id.into(),
         project: Some("-Users-test-proj".into()),
         turns: vec![],
+        user_entries: vec![],
         subagents: vec![],
         plugins: vec![],
         skills: vec![],

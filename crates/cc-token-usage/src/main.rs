@@ -11,8 +11,10 @@ use cc_token_usage::analysis::validate;
 use cc_token_usage::analysis::wrapped::analyze_wrapped;
 use cc_token_usage::cli::{Cli, Command, GroupBy, OutputFormat};
 use cc_token_usage::config::Config;
+use cc_token_usage::dag::build_dag_graph;
 use cc_token_usage::data::loader;
 use cc_token_usage::data::models::SessionData;
+use cc_token_usage::output::dag_html::render_dag_html;
 use cc_token_usage::output::html_new::render_vue_dashboard;
 use cc_token_usage::output::json::{
     render_heatmap_json, render_html_payload, render_overview_json, render_projects_json,
@@ -81,12 +83,13 @@ fn main() -> Result<()> {
     let (sessions, quality) = loader::load_all(&claude_home, &calc)
         .with_context(|| format!("failed to load data from {}", claude_home.display()))?;
 
-    // 7. Determine output modes: None → both text + html; Json is exclusive
+    // 7. Determine output modes: None → both text + html; Json / Dag are exclusive
+    let want_dag = matches!(cli.format, Some(OutputFormat::Dag));
     let want_json = matches!(cli.format, Some(OutputFormat::Json));
     let want_text =
-        !want_json && (cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Text)));
+        !want_json && !want_dag && (cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Text)));
     let want_html =
-        !want_json && (cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Html)));
+        !want_json && !want_dag && (cli.format.is_none() || matches!(cli.format, Some(OutputFormat::Html)));
 
     // 8. Execute analysis + render output
     match command {
@@ -117,6 +120,16 @@ fn main() -> Result<()> {
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-token-report.html")?;
+            }
+            if want_dag {
+                let latest = sessions
+                    .iter()
+                    .filter(|s| s.last_timestamp.is_some())
+                    .max_by_key(|s| s.last_timestamp)
+                    .context("no sessions found")?;
+                let graph = build_dag_graph(&latest.source_path, latest.session_id.clone());
+                let html = render_dag_html(&graph);
+                write_html(&html, cli.output.as_deref(), "dag.html")?;
             }
         }
 
@@ -237,6 +250,11 @@ fn main() -> Result<()> {
                 );
                 let html = render_vue_dashboard(&json_payload);
                 write_html(&html, cli.output.as_deref(), "cc-session-report.html")?;
+            }
+            if want_dag {
+                let graph = build_dag_graph(&session.source_path, session.session_id.clone());
+                let html = render_dag_html(&graph);
+                write_html(&html, cli.output.as_deref(), "dag.html")?;
             }
         }
 

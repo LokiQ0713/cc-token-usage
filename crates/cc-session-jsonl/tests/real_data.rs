@@ -49,7 +49,7 @@ fn find_jsonl_files(dir: &std::path::Path) -> Vec<PathBuf> {
     result
 }
 
-fn entry_type_name(entry: &Entry) -> &'static str {
+fn entry_type_name(entry: &Entry) -> &str {
     match entry {
         Entry::User(_) => "user",
         Entry::Assistant(_) => "assistant",
@@ -76,7 +76,8 @@ fn entry_type_name(entry: &Entry) -> &'static str {
         Entry::AttributionSnapshot(_) => "attribution-snapshot",
         Entry::ContextCollapseCommit(_) => "marble-origami-commit",
         Entry::ContextCollapseSnapshot(_) => "marble-origami-snapshot",
-        Entry::Unknown => "unknown",
+        Entry::Passthrough(p) => &p.entry_type,
+        Entry::Ignored => "ignored",
     }
 }
 
@@ -99,7 +100,7 @@ fn real_data_parse_all_sessions() {
 
     let mut total_entries: usize = 0;
     let mut total_errors: usize = 0;
-    let mut type_counts: HashMap<&'static str, usize> = HashMap::new();
+    let mut type_counts: HashMap<String, usize> = HashMap::new();
     let mut files_processed: usize = 0;
     let mut files_failed_to_open: usize = 0;
 
@@ -114,7 +115,7 @@ fn real_data_parse_all_sessions() {
 
         let mut lenient = reader.lenient();
         for entry in lenient.by_ref() {
-            let type_name = entry_type_name(&entry);
+            let type_name = entry_type_name(&entry).to_string();
             *type_counts.entry(type_name).or_insert(0) += 1;
             total_entries += 1;
         }

@@ -133,6 +133,7 @@ mod tests {
 
     fn turn(model: &str, input: u64, output: u64) -> ValidatedTurn {
         ValidatedTurn {
+            parent_uuid: None,
             uuid: format!("u-{model}-{input}-{output}"),
             request_id: None,
             timestamp: Utc.with_ymd_and_hms(2025, 5, 1, 12, 0, 0).unwrap(),
@@ -167,9 +168,11 @@ mod tests {
 
     fn session(id: &str, project: Option<&str>, turns: Vec<ValidatedTurn>) -> SessionData {
         SessionData {
+            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             session_id: id.into(),
             project: project.map(|s| s.into()),
             turns,
+            user_entries: vec![],
             subagents: vec![],
             plugins: vec![],
             skills: vec![],
