@@ -65,27 +65,10 @@ impl From<cc_session_jsonl::types::Usage> for TokenUsage {
 
 // ─── Validated Data Layer ────────────────────────────────────────────────────
 
-/// A lightweight record of a user JSONL entry for DAG construction.
-#[derive(Debug, Clone)]
-pub struct ValidatedUserEntry {
-    pub uuid: String,
-    pub parent_uuid: Option<String>,
-    pub timestamp: DateTime<Utc>,
-    /// User prompt text (only for text-type user entries, not tool_results).
-    pub text: Option<String>,
-    /// The tool_use_id this entry is a result for (only for tool_result entries).
-    pub tool_use_id: Option<String>,
-    /// Whether this is a tool_result user entry (isSidechain-aware for agents).
-    pub is_tool_result: bool,
-    pub is_sidechain: bool,
-    pub agent_id: Option<String>,
-}
-
 /// A single validated assistant turn, ready for analysis.
 #[derive(Debug, Clone)]
 pub struct ValidatedTurn {
     pub uuid: String,
-    pub parent_uuid: Option<String>,
     pub request_id: Option<String>,
     pub timestamp: DateTime<Utc>,
     pub model: String,
@@ -179,15 +162,8 @@ pub struct HookUsage {
 #[derive(Debug, Clone)]
 pub struct SessionData {
     pub session_id: String,
-    /// Path to the main session JSONL file, used by the DAG builder to
-    /// re-read raw entries without parser dedup/filtering.
-    pub source_path: std::path::PathBuf,
     pub project: Option<String>,
     pub turns: Vec<ValidatedTurn>,
-    /// User entries from the session JSONL (both text prompts and
-    /// tool_result entries), for DAG construction. Empty in legacy
-    /// sessions or when user entry parsing is disabled.
-    pub user_entries: Vec<ValidatedUserEntry>,
     /// Subagent groups for this session. Each entry corresponds to one
     /// `agent-<id>.jsonl` file. Empty for sessions without subagents.
     pub subagents: Vec<Subagent>,
@@ -413,12 +389,15 @@ mod tests {
                 assert_eq!(msg.uuid.as_deref(), Some("def"));
                 assert_eq!(msg.session_id.as_deref(), Some("abc-123"));
                 assert_eq!(msg.request_id.as_deref(), Some("req_1"));
-                assert_eq!(msg.parent_uuid.as_deref(), Some("abc"));
+                assert_eq!(msg.parent_uuid.as_str(), "abc");
                 assert_eq!(msg.is_sidechain, Some(false));
 
                 let api = msg.message.unwrap();
                 assert_eq!(api.model.as_deref(), Some("claude-opus-4-6"));
-                assert_eq!(api.stop_reason.as_deref(), Some("end_turn"));
+                assert_eq!(
+                    api.stop_reason,
+                    Some(cc_session_jsonl::types::StopReason::EndTurn)
+                );
 
                 let usage: TokenUsage = api.usage.unwrap().into();
                 assert_eq!(usage.input_tokens, Some(3));
@@ -446,6 +425,8 @@ mod tests {
 
     #[test]
     fn test_parse_user_message() {
+        // V2 keeps UserEntry.parent_uuid as Option<String> (96.3% fill rate
+        // in real data — session-root user entries are None).
         let json = r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"uuid":"u1","timestamp":"2026-03-16T13:51:19.053Z","sessionId":"s1","version":"2.1.80","cwd":"/tmp","gitBranch":"main","userType":"external"}"#;
 
         let entry: cc_session_jsonl::types::Entry = serde_json::from_str(json).unwrap();
@@ -518,7 +499,7 @@ mod tests {
 
     #[test]
     fn test_parse_thinking_content_block() {
-        let json = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"thinking","thinking":"Let me analyze this...","signature":"abc123"},{"type":"text","text":"Here is my answer."}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}"#;
+        let json = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":100,"cache_creation_input_tokens":500,"cache_read_input_tokens":10000},"content":[{"type":"thinking","thinking":"Let me analyze this...","signature":"abc123"},{"type":"text","text":"Here is my answer."}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r1"}"#;
         let entry: cc_session_jsonl::types::Entry = serde_json::from_str(json).unwrap();
         match entry {
             cc_session_jsonl::types::Entry::Assistant(msg) => {
@@ -538,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_parse_synthetic_message() {
-        let json = r#"{"type":"assistant","uuid":"x","timestamp":"2026-03-16T00:00:00Z","message":{"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"error"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null}"#;
+        let json = r#"{"type":"assistant","uuid":"x","timestamp":"2026-03-16T00:00:00Z","message":{"model":"<synthetic>","role":"assistant","stop_reason":"stop_sequence","usage":{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"error"}]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":"p1"}"#;
 
         let entry: cc_session_jsonl::types::Entry = serde_json::from_str(json).unwrap();
 
@@ -546,7 +527,10 @@ mod tests {
             cc_session_jsonl::types::Entry::Assistant(msg) => {
                 let api = msg.message.unwrap();
                 assert_eq!(api.model.as_deref(), Some("<synthetic>"));
-                assert_eq!(api.stop_reason.as_deref(), Some("stop_sequence"));
+                assert_eq!(
+                    api.stop_reason,
+                    Some(cc_session_jsonl::types::StopReason::StopSequence)
+                );
 
                 let usage: TokenUsage = api.usage.unwrap().into();
                 assert_eq!(usage.input_tokens, Some(0));

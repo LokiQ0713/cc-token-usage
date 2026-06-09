@@ -35,7 +35,6 @@ fn make_turn(
 ) -> ValidatedTurn {
     ValidatedTurn {
         uuid: uuid.into(),
-            parent_uuid: None,
         request_id: Some(format!("req-{uuid}")),
         timestamp: ts.parse().unwrap(),
         model: model.into(),
@@ -86,11 +85,9 @@ fn make_subagent(
 
 fn empty_session(session_id: &str) -> SessionData {
     SessionData {
-        source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
         session_id: session_id.into(),
         project: Some("-Users-test-proj".into()),
         turns: vec![],
-        user_entries: vec![],
         subagents: vec![],
         plugins: vec![],
         skills: vec![],
@@ -122,7 +119,7 @@ fn assistant_line(
     session_id: &str,
 ) -> String {
     format!(
-        r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","message":{{"model":"{model}","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":{input},"output_tokens":{output},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"hi"}}]}},"sessionId":"{session_id}","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":{is_sidechain},"parentUuid":null,"requestId":"{request_id}"}}"#
+        r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","message":{{"model":"{model}","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":{input},"output_tokens":{output},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"hi"}}]}},"sessionId":"{session_id}","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":{is_sidechain},"parentUuid":"p1","requestId":"{request_id}"}}"#
     )
 }
 

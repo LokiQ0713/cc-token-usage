@@ -420,7 +420,6 @@ mod tests {
 
     fn make_turn(model: &str, input: u64, output: u64) -> ValidatedTurn {
         ValidatedTurn {
-            parent_uuid: None,
             uuid: format!("uuid-{}-{}", model, input),
             request_id: None,
             timestamp: Utc.with_ymd_and_hms(2026, 5, 1, 12, 0, 0).unwrap(),
@@ -455,11 +454,9 @@ mod tests {
 
     fn make_session(turns: Vec<ValidatedTurn>) -> SessionData {
         SessionData {
-            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             session_id: "test-session".to_string(),
             project: Some("test-project".to_string()),
             turns,
-            user_entries: vec![],
             subagents: vec![],
             plugins: vec![],
             skills: vec![],
@@ -653,12 +650,7 @@ mod tests {
             "no subscription_price => subscription_value must be None"
         );
 
-        let with = analyze_overview(
-            &[session],
-            GlobalDataQuality::default(),
-            &calc,
-            Some(20.0),
-        );
+        let with = analyze_overview(&[session], GlobalDataQuality::default(), &calc, Some(20.0));
         assert!(
             with.subscription_value.is_some(),
             "subscription_price=20 => subscription_value must be Some"

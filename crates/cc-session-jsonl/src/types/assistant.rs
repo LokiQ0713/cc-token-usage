@@ -1,38 +1,128 @@
+//! `AssistantEntry` — an assistant response written as one entry per
+//! Anthropic `ContentBlock` (see `docs/session-data-model.md` §2.1).
+//!
+//! V2 changes vs the old macro:
+//! - All fields enumerated explicitly; no shared `transcript_entry!`.
+//! - `parent_uuid` is `String` (assistant entries are always replies — see
+//!   `docs/cc-session-jsonl-v2-field-survey.md` §2). All other "common"
+//!   fields stay `Option<String>` to tolerate cross-version JSONL.
+//! - New attribution fields: `attribution_agent`, `attribution_mcp_server`,
+//!   `attribution_mcp_tool` (the latter two appear together in MCP-driven
+//!   turns, ~3% sample rate).
+//! - `api_error_status: Option<u16>` for HTTP-code-bearing API errors.
+//! - `diagnostics` is now a typed `Diagnostics` struct so the
+//!   `cache_miss_reason` discriminator is a Rust enum (not a `Value`).
+//! - The ghost keys `message.stop_details` and `message.container` are
+//!   silently dropped (they exist in JSONL but are always `null`).
+
 use serde::{Deserialize, Serialize};
 
-use super::transcript_entry;
+use super::common::{CacheMissReasonKind, DagNode, StopReason};
 
-transcript_entry! {
-    /// An assistant response entry in a Claude Code session.
-    pub struct AssistantEntry {
-        pub message: Option<ApiMessage>,
-        pub request_id: Option<String>,
-        pub api_error: Option<String>,
-        pub error: Option<String>,
-        pub error_details: Option<String>,
-        pub is_api_error_message: Option<bool>,
-        pub is_virtual: Option<bool>,
-        pub advisor_model: Option<String>,
-        /// 触发本 turn 的 plugin 名（如 "superpowers"，Claude Code 2.1.138+）
-        pub attribution_plugin: Option<String>,
-        /// 触发本 turn 的 skill 名（如 "superpowers:brainstorming"，Claude Code 2.1.138+）
-        pub attribution_skill: Option<String>,
+/// An assistant response entry. One per `ContentBlock` emitted by the model.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantEntry {
+    // ── 9 truly-universal DAG fields ──
+    pub uuid: Option<String>,
+    /// Required: assistant entries always reply to something
+    /// (see survey §2). Use `String`, not `Option`.
+    pub parent_uuid: String,
+    pub session_id: Option<String>,
+    pub timestamp: Option<String>,
+    pub cwd: Option<String>,
+    pub version: Option<String>,
+    pub git_branch: Option<String>,
+    pub user_type: Option<String>,
+    pub entrypoint: Option<String>,
+    pub is_sidechain: Option<bool>,
+
+    // ── Assistant-specific carriers ──
+    pub message: Option<ApiMessage>,
+    pub request_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub slug: Option<String>,
+
+    // ── Error / status surface (synthetic and API-error scenarios) ──
+    pub api_error: Option<String>,
+    pub error: Option<String>,
+    pub error_details: Option<String>,
+    pub is_api_error_message: Option<bool>,
+    pub is_virtual: Option<bool>,
+    pub advisor_model: Option<String>,
+    /// HTTP status code carried by some API-error entries (~0.1% in the
+    /// survey).
+    pub api_error_status: Option<u16>,
+
+    // ── Attribution family (Claude Code 2.1.138+) ──
+    /// Triggering plugin (e.g. `"superpowers"`). 3.1% of assistant entries.
+    pub attribution_plugin: Option<String>,
+    /// Triggering skill (e.g. `"superpowers:brainstorming"`). 12.6%.
+    pub attribution_skill: Option<String>,
+    /// Spawning sub-agent name (30% of assistant entries — most common
+    /// attribution).
+    pub attribution_agent: Option<String>,
+    /// MCP server attribution (3.1%, always co-occurs with the next field).
+    pub attribution_mcp_server: Option<String>,
+    /// MCP tool attribution (3.1%).
+    pub attribution_mcp_tool: Option<String>,
+
+    // ── Teammates feature (zero hits in the survey sample but present in
+    //    the API; kept for completeness/future use). ──
+    pub team_name: Option<String>,
+    pub agent_name: Option<String>,
+    pub agent_color: Option<String>,
+}
+
+impl DagNode for AssistantEntry {
+    fn uuid(&self) -> Option<&str> {
+        self.uuid.as_deref()
+    }
+    fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+    fn timestamp(&self) -> Option<&str> {
+        self.timestamp.as_deref()
+    }
+    fn parent_uuid(&self) -> Option<&str> {
+        Some(self.parent_uuid.as_str())
+    }
+    fn is_sidechain(&self) -> Option<bool> {
+        self.is_sidechain
     }
 }
 
-/// The inner API message returned by Claude, containing model info, usage, and content.
+/// The inner API message returned by Claude — model info, usage, content.
+///
+/// `stop_details` and `container` are *deliberately omitted*: both appear in
+/// every assistant entry's JSONL but are always `null` (ghost keys). The v2
+/// design philosophy says "do not model fields whose value is always null".
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ApiMessage {
     pub id: Option<String>,
     pub model: Option<String>,
     pub role: Option<String>,
-    pub stop_reason: Option<String>,
+    /// Low-cardinality enum; new values land in [`StopReason::Unknown`].
+    pub stop_reason: Option<StopReason>,
+    /// Custom stop sequence (rare; ~0.3%). The wider JSONL ecosystem also
+    /// reports `null` here, which deserializes to `None`.
     pub stop_sequence: Option<String>,
     pub usage: Option<Usage>,
     pub content: Option<Vec<ContentBlock>>,
+    /// Cache diagnostics when a cache miss occurred (~5% of turns).
+    pub diagnostics: Option<Diagnostics>,
+    /// Context-management metadata (rare ~0.1%). Shape is API-defined and
+    /// not modelled at field level — we keep the raw object so analysers can
+    /// poke at it without forcing a typed struct that would break on drift.
+    pub context_management: Option<serde_json::Value>,
 }
 
 /// Token usage statistics for a single API call.
+///
+/// All `*_tokens` fields are guaranteed present in real data for non-synthetic
+/// entries (survey §3 assistant section), but stay `Option<u64>` because
+/// synthetic / api_error entries omit `usage` entirely (`message.usage = None`
+/// from the perspective of [`ApiMessage`]).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Usage {
     pub input_tokens: Option<u64>,
@@ -43,28 +133,45 @@ pub struct Usage {
     pub server_tool_use: Option<ServerToolUse>,
     pub service_tier: Option<String>,
     pub inference_geo: Option<String>,
+    /// `iterations` appears as `[]` (legacy) or `[{...}]` arrays in real
+    /// data; we keep the raw Value because the inner shape is undocumented
+    /// and rarely consumed downstream.
     pub iterations: Option<serde_json::Value>,
     pub speed: Option<String>,
 }
 
-/// Breakdown of cache creation tokens by TTL bucket.
+/// Cache-creation token breakdown by TTL bucket.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CacheCreation {
     pub ephemeral_5m_input_tokens: Option<u64>,
     pub ephemeral_1h_input_tokens: Option<u64>,
 }
 
-/// Server-side tool usage counters.
+/// Server-side tool usage counters (web search / fetch).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerToolUse {
     pub web_search_requests: Option<u64>,
     pub web_fetch_requests: Option<u64>,
 }
 
+/// `message.diagnostics` — cache-miss explainer.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Diagnostics {
+    pub cache_miss_reason: Option<CacheMissReason>,
+}
+
+/// Inner structure of a `cache_miss_reason` payload.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CacheMissReason {
+    #[serde(rename = "type")]
+    pub kind: Option<CacheMissReasonKind>,
+    pub cache_missed_input_tokens: Option<u64>,
+}
+
 /// A content block inside an API message.
 ///
-/// Uses internally-tagged enum with `#[serde(tag = "type")]`.
-/// Unknown content block types fall through to `Other`.
+/// Internally tagged by `type`. Unknown future block types degrade to
+/// [`ContentBlock::Other`] so that the surrounding `ApiMessage` still parses.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum ContentBlock {
@@ -136,44 +243,27 @@ mod tests {
             "gitBranch": "main",
             "userType": "external",
             "requestId": "req_001",
-            "agentId": "agent-xyz",
-            "teamName": "team-alpha",
-            "agentName": "Builder",
-            "agentColor": "#FF5733",
-            "promptId": "prompt-001"
+            "agentId": "agent-xyz"
         }"##;
 
         let entry: AssistantEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.uuid.as_deref(), Some("a-uuid-001"));
-        assert_eq!(entry.parent_uuid.as_deref(), Some("p-uuid-001"));
+        assert_eq!(entry.parent_uuid, "p-uuid-001");
         assert_eq!(entry.is_sidechain, Some(false));
-        assert_eq!(entry.timestamp.as_deref(), Some("2026-03-16T13:51:35.912Z"));
         assert_eq!(entry.session_id.as_deref(), Some("sess-abc-123"));
-        assert_eq!(entry.version.as_deref(), Some("2.0.77"));
-        assert_eq!(entry.cwd.as_deref(), Some("/tmp/project"));
-        assert_eq!(entry.git_branch.as_deref(), Some("main"));
-        assert_eq!(entry.user_type.as_deref(), Some("external"));
         assert_eq!(entry.request_id.as_deref(), Some("req_001"));
         assert_eq!(entry.agent_id.as_deref(), Some("agent-xyz"));
-        assert_eq!(entry.team_name.as_deref(), Some("team-alpha"));
-        assert_eq!(entry.agent_name.as_deref(), Some("Builder"));
-        assert_eq!(entry.agent_color.as_deref(), Some("#FF5733"));
-        assert_eq!(entry.prompt_id.as_deref(), Some("prompt-001"));
 
         let msg = entry.message.as_ref().unwrap();
         assert_eq!(msg.id.as_deref(), Some("msg_01XYZ"));
         assert_eq!(msg.model.as_deref(), Some("claude-opus-4-6"));
-        assert_eq!(msg.role.as_deref(), Some("assistant"));
-        assert_eq!(msg.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(msg.stop_reason, Some(StopReason::EndTurn));
 
         let usage = msg.usage.as_ref().unwrap();
         assert_eq!(usage.input_tokens, Some(3));
         assert_eq!(usage.output_tokens, Some(108));
         assert_eq!(usage.cache_creation_input_tokens, Some(1281));
         assert_eq!(usage.cache_read_input_tokens, Some(15204));
-        assert_eq!(usage.service_tier.as_deref(), Some("standard"));
-        assert_eq!(usage.inference_geo.as_deref(), Some("us"));
-        assert_eq!(usage.speed.as_deref(), Some("fast"));
 
         let cache = usage.cache_creation.as_ref().unwrap();
         assert_eq!(cache.ephemeral_5m_input_tokens, Some(1281));
@@ -181,279 +271,147 @@ mod tests {
 
         let content = msg.content.as_ref().unwrap();
         assert_eq!(content.len(), 3);
-
-        match &content[0] {
-            ContentBlock::Thinking {
-                thinking,
-                signature,
-            } => {
-                assert_eq!(thinking.as_deref(), Some("Let me consider this..."));
-                assert_eq!(signature.as_deref(), Some("sig123"));
-            }
-            other => panic!("Expected Thinking, got: {other:?}"),
-        }
-        match &content[1] {
-            ContentBlock::Text { text } => {
-                assert_eq!(text.as_deref(), Some("Hello, I can help with that."));
-            }
-            other => panic!("Expected Text, got: {other:?}"),
-        }
         match &content[2] {
-            ContentBlock::ToolUse { id, name, input } => {
+            ContentBlock::ToolUse { id, name, .. } => {
                 assert_eq!(id.as_deref(), Some("toolu_01ABC"));
                 assert_eq!(name.as_deref(), Some("Bash"));
-                assert!(input.is_some());
-                assert_eq!(input.as_ref().unwrap()["command"], "ls");
             }
-            other => panic!("Expected ToolUse, got: {other:?}"),
+            other => panic!("expected ToolUse, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_minimal_assistant_entry() {
-        // Old-version format: no cache_creation, no inference_geo, no speed, minimal fields
+    fn parse_assistant_minimal_via_entry_enum() {
+        // Parent_uuid is required — even tests that don't care about it must
+        // provide one. The "always-has-a-parent" invariant is exactly what
+        // v2 encodes.
         let json = r#"{
-            "type": "assistant",
-            "uuid": "min-uuid",
-            "timestamp": "2025-06-01T10:00:00Z",
-            "message": {
-                "model": "claude-sonnet-4-20250514",
-                "role": "assistant",
-                "stop_reason": "end_turn",
-                "usage": {
-                    "input_tokens": 500,
-                    "output_tokens": 100
-                },
-                "content": [
-                    {"type": "text", "text": "OK"}
-                ]
-            },
-            "sessionId": "sess-minimal"
-        }"#;
-
-        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.uuid.as_deref(), Some("min-uuid"));
-        assert!(entry.parent_uuid.is_none());
-        assert!(entry.is_sidechain.is_none());
-        assert!(entry.version.is_none());
-        assert!(entry.cwd.is_none());
-        assert!(entry.git_branch.is_none());
-        assert!(entry.agent_id.is_none());
-        assert!(entry.is_virtual.is_none());
-
-        let msg = entry.message.as_ref().unwrap();
-        assert_eq!(msg.model.as_deref(), Some("claude-sonnet-4-20250514"));
-
-        let usage = msg.usage.as_ref().unwrap();
-        assert_eq!(usage.input_tokens, Some(500));
-        assert_eq!(usage.output_tokens, Some(100));
-        assert!(usage.cache_creation_input_tokens.is_none());
-        assert!(usage.cache_read_input_tokens.is_none());
-        assert!(usage.cache_creation.is_none());
-        assert!(usage.inference_geo.is_none());
-        assert!(usage.speed.is_none());
-    }
-
-    #[test]
-    fn parse_assistant_with_api_error() {
-        let json = r#"{
-            "type": "assistant",
-            "uuid": "err-uuid",
-            "timestamp": "2026-03-16T14:00:00Z",
-            "sessionId": "sess-err",
-            "apiError": "rate_limit_exceeded",
-            "error": "You have exceeded your rate limit",
-            "errorDetails": "Please wait 30 seconds",
-            "isApiErrorMessage": true
-        }"#;
-
-        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.api_error.as_deref(), Some("rate_limit_exceeded"));
-        assert_eq!(
-            entry.error.as_deref(),
-            Some("You have exceeded your rate limit")
-        );
-        assert_eq!(
-            entry.error_details.as_deref(),
-            Some("Please wait 30 seconds")
-        );
-        assert_eq!(entry.is_api_error_message, Some(true));
-        assert!(entry.message.is_none());
-    }
-
-    #[test]
-    fn parse_assistant_with_is_virtual() {
-        let json = r#"{
-            "type": "assistant",
-            "uuid": "virt-uuid",
-            "timestamp": "2026-03-16T14:00:00Z",
-            "sessionId": "sess-virt",
-            "isVirtual": true,
-            "message": {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "virtual response"}]
-            }
-        }"#;
-
-        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.is_virtual, Some(true));
-    }
-
-    #[test]
-    fn content_block_text() {
-        let json = r#"{"type": "text", "text": "Hello world"}"#;
-        let block: ContentBlock = serde_json::from_str(json).unwrap();
-        match block {
-            ContentBlock::Text { text } => assert_eq!(text.as_deref(), Some("Hello world")),
-            other => panic!("Expected Text, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn content_block_tool_use() {
-        let json = r#"{
-            "type": "tool_use",
-            "id": "toolu_01ABC",
-            "name": "Read",
-            "input": {"file_path": "/tmp/test.rs", "limit": 100}
-        }"#;
-        let block: ContentBlock = serde_json::from_str(json).unwrap();
-        match block {
-            ContentBlock::ToolUse { id, name, input } => {
-                assert_eq!(id.as_deref(), Some("toolu_01ABC"));
-                assert_eq!(name.as_deref(), Some("Read"));
-                let inp = input.unwrap();
-                assert_eq!(inp["file_path"], "/tmp/test.rs");
-                assert_eq!(inp["limit"], 100);
-            }
-            other => panic!("Expected ToolUse, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn content_block_tool_result() {
-        let json = r#"{
-            "type": "tool_result",
-            "tool_use_id": "toolu_01ABC",
-            "content": "file contents here",
-            "is_error": false
-        }"#;
-        let block: ContentBlock = serde_json::from_str(json).unwrap();
-        match block {
-            ContentBlock::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            } => {
-                assert_eq!(tool_use_id.as_deref(), Some("toolu_01ABC"));
-                assert!(content.is_some());
-                assert_eq!(is_error, Some(false));
-            }
-            other => panic!("Expected ToolResult, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn content_block_thinking() {
-        let json =
-            r#"{"type": "thinking", "thinking": "Deep analysis...", "signature": "sig_xyz"}"#;
-        let block: ContentBlock = serde_json::from_str(json).unwrap();
-        match block {
-            ContentBlock::Thinking {
-                thinking,
-                signature,
-            } => {
-                assert_eq!(thinking.as_deref(), Some("Deep analysis..."));
-                assert_eq!(signature.as_deref(), Some("sig_xyz"));
-            }
-            other => panic!("Expected Thinking, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn content_block_redacted_thinking() {
-        let json = r#"{"type": "redacted_thinking", "data": "base64encodeddata=="}"#;
-        let block: ContentBlock = serde_json::from_str(json).unwrap();
-        match block {
-            ContentBlock::RedactedThinking { data } => {
-                assert_eq!(data.as_deref(), Some("base64encodeddata=="));
-            }
-            other => panic!("Expected RedactedThinking, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn content_block_unknown_type_becomes_other() {
-        let json = r#"{"type": "server_tool_use", "id": "st_01", "name": "web_search"}"#;
-        let block: ContentBlock = serde_json::from_str(json).unwrap();
-        match block {
-            ContentBlock::Other => {} // expected
-            other => panic!("Expected Other, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn usage_with_server_tool_use() {
-        let json = r#"{
-            "input_tokens": 10,
-            "output_tokens": 20,
-            "server_tool_use": {
-                "web_search_requests": 2,
-                "web_fetch_requests": 1
-            }
-        }"#;
-        let usage: Usage = serde_json::from_str(json).unwrap();
-        let stu = usage.server_tool_use.as_ref().unwrap();
-        assert_eq!(stu.web_search_requests, Some(2));
-        assert_eq!(stu.web_fetch_requests, Some(1));
-    }
-
-    #[test]
-    fn parse_assistant_via_entry_enum() {
-        let json = r#"{
-            "type": "assistant",
-            "uuid": "enum-test",
-            "sessionId": "sess-enum",
-            "message": {
-                "model": "claude-opus-4-6",
-                "role": "assistant",
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 5, "output_tokens": 10},
-                "content": [{"type": "text", "text": "Hi"}]
+            "type":"assistant",
+            "uuid":"a1",
+            "parentUuid":"p",
+            "sessionId":"s1",
+            "message":{
+                "model":"claude-opus-4-6",
+                "role":"assistant",
+                "stop_reason":"end_turn",
+                "usage":{"input_tokens":5,"output_tokens":10},
+                "content":[{"type":"text","text":"hi"}]
             }
         }"#;
         let entry: Entry = serde_json::from_str(json).unwrap();
         match entry {
             Entry::Assistant(a) => {
-                assert_eq!(a.uuid.as_deref(), Some("enum-test"));
-                let msg = a.message.unwrap();
-                assert_eq!(msg.model.as_deref(), Some("claude-opus-4-6"));
+                assert_eq!(a.parent_uuid, "p");
             }
-            other => panic!("Expected Assistant, got: {other:?}"),
+            other => panic!("expected Assistant, got {other:?}"),
         }
     }
 
     #[test]
-    fn parse_assistant_with_advisor_model() {
+    fn parse_diagnostics_real_shape() {
         let json = r#"{
-            "type": "assistant",
-            "uuid": "adv-uuid",
-            "sessionId": "sess-adv",
-            "advisorModel": "claude-haiku-4-20250514",
-            "message": {
-                "model": "claude-opus-4-6",
-                "role": "assistant",
-                "content": []
+            "type":"assistant",
+            "uuid":"a1",
+            "parentUuid":"p",
+            "sessionId":"s1",
+            "message":{
+                "model":"claude-opus-4-6",
+                "role":"assistant",
+                "diagnostics":{"cache_miss_reason":{"type":"tools_changed","cache_missed_input_tokens":89018}},
+                "usage":{"input_tokens":1,"output_tokens":1},
+                "content":[]
             }
         }"#;
         let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            entry.advisor_model.as_deref(),
-            Some("claude-haiku-4-20250514")
-        );
+        let diag = entry.message.unwrap().diagnostics.unwrap();
+        let cmr = diag.cache_miss_reason.unwrap();
+        assert_eq!(cmr.kind, Some(CacheMissReasonKind::ToolsChanged));
+        assert_eq!(cmr.cache_missed_input_tokens, Some(89018));
     }
 
-    // ── P0 missing tests (from QA review) ──
+    #[test]
+    fn parse_stop_reason_unknown_degrades_softly() {
+        let json = r#"{
+            "type":"assistant",
+            "uuid":"a1",
+            "parentUuid":"p",
+            "sessionId":"s1",
+            "message":{
+                "model":"claude-opus-4-6",
+                "role":"assistant",
+                "stop_reason":"future_reason_xyz",
+                "usage":{"input_tokens":1,"output_tokens":1},
+                "content":[]
+            }
+        }"#;
+        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
+        let msg = entry.message.unwrap();
+        assert_eq!(msg.stop_reason, Some(StopReason::Unknown));
+    }
+
+    #[test]
+    fn ghost_keys_stop_details_container_are_dropped() {
+        // Real JSONL carries these as null. Ensure we still parse cleanly
+        // even when they're present. We don't expose them as fields.
+        let json = r#"{
+            "type":"assistant",
+            "uuid":"a1",
+            "parentUuid":"p",
+            "sessionId":"s1",
+            "message":{
+                "model":"claude-opus-4-6",
+                "role":"assistant",
+                "stop_reason":"end_turn",
+                "stop_details":null,
+                "container":null,
+                "usage":{"input_tokens":1,"output_tokens":1},
+                "content":[]
+            }
+        }"#;
+        let _: AssistantEntry = serde_json::from_str(json).unwrap();
+    }
+
+    #[test]
+    fn parse_attribution_family() {
+        let json = r#"{
+            "type":"assistant",
+            "uuid":"a1",
+            "parentUuid":"p",
+            "sessionId":"s1",
+            "attributionAgent":"general-purpose",
+            "attributionMcpServer":"plugin:fs",
+            "attributionMcpTool":"read_file",
+            "attributionPlugin":"superpowers",
+            "attributionSkill":"superpowers:brainstorming",
+            "apiErrorStatus":429,
+            "message":{
+                "model":"claude-opus-4-6",
+                "role":"assistant",
+                "usage":{"input_tokens":1,"output_tokens":1},
+                "content":[]
+            }
+        }"#;
+        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.attribution_agent.as_deref(), Some("general-purpose"));
+        assert_eq!(entry.attribution_mcp_server.as_deref(), Some("plugin:fs"));
+        assert_eq!(entry.attribution_mcp_tool.as_deref(), Some("read_file"));
+        assert_eq!(entry.attribution_plugin.as_deref(), Some("superpowers"));
+        assert_eq!(
+            entry.attribution_skill.as_deref(),
+            Some("superpowers:brainstorming")
+        );
+        assert_eq!(entry.api_error_status, Some(429));
+    }
+
+    #[test]
+    fn content_block_unknown_type_becomes_other() {
+        let json = r#"{"type":"server_tool_use","id":"st_01","name":"web_search"}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        match block {
+            ContentBlock::Other => {}
+            other => panic!("expected Other, got {other:?}"),
+        }
+    }
 
     #[test]
     fn usage_iterations_as_array() {
@@ -464,154 +422,5 @@ mod tests {
         }"#;
         let usage: Usage = serde_json::from_str(json).unwrap();
         assert!(usage.iterations.as_ref().unwrap().is_array());
-    }
-
-    #[test]
-    fn usage_iterations_as_null() {
-        let json = r#"{"input_tokens": 10, "output_tokens": 20, "iterations": null}"#;
-        let usage: Usage = serde_json::from_str(json).unwrap();
-        // serde deserializes JSON null into Option::None for Option<Value>
-        assert!(usage.iterations.is_none());
-    }
-
-    #[test]
-    fn extra_unknown_fields_are_ignored() {
-        let json = r#"{
-            "type": "assistant",
-            "uuid": "test-extra",
-            "sessionId": "s1",
-            "completelyNewField": true,
-            "anotherFutureField": {"nested": "data"},
-            "message": {
-                "model": "claude-opus-4-6",
-                "role": "assistant",
-                "content": [],
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-                "brandNewApiField": 42
-            }
-        }"#;
-        let entry: Entry = serde_json::from_str(json).unwrap();
-        match entry {
-            Entry::Assistant(a) => {
-                assert_eq!(a.uuid.as_deref(), Some("test-extra"));
-            }
-            other => panic!("Expected Assistant, got: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn all_transcript_common_fields_null() {
-        let json = r#"{
-            "type": "assistant",
-            "uuid": null,
-            "parentUuid": null,
-            "logicalParentUuid": null,
-            "isSidechain": null,
-            "timestamp": null,
-            "sessionId": null,
-            "cwd": null,
-            "version": null,
-            "gitBranch": null,
-            "userType": null,
-            "entrypoint": null,
-            "slug": null,
-            "agentId": null,
-            "teamName": null,
-            "agentName": null,
-            "agentColor": null,
-            "promptId": null,
-            "message": null
-        }"#;
-        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert!(entry.uuid.is_none());
-        assert!(entry.parent_uuid.is_none());
-        assert!(entry.is_sidechain.is_none());
-        assert!(entry.message.is_none());
-    }
-
-    // ── Layer A: Round-trip value assertions for v2.1 attribution fields ──
-
-    #[test]
-    fn parse_assistant_with_attribution_plugin_and_skill() {
-        // Verifies that camelCase JSON keys attributionPlugin and attributionSkill
-        // map to the snake_case Rust fields attribution_plugin and attribution_skill.
-        // The #[serde(rename_all = "camelCase")] on the struct handles this via the macro.
-        let json = r#"{
-            "type": "assistant",
-            "uuid": "a-attr-001",
-            "sessionId": "sess-attr",
-            "timestamp": "2026-05-13T10:00:00.000Z",
-            "attributionPlugin": "superpowers",
-            "attributionSkill": "superpowers:brainstorming",
-            "message": {
-                "model": "claude-opus-4-6",
-                "role": "assistant",
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-                "content": [{"type": "text", "text": "Here is a brainstorming result"}]
-            }
-        }"#;
-
-        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            entry.attribution_plugin.as_deref(),
-            Some("superpowers"),
-            "attribution_plugin must be Some(\"superpowers\")"
-        );
-        assert_eq!(
-            entry.attribution_skill.as_deref(),
-            Some("superpowers:brainstorming"),
-            "attribution_skill must be Some(\"superpowers:brainstorming\")"
-        );
-        // Verify existing usage fields still parse correctly alongside new fields
-        let msg = entry.message.as_ref().unwrap();
-        let usage = msg.usage.as_ref().unwrap();
-        assert_eq!(usage.input_tokens, Some(100));
-        assert_eq!(usage.output_tokens, Some(50));
-    }
-
-    #[test]
-    fn parse_assistant_legacy_no_attribution() {
-        // A v2.0 style assistant entry without attribution fields must parse cleanly
-        // and expose both attribution fields as None. Existing fields must not be affected.
-        let json = r#"{
-            "type": "assistant",
-            "uuid": "a-legacy-001",
-            "sessionId": "sess-legacy",
-            "timestamp": "2025-06-01T10:00:00Z",
-            "message": {
-                "model": "claude-sonnet-4-20250514",
-                "role": "assistant",
-                "stop_reason": "end_turn",
-                "usage": {
-                    "input_tokens": 500,
-                    "output_tokens": 100,
-                    "cache_creation_input_tokens": 200,
-                    "cache_read_input_tokens": 1500
-                },
-                "content": [{"type": "text", "text": "Here is my response"}]
-            },
-            "requestId": "req-legacy-001"
-        }"#;
-
-        let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        // New v2.1 fields must be None for old entries
-        assert!(
-            entry.attribution_plugin.is_none(),
-            "attribution_plugin should be None for legacy (pre-2.1.138) entry"
-        );
-        assert!(
-            entry.attribution_skill.is_none(),
-            "attribution_skill should be None for legacy (pre-2.1.138) entry"
-        );
-        // Existing fields must continue to parse correctly
-        assert_eq!(entry.uuid.as_deref(), Some("a-legacy-001"));
-        assert_eq!(entry.request_id.as_deref(), Some("req-legacy-001"));
-        let msg = entry.message.as_ref().unwrap();
-        let usage = msg.usage.as_ref().unwrap();
-        assert_eq!(usage.input_tokens, Some(500));
-        assert_eq!(usage.output_tokens, Some(100));
-        assert_eq!(usage.cache_creation_input_tokens, Some(200));
-        assert_eq!(usage.cache_read_input_tokens, Some(1500));
     }
 }

@@ -754,7 +754,7 @@ mod tests {
 
     fn make_assistant_line(request_id: &str, input: u64, output: u64) -> String {
         format!(
-            r#"{{"type":"assistant","uuid":"u-{}","timestamp":"2026-03-16T10:00:00Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":{},"output_tokens":{},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"hi"}}]}},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"{}"}}"#,
+            r#"{{"type":"assistant","uuid":"u-{}","timestamp":"2026-03-16T10:00:00Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":{},"output_tokens":{},"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"hi"}}]}},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"{}"}}"#,
             request_id, input, output, request_id
         )
     }
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn raw_counter_skips_synthetic() {
         let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, r#"{{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{{"model":"<synthetic>","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[]}},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r1"}}"#).unwrap();
+        writeln!(f, r#"{{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{{"model":"<synthetic>","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[]}},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r1"}}"#).unwrap();
         writeln!(f, "{}", make_assistant_line("r2", 200, 75)).unwrap();
         f.flush().unwrap();
 
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn raw_counter_respects_sidechain_flag() {
-        let sidechain_line = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r1"}"#;
+        let sidechain_line = r#"{"type":"assistant","uuid":"u1","timestamp":"2026-03-16T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[]},"sessionId":"s1","cwd":"/tmp","gitBranch":"","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r1"}"#;
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "{}", sidechain_line).unwrap();
         f.flush().unwrap();

@@ -1,84 +1,50 @@
+//! cc-session-jsonl v2 — strongly-typed Claude Code session entries.
+//!
+//! v2 design philosophy (see `docs/cc-session-jsonl-v2-field-survey.md`):
+//!
+//! - Every entry type owns its own field list — the legacy `transcript_entry!`
+//!   macro is gone. Repeating the 9 truly-universal DAG fields by hand across
+//!   ~15 structs is the deliberate price of letting each type model only what
+//!   it really has.
+//! - Low-cardinality enum-shaped fields (e.g. `stopReason`, `permissionMode`,
+//!   `entrypoint`, `promptSource`, `origin.kind`) are Rust enums with
+//!   `#[serde(other)] Unknown` so an unfamiliar future value degrades the
+//!   single field rather than the whole entry.
+//! - `parentUuid` is `Option<String>` everywhere except `AssistantEntry`,
+//!   where it is `String` (assistant entries are always replies to something).
+//! - `SystemEntry.body` and `AttachmentEntry.body` are tagged sub-enums
+//!   driven by the inner `subtype` / `attachment.type` discriminator.
+//! - Ghost keys (`message.stop_details`, `message.container`, both always
+//!   `null` in real data) are deliberately not modelled.
+//! - Three new entry types observed in the field — `started`, `result`,
+//!   `bridge-session` — have no `uuid` and per the survey settle to `Ignored`.
+//!   The default `Entry::deserialize` already routes them there because the
+//!   types are not enumerated; no extra wiring is needed.
+
 pub mod assistant;
+pub mod attachment;
+pub mod common;
 pub mod context;
 pub mod metadata;
 pub mod progress;
+pub mod system;
 pub mod tracking;
 pub mod user;
 pub mod workflow;
 
 pub use assistant::*;
+pub use attachment::*;
+pub use common::*;
 pub use context::*;
 pub use metadata::*;
 pub use progress::*;
+pub use system::*;
 pub use tracking::*;
 pub use user::*;
 pub use workflow::*;
 
 use serde::de;
 use serde::{Deserialize, Serialize};
-
-/// Macro that defines a struct with the common transcript fields shared by all
-/// transcript message types (user, assistant, system, attachment), plus any
-/// additional fields provided.
-///
-/// The common fields are: uuid, parent_uuid, logical_parent_uuid, is_sidechain,
-/// timestamp, session_id, cwd, version, git_branch, user_type, entrypoint, slug,
-/// agent_id, team_name, agent_name, agent_color, prompt_id.
-///
-/// Usage:
-/// ```ignore
-/// transcript_entry! {
-///     /// Doc comment
-///     pub struct MyEntry {
-///         // extra fields here
-///         pub my_field: Option<String>,
-///     }
-/// }
-/// ```
-macro_rules! transcript_entry {
-    (
-        $(#[$meta:meta])*
-        pub struct $name:ident {
-            $(
-                $(#[$field_meta:meta])*
-                pub $field:ident : $ty:ty
-            ),*
-            $(,)?
-        }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, ::serde::Deserialize, ::serde::Serialize)]
-        #[serde(rename_all = "camelCase")]
-        pub struct $name {
-            // ── Common transcript fields ──
-            pub uuid: Option<String>,
-            pub parent_uuid: Option<String>,
-            pub logical_parent_uuid: Option<String>,
-            pub is_sidechain: Option<bool>,
-            pub timestamp: Option<String>,
-            pub session_id: Option<String>,
-            pub cwd: Option<String>,
-            pub version: Option<String>,
-            pub git_branch: Option<String>,
-            pub user_type: Option<String>,
-            pub entrypoint: Option<String>,
-            pub slug: Option<String>,
-            pub agent_id: Option<String>,
-            pub team_name: Option<String>,
-            pub agent_name: Option<String>,
-            pub agent_color: Option<String>,
-            pub prompt_id: Option<String>,
-            // ── Entry-specific fields ──
-            $(
-                $(#[$field_meta])*
-                pub $field : $ty,
-            )*
-        }
-    };
-}
-
-// Make the macro available to submodules
-pub(crate) use transcript_entry;
 
 /// A structurally-preserved entry of an unrecognized JSONL entry type that
 /// nonetheless carries DAG-continuity fields (`uuid` + `sessionId`).
@@ -103,10 +69,13 @@ pub struct PassthroughEntry {
 
 /// All entry types in a Claude Code session JSONL file.
 ///
-/// Serialization uses `#[serde(tag = "type")]` (derived).  Deserialization
-/// is implemented manually so that unknown/future entry types can be routed
-/// to either [`Passthrough`] (DAG-continuity preserved) or [`Ignored`]
-/// (no DAG fields, safe to discard).
+/// Serialization uses `#[serde(tag = "type")]` (derived). Deserialization
+/// is implemented manually so that:
+///   1. Known types whose payload fails to decode return
+///      `ParseError::StructDrift` instead of a plain JSON error — this is
+///      the "shape changed under us" signal the strict layer cares about.
+///   2. Unknown/future entry types route to [`Entry::Passthrough`] when they
+///      still carry DAG keys, or [`Entry::Ignored`] when they don't.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
@@ -175,30 +144,77 @@ pub enum Entry {
 
 // ── Custom Deserialization ──────────────────────────────────────────
 //
-// We cannot use `#[serde(other)]` with two distinct fallback variants
-// (Passthrough + Ignored), so deserialization is implemented manually.
-// The strategy:
-//   1. Read the line as `serde_json::Value`.
-//   2. Peek at the `type` field.
-//   3. For known types → `serde_json::from_value` → typed variant.
-//   4. For unknown types → check `uuid` + `sessionId`:
-//        • Both present & non-empty → `Passthrough` (DAG continuity)
-//        • Otherwise               → `Ignored`  (safe to discard)
+// The hand-written Deserialize implementation enforces three strict rules:
+//
+//   1. Known `type` strings are dispatched to their typed payloads. If the
+//      typed payload fails (e.g. a `usage.input_tokens` arrives as a string),
+//      the deserializer **records the `type` and the inner error** via
+//      [`StructDriftMarker`]; the parser layer reads that marker and emits
+//      `ParseError::StructDrift`. We deliberately do not soft-degrade —
+//      "known type, broken shape" is the canary the lenient reader counts.
+//
+//   2. Unknown `type` strings are inspected for DAG keys (`uuid` +
+//      `sessionId`, both present and non-empty). Both present → `Passthrough`
+//      (so the DAG stays connected). Either missing → `Ignored`.
+//
+//   3. The legacy `agentId` promotion (top-level `agentId` is sometimes
+//      missing on subagent trunk entries — the real id is buried in
+//      `toolUseResult.agentId`) is preserved here so downstream consumers
+//      read one uniform field.
+
+/// Sentinel error carried out of the `Deserialize` impl when a known type's
+/// payload fails to decode. The outer `parse_entry` recovers the original
+/// `type` name from this marker and turns it into [`crate::parser::ParseError::StructDrift`].
+///
+/// Encoded into a serde error message as `__cc_struct_drift__<type>:<inner>`
+/// so it round-trips through `D::Error::custom` cleanly.
+#[doc(hidden)]
+pub(crate) const STRUCT_DRIFT_PREFIX: &str = "__cc_struct_drift__";
+
 impl<'de> Deserialize<'de> for Entry {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
-        let entry_type = value
+        // Capture as String so the borrow doesn't fight `from_value(value)`
+        // moves inside the `known!` macro below.
+        let entry_type: String = value
             .get("type")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
+        let entry_type_ref: &str = entry_type.as_str();
 
-        let entry = match entry_type {
+        // Helper macro: turn a typed-payload deserialization failure for a
+        // known `type` discriminator into the STRUCT_DRIFT_PREFIX sentinel
+        // string. `parse_entry` reads that prefix in `From<serde_json::Error>`
+        // and lifts it back to `ParseError::StructDrift`.
+        macro_rules! known {
+            ($variant:ident) => {
+                match serde_json::from_value(value) {
+                    Ok(v) => Entry::$variant(v),
+                    Err(e) => {
+                        return Err(de::Error::custom(format!(
+                            "{}{}:{}",
+                            STRUCT_DRIFT_PREFIX, entry_type, e
+                        )));
+                    }
+                }
+            };
+        }
+
+        let entry = match entry_type_ref {
             "user" => {
-                let mut user: UserEntry =
-                    serde_json::from_value(value).map_err(de::Error::custom)?;
+                let mut user: UserEntry = match serde_json::from_value(value) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return Err(de::Error::custom(format!(
+                            "{}{}:{}",
+                            STRUCT_DRIFT_PREFIX, &entry_type, e
+                        )));
+                    }
+                };
                 // ── agentId promotion ──
                 // Trunk entries carry the subagent identifier inside
                 // `toolUseResult.agentId`, not at top level.  Promote
@@ -214,78 +230,30 @@ impl<'de> Deserialize<'de> for Entry {
                 }
                 Entry::User(user)
             }
-            "assistant" => {
-                Entry::Assistant(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "system" => {
-                Entry::System(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "attachment" => {
-                Entry::Attachment(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "summary" => {
-                Entry::Summary(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "custom-title" => {
-                Entry::CustomTitle(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "ai-title" => {
-                Entry::AiTitle(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "last-prompt" => {
-                Entry::LastPrompt(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "task-summary" => {
-                Entry::TaskSummary(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "tag" => {
-                Entry::Tag(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "agent-name" => {
-                Entry::AgentName(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "agent-color" => {
-                Entry::AgentColor(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "agent-setting" => {
-                Entry::AgentSetting(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "pr-link" => {
-                Entry::PrLink(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "mode" => {
-                Entry::Mode(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "permission-mode" => {
-                Entry::PermissionMode(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "progress" => {
-                Entry::Progress(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "queue-operation" => {
-                Entry::QueueOperation(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "speculation-accept" => {
-                Entry::SpeculationAccept(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "worktree-state" => {
-                Entry::WorktreeState(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "content-replacement" => {
-                Entry::ContentReplacement(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "file-history-snapshot" => {
-                Entry::FileHistorySnapshot(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "attribution-snapshot" => {
-                Entry::AttributionSnapshot(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "marble-origami-commit" => {
-                Entry::ContextCollapseCommit(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
-            "marble-origami-snapshot" => {
-                Entry::ContextCollapseSnapshot(serde_json::from_value(value).map_err(de::Error::custom)?)
-            }
+            "assistant" => known!(Assistant),
+            "system" => known!(System),
+            "attachment" => known!(Attachment),
+            "summary" => known!(Summary),
+            "custom-title" => known!(CustomTitle),
+            "ai-title" => known!(AiTitle),
+            "last-prompt" => known!(LastPrompt),
+            "task-summary" => known!(TaskSummary),
+            "tag" => known!(Tag),
+            "agent-name" => known!(AgentName),
+            "agent-color" => known!(AgentColor),
+            "agent-setting" => known!(AgentSetting),
+            "pr-link" => known!(PrLink),
+            "mode" => known!(Mode),
+            "permission-mode" => known!(PermissionMode),
+            "progress" => known!(Progress),
+            "queue-operation" => known!(QueueOperation),
+            "speculation-accept" => known!(SpeculationAccept),
+            "worktree-state" => known!(WorktreeState),
+            "content-replacement" => known!(ContentReplacement),
+            "file-history-snapshot" => known!(FileHistorySnapshot),
+            "attribution-snapshot" => known!(AttributionSnapshot),
+            "marble-origami-commit" => known!(ContextCollapseCommit),
+            "marble-origami-snapshot" => known!(ContextCollapseSnapshot),
             // ── Unknown types — classify by DAG fields ──
             _ => {
                 let has_uuid = value
@@ -300,9 +268,13 @@ impl<'de> Deserialize<'de> for Entry {
                     .unwrap_or(false);
 
                 if has_uuid && has_sid {
-                    Entry::Passthrough(
-                        serde_json::from_value(value).map_err(de::Error::custom)?,
-                    )
+                    match serde_json::from_value(value) {
+                        Ok(p) => Entry::Passthrough(p),
+                        // Even Passthrough is best-effort: if for some reason
+                        // we can't decode the minimal shape, fall through to
+                        // Ignored rather than fail the whole line.
+                        Err(_) => Entry::Ignored,
+                    }
                 } else {
                     Entry::Ignored
                 }
@@ -328,14 +300,14 @@ mod tests {
 
     #[test]
     fn route_assistant() {
-        let json = r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[]}}"#;
+        let json = r#"{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[]}}"#;
         let entry: Entry = serde_json::from_str(json).unwrap();
         assert!(matches!(entry, Entry::Assistant(_)));
     }
 
     #[test]
     fn route_system() {
-        let json = r#"{"type":"system","uuid":"sys1","sessionId":"s1","subtype":"init"}"#;
+        let json = r#"{"type":"system","uuid":"sys1","sessionId":"s1","subtype":"informational","content":"x","level":"info","isMeta":false}"#;
         let entry: Entry = serde_json::from_str(json).unwrap();
         assert!(matches!(entry, Entry::System(_)));
     }
@@ -506,10 +478,32 @@ mod tests {
 
     #[test]
     fn unknown_type_with_dag_fields_is_passthrough() {
-        let json =
-            r#"{"type":"future-feature-abc","uuid":"u1","sessionId":"s1","data":"x"}"#;
+        let json = r#"{"type":"future-feature-abc","uuid":"u1","sessionId":"s1","data":"x"}"#;
         let entry: Entry = serde_json::from_str(json).unwrap();
         assert!(matches!(entry, Entry::Passthrough(_)));
+    }
+
+    #[test]
+    fn new_started_type_without_uuid_is_ignored() {
+        // Survey §6: `started` carries no uuid/sessionId. Falls through to Ignored.
+        let json = r#"{"type":"started","key":"v2:abc","agentId":"x"}"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, Entry::Ignored));
+    }
+
+    #[test]
+    fn new_result_type_without_uuid_is_ignored() {
+        let json = r#"{"type":"result","key":"v2:abc","agentId":"x","result":{}}"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        assert!(matches!(entry, Entry::Ignored));
+    }
+
+    #[test]
+    fn new_bridge_session_without_uuid_is_ignored() {
+        let json = r#"{"type":"bridge-session","sessionId":"s1","bridgeSessionId":"b1","lastSequenceNum":1}"#;
+        let entry: Entry = serde_json::from_str(json).unwrap();
+        // bridge-session has sessionId but no uuid → Ignored per survey §6.
+        assert!(matches!(entry, Entry::Ignored));
     }
 
     #[test]

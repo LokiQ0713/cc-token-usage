@@ -201,9 +201,12 @@ mod tests {
         fs::create_dir_all(&project_dir).unwrap();
 
         let session_id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        // Assistant entries always have a parent (v2 invariant — survey §2);
+        // the fixture supplies `parentUuid` so the strongly-typed
+        // `AssistantEntry.parent_uuid: String` parses cleanly.
         let content = format!(
             r#"{{"type":"user","sessionId":"{session_id}","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{{"role":"user","content":"hello"}}}}
-{{"type":"assistant","sessionId":"{session_id}","uuid":"u2","timestamp":"2026-01-01T00:00:01Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":10,"output_tokens":20}},"content":[{{"type":"text","text":"Hi there"}}]}}}}
+{{"type":"assistant","sessionId":"{session_id}","uuid":"u2","parentUuid":"u1","timestamp":"2026-01-01T00:00:01Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":10,"output_tokens":20}},"content":[{{"type":"text","text":"Hi there"}}]}}}}
 {{"type":"ai-title","sessionId":"{session_id}","aiTitle":"Test Session"}}
 {{"type":"tag","sessionId":"{session_id}","tag":"test"}}
 {{"type":"mode","sessionId":"{session_id}","mode":"code"}}"#

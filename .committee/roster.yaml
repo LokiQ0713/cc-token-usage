@@ -1,0 +1,53 @@
+# cc-token-usage 项目委员会阵容。改完提交进仓库。
+#
+# 这份 roster 描述「项目该备哪些角色」，不决定每轮谁上场。
+# 每轮真正上场谁由 Review 阶段编排者按真实 diff 用 reviewer-routing.md 规则判断。
+#
+# 草案起源：run c742eb-1 / iter-1 / recon.md（2026-06-09）
+# orchestrator 在草案基础上的调整：删掉 recon 起草的 3 个 `skill: null` 的 domain_reviewers，
+# 理由（per pool.md「同底模副本会一起犯同样的错,不叫集成」）：
+#   - 三个 reviewer 文件实际不存在（插件内置只有 committee-review-android）
+#   - 都是 sonnet/opus 跟 correctness 同底模，不提供真正独立视角
+#   - 它们要守的三条 design invariant（serde tag 拼写 / StructDrift 触发 / validate.rs 独立性）
+#     更适合写进 implementer brief 的「边界」一开始就守住，再由 correctness reviewer 顺带核对
+
+iteration_cap: 3
+# v2 类型系统重写横跨两个 crate（cc-session-jsonl 内全部 15 类 entry + cc-token-usage 调用面适配）。
+# 3 轮够大型重构甜区——更多通常意味着结构性问题，该 escalate 而非无限循环。
+
+bootstrap_confirm_roster: false
+# 用户明确：dev-committee 唤起前需求已收敛、不需要 roster bootstrap 确认门。
+# 见 ~/.claude/projects/-Users-loki-cc-cc-token-usage/memory/feedback_dev_committee_no_roster_confirm.md
+
+context_paths:
+  # 项目命令 + workspace 结构 + 数据流——所有 worker 的首要参考
+  - CLAUDE.md
+  # v2 重构的 source of truth：required/optional per type 数据驱动判定，不依赖印象
+  - docs/cc-session-jsonl-v2-field-survey.md
+  # 语义模型：entry 之间什么关系（DAG/sidechain/agent/synthetic）、10 条反直觉事实
+  - docs/session-data-model.md
+
+general_roles:
+  # implementer：v2 是宏 → 独立 struct + 双 tagged 子枚举 + 双 crate 适配的大型重写，用强模型。
+  committee-implementer: { model: opus }
+
+  # correctness：常驻评审 + 与 implementer 跨模型去相关（opus vs sonnet）。
+  # 同底模副本不叫集成；跨模型才真正提供独立视角。
+  committee-review-correctness: { model: sonnet }
+
+  # tester：独立从需求派生测试期望，sonnet 够用。
+  committee-tester: { model: sonnet }
+
+  # acceptance：质量门 + mutation test + spec 对齐，sonnet 够用。
+  committee-acceptance: { model: sonnet }
+
+  # synthesizer：聚合 finding，sonnet 够用。
+  committee-synthesizer: { model: sonnet }
+
+# domain_reviewers：当前不登记。
+# 项目本身没有命中通用敏感面（钱/auth/加密/迁移/依赖变更）；
+# Rust 内置专属面（serde tag 正确性、StructDrift 边界、validate.rs 独立性）已通过
+# implementer brief 的硬边界 + correctness reviewer 兜底覆盖。
+# 未来若引入这些面（如 pricing/ 改动、依赖升级），可在此追加；
+# 插件内置的 android 等触发面在 pool.md，不需要在这里重列。
+domain_reviewers: []

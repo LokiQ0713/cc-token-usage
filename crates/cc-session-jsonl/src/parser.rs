@@ -2,19 +2,34 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
-use crate::types::Entry;
+use crate::types::{Entry, STRUCT_DRIFT_PREFIX};
 
 /// Error type for JSONL parsing.
+///
+/// Three distinct failure modes — keep them separate so callers can route
+/// differently (e.g. `LenientReader` increments different counters for IO,
+/// malformed JSON, and known-type-shape drift):
+///
+/// - [`ParseError::Io`]: I/O while reading the underlying file.
+/// - [`ParseError::Json`]: the JSON text itself is malformed (truncated line,
+///   unbalanced braces, etc.).
+/// - [`ParseError::StructDrift`]: the line is valid JSON, the `type` field
+///   identifies a known entry kind, but the typed payload failed to decode
+///   (e.g. `usage.input_tokens` came in as a string). This is the v2
+///   "shape changed under us" canary — we deliberately do not soft-degrade
+///   here, because soft-degrading a known type would mask schema regressions.
 #[derive(Debug)]
 pub enum ParseError {
     Json(serde_json::Error),
     Io(io::Error),
-}
-
-impl From<serde_json::Error> for ParseError {
-    fn from(e: serde_json::Error) -> Self {
-        ParseError::Json(e)
-    }
+    StructDrift {
+        /// The original `type` discriminator value, e.g. `"assistant"`.
+        entry_type: String,
+        /// The underlying deserialization error message. Stored as `String`
+        /// because the original `serde_json::Error` is consumed when we lift
+        /// the sentinel marker out of the deserializer's `Error::custom` path.
+        message: String,
+    },
 }
 
 impl From<io::Error> for ParseError {
@@ -23,11 +38,38 @@ impl From<io::Error> for ParseError {
     }
 }
 
+impl From<serde_json::Error> for ParseError {
+    fn from(e: serde_json::Error) -> Self {
+        // Promote the StructDrift sentinel from inside a serde error message
+        // back into the typed variant. This is the only way to ship a typed
+        // discriminator out of `Deserialize::deserialize` — serde's error
+        // type can't carry custom data, so we encode the kind in the error
+        // string and parse it here.
+        let message = e.to_string();
+        if let Some(rest) = message.strip_prefix(STRUCT_DRIFT_PREFIX) {
+            if let Some((entry_type, inner)) = rest.split_once(':') {
+                return ParseError::StructDrift {
+                    entry_type: entry_type.to_string(),
+                    message: inner.to_string(),
+                };
+            }
+        }
+        ParseError::Json(e)
+    }
+}
+
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParseError::Json(e) => write!(f, "JSON parse error: {e}"),
             ParseError::Io(e) => write!(f, "IO error: {e}"),
+            ParseError::StructDrift {
+                entry_type,
+                message,
+            } => write!(
+                f,
+                "struct drift on known entry type `{entry_type}`: {message}"
+            ),
         }
     }
 }
@@ -36,7 +78,7 @@ impl std::error::Error for ParseError {}
 
 /// Parse a single JSONL line into an Entry.
 pub fn parse_entry(line: &str) -> Result<Entry, ParseError> {
-    Ok(serde_json::from_str(line)?)
+    serde_json::from_str(line).map_err(ParseError::from)
 }
 
 /// Iterator over entries in a JSONL session file.
@@ -57,6 +99,7 @@ impl SessionReader {
         LenientReader {
             lines: self.lines,
             errors_skipped: 0,
+            struct_drift_count: 0,
             unknown_count: 0,
         }
     }
@@ -83,13 +126,25 @@ impl Iterator for SessionReader {
 pub struct LenientReader {
     lines: io::Lines<BufReader<File>>,
     errors_skipped: usize,
+    struct_drift_count: usize,
     unknown_count: usize,
 }
 
 impl LenientReader {
-    /// Number of lines that failed to parse and were skipped.
+    /// Number of lines that failed to parse and were skipped (malformed JSON
+    /// or IO error). Does *not* count `StructDrift` — those are counted
+    /// separately via [`LenientReader::struct_drift_count`].
     pub fn errors_skipped(&self) -> usize {
         self.errors_skipped
+    }
+
+    /// Number of lines where the JSON was well-formed and the `type`
+    /// discriminator was known, but the typed payload failed to decode (v2
+    /// `ParseError::StructDrift`). A non-zero value is a hard signal that
+    /// Claude Code shipped a schema change for one of the modelled entry
+    /// types — bump the cc-session-jsonl dependency.
+    pub fn struct_drift_count(&self) -> usize {
+        self.struct_drift_count
     }
 
     /// Number of entries successfully parsed as [`Entry::Passthrough`]
@@ -120,6 +175,13 @@ impl Iterator for LenientReader {
                         self.unknown_count += 1;
                     }
                     return Some(entry);
+                }
+                Err(ParseError::StructDrift { .. }) => {
+                    // Schema drift: still skip the line so the iterator stays
+                    // lenient, but count it on its own axis. Real-data smoke
+                    // tests assert `struct_drift_count() == 0`.
+                    self.struct_drift_count += 1;
+                    continue;
                 }
                 Err(_) => {
                     self.errors_skipped += 1;
@@ -155,7 +217,7 @@ mod tests {
 
     #[test]
     fn parse_entry_valid_assistant() {
-        let line = r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"hi"}]}}"#;
+        let line = r#"{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"hi"}]}}"#;
         let entry = parse_entry(line).unwrap();
         assert!(matches!(entry, Entry::Assistant(_)));
     }
@@ -194,13 +256,40 @@ mod tests {
         assert!(matches!(entry, Entry::Passthrough(_)));
     }
 
+    #[test]
+    fn parse_entry_known_type_bad_shape_is_struct_drift() {
+        // `assistant` is a known type; `message.usage.input_tokens` here is
+        // a string instead of a u64 — that's a typed-payload failure, which
+        // surfaces as ParseError::StructDrift (not ParseError::Json).
+        let line = r#"{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"m","role":"assistant","usage":{"input_tokens":"not-a-number"}}}"#;
+        let err = parse_entry(line).unwrap_err();
+        match err {
+            ParseError::StructDrift { entry_type, .. } => {
+                assert_eq!(entry_type, "assistant");
+            }
+            other => panic!("Expected StructDrift, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn parse_entry_user_bad_shape_is_struct_drift() {
+        // `user` is known; `imagePasteIds` should be an array of strings,
+        // here it arrives as an object → StructDrift on the user kind.
+        let line = r#"{"type":"user","uuid":"u1","sessionId":"s1","imagePasteIds":{"oops":true}}"#;
+        let err = parse_entry(line).unwrap_err();
+        match err {
+            ParseError::StructDrift { entry_type, .. } => assert_eq!(entry_type, "user"),
+            other => panic!("Expected StructDrift, got: {other}"),
+        }
+    }
+
     // ── SessionReader tests ──
 
     #[test]
     fn session_reader_open_and_iterate() {
         let content = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":"one"}}
 {"type":"user","uuid":"u2","sessionId":"s1","message":{"role":"user","content":"two"}}
-{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"reply"}]}}"#;
+{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"reply"}]}}"#;
 
         let file = write_temp_file(content);
         let reader = SessionReader::open(file.path()).unwrap();
@@ -274,6 +363,23 @@ GARBAGE LINE
         let entries: Vec<_> = lenient.by_ref().collect();
         assert_eq!(entries.len(), 2);
         assert_eq!(lenient.errors_skipped(), 2);
+        assert_eq!(lenient.struct_drift_count(), 0);
+    }
+
+    #[test]
+    fn lenient_reader_counts_struct_drift_separately() {
+        // 1 OK, 1 struct drift (known type, bad shape), 1 garbage line, 1 OK.
+        let content = r#"{"type":"user","uuid":"u1","sessionId":"s1","message":{"role":"user","content":"ok"}}
+{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"m","role":"assistant","usage":{"input_tokens":"oops"}}}
+this is not json
+{"type":"user","uuid":"u2","sessionId":"s1","message":{"role":"user","content":"ok"}}"#;
+        let file = write_temp_file(content);
+        let reader = SessionReader::open(file.path()).unwrap();
+        let mut lenient = reader.lenient();
+        let entries: Vec<_> = lenient.by_ref().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(lenient.struct_drift_count(), 1);
+        assert_eq!(lenient.errors_skipped(), 1);
     }
 
     #[test]
@@ -348,6 +454,15 @@ GARBAGE LINE
         let err = parse_entry("not json").unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("JSON parse error"));
+    }
+
+    #[test]
+    fn parse_error_display_struct_drift() {
+        let line = r#"{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"m","role":"assistant","usage":{"input_tokens":"oops"}}}"#;
+        let err = parse_entry(line).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("struct drift"));
+        assert!(msg.contains("assistant"));
     }
 
     #[test]

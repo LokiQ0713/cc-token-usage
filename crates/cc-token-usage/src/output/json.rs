@@ -849,7 +849,6 @@ mod tests {
 
     fn make_turn(ts: &str) -> ValidatedTurn {
         ValidatedTurn {
-            parent_uuid: None,
             uuid: format!("u-{ts}"),
             request_id: Some(format!("r-{ts}")),
             timestamp: ts.parse::<DateTime<Utc>>().unwrap(),
@@ -886,11 +885,9 @@ mod tests {
         let first = turns.iter().map(|t| t.timestamp).min();
         let last = turns.iter().map(|t| t.timestamp).max();
         SessionData {
-            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             session_id: id.into(),
             project: Some("test".into()),
             turns,
-            user_entries: vec![],
             subagents: vec![],
             plugins: vec![],
             skills: vec![],

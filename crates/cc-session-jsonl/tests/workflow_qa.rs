@@ -238,8 +238,8 @@ fn system_turn_duration_pending_workflow_count_boundary_zero() {
     let entry: Entry = serde_json::from_str(json).unwrap();
     match entry {
         Entry::System(s) => {
-            assert_eq!(s.pending_workflow_count, Some(0));
-            assert_eq!(s.message_count, Some(2));
+            assert_eq!(s.pending_workflow_count(), Some(0));
+            assert_eq!(s.message_count(), Some(2));
         }
         _ => panic!("expected System"),
     }
@@ -256,9 +256,9 @@ fn system_turn_duration_large_values() {
     let entry: Entry = serde_json::from_str(json).unwrap();
     match entry {
         Entry::System(s) => {
-            assert_eq!(s.duration_ms, Some(999999999));
-            assert_eq!(s.message_count, Some(9999));
-            assert_eq!(s.pending_workflow_count, Some(50));
+            assert_eq!(s.duration_ms(), Some(999999999));
+            assert_eq!(s.message_count(), Some(9999));
+            assert_eq!(s.pending_workflow_count(), Some(50));
         }
         _ => panic!("expected System"),
     }
@@ -275,7 +275,7 @@ fn system_local_command_content_is_value_not_string() {
     let entry: Entry = serde_json::from_str(json).unwrap();
     match entry {
         Entry::System(s) => {
-            let c = s.content.as_ref().expect("content must be Some");
+            let c = s.content().expect("content must be Some");
             assert!(c.is_string());
             assert!(c.as_str().unwrap().contains("workflows"));
         }
@@ -292,7 +292,7 @@ fn system_local_command_content_as_object() {
     let entry: Entry = serde_json::from_str(json).unwrap();
     match entry {
         Entry::System(s) => {
-            let c = s.content.as_ref().unwrap();
+            let c = s.content().unwrap();
             assert!(c.is_object());
             assert_eq!(c["cmd"], "/workflows");
         }
@@ -310,9 +310,9 @@ fn system_away_summary_no_level() {
     let entry: Entry = serde_json::from_str(json).unwrap();
     match entry {
         Entry::System(s) => {
-            assert_eq!(s.subtype.as_deref(), Some("away_summary"));
-            assert!(s.level.is_none());
-            assert!(s.content.as_ref().unwrap().is_string());
+            assert_eq!(s.subtype(), Some("away_summary"));
+            assert!(s.level().is_none());
+            assert!(s.content().unwrap().is_string());
         }
         _ => panic!("expected System"),
     }
@@ -322,7 +322,7 @@ fn system_away_summary_no_level() {
 
 #[test]
 fn attachment_entry_top_level_field_present() {
-    use cc_session_jsonl::types::AttachmentEntry;
+    use cc_session_jsonl::types::{AttachmentBody, AttachmentEntry};
     let json = r#"{
         "type":"attachment","uuid":"att-1","sessionId":"s1",
         "attachment":{"type":"hook_success","command":"run.sh","exitCode":0}
@@ -332,9 +332,16 @@ fn attachment_entry_top_level_field_present() {
         e.message.is_none(),
         "real v2.1.159 data has no `message` field"
     );
-    let att = e.attachment.as_ref().expect("attachment must be Some");
-    assert_eq!(att["type"], "hook_success");
-    assert_eq!(att["exitCode"], 0);
+    let body = e.attachment.as_ref().expect("attachment must be Some");
+    match body {
+        AttachmentBody::HookSuccess {
+            command, exit_code, ..
+        } => {
+            assert_eq!(command.as_deref(), Some("run.sh"));
+            assert_eq!(*exit_code, Some(0));
+        }
+        other => panic!("expected HookSuccess, got {other:?}"),
+    }
     assert_eq!(e.attachment_subtype(), Some("hook_success"));
 }
 
@@ -356,29 +363,47 @@ fn attachment_entry_with_both_message_and_attachment() {
 #[test]
 fn attachment_subtype_returns_none_when_type_key_absent() {
     use cc_session_jsonl::types::AttachmentEntry;
+    // An attachment object lacking the inner `type` discriminator lands in
+    // AttachmentBody::Unknown (the `#[serde(other)]` fallback).
     let json = r#"{"type":"attachment","uuid":"att-3","sessionId":"s1","attachment":{"data":"no-type-field"}}"#;
     let e: AttachmentEntry = serde_json::from_str(json).unwrap();
-    // attachment exists but has no "type" key
     assert!(e.attachment.is_some());
+    // subtype helper returns None when body is Unknown.
     assert!(e.attachment_subtype().is_none());
 }
 
 #[test]
 fn attachment_subtype_skill_listing() {
-    use cc_session_jsonl::types::AttachmentEntry;
-    let json = r#"{"type":"attachment","uuid":"att-sl","sessionId":"s","attachment":{"type":"skill_listing","skills":["a","b"]}}"#;
+    use cc_session_jsonl::types::{AttachmentBody, AttachmentEntry};
+    // skill_listing has typed fields. Survey §5 reports an optional `names`
+    // array. (Real data uses `names` not `skills`; the input below is shaped
+    // for the test only and lands `names: None`.)
+    let json = r#"{"type":"attachment","uuid":"att-sl","sessionId":"s","attachment":{"type":"skill_listing","names":["a","b"]}}"#;
     let e: AttachmentEntry = serde_json::from_str(json).unwrap();
     assert_eq!(e.attachment_subtype(), Some("skill_listing"));
-    assert_eq!(e.attachment.as_ref().unwrap()["skills"][0], "a");
+    match e.attachment.as_ref().unwrap() {
+        AttachmentBody::SkillListing { names, .. } => {
+            assert_eq!(names.as_ref().unwrap()[0], "a");
+        }
+        other => panic!("expected SkillListing, got {other:?}"),
+    }
 }
 
 #[test]
 fn attachment_subtype_file() {
-    use cc_session_jsonl::types::AttachmentEntry;
+    use cc_session_jsonl::types::{AttachmentBody, AttachmentEntry};
+    // `file` is a long-tail subtype (survey §5: 80 entries, ~1% of all
+    // attachments). v2 keeps the long tail in `AttachmentBody::Unknown` so
+    // consumers can still detect "this isn't one of the top-6" without
+    // adding more typed variants for every rare shape.
     let json = r#"{"type":"attachment","uuid":"att-file","sessionId":"s","attachment":{"type":"file","path":"/a/b.txt","content":"hello"}}"#;
     let e: AttachmentEntry = serde_json::from_str(json).unwrap();
-    assert_eq!(e.attachment_subtype(), Some("file"));
-    assert_eq!(e.attachment.as_ref().unwrap()["path"], "/a/b.txt");
+    assert!(matches!(
+        e.attachment.as_ref().unwrap(),
+        AttachmentBody::Unknown
+    ));
+    // subtype helper returns None for Unknown.
+    assert!(e.attachment_subtype().is_none());
 }
 
 // ─── Layer 2 (scanner): Type4 workflow agent discovery ───────────────────────

@@ -1,4 +1,3 @@
-pub mod dag_html;
 pub mod html;
 pub mod html_new;
 pub mod json;

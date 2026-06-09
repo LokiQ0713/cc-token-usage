@@ -287,7 +287,7 @@ fn fill_rate_attribution_skill() {
 #[test]
 fn fill_rate_hook_count() {
     let (parsed, top_level) =
-        count_system_field(FIXTURE_NEW, "hookCount", |s| s.hook_count.is_some());
+        count_system_field(FIXTURE_NEW, "hookCount", |s| s.hook_count().is_some());
     assert_eq!(
         top_level, parsed,
         "hookCount fill-rate mismatch: JSONL has {} top-level occurrences in system entries, \
@@ -303,7 +303,7 @@ fn fill_rate_hook_count() {
 #[test]
 fn fill_rate_hook_infos() {
     let (parsed, top_level) =
-        count_system_field(FIXTURE_NEW, "hookInfos", |s| s.hook_infos.is_some());
+        count_system_field(FIXTURE_NEW, "hookInfos", |s| s.hook_infos().is_some());
     assert_eq!(
         top_level, parsed,
         "hookInfos fill-rate mismatch: JSONL has {} top-level occurrences in system entries, \
@@ -315,7 +315,7 @@ fn fill_rate_hook_infos() {
 #[test]
 fn fill_rate_prevented_continuation() {
     let (parsed, top_level) = count_system_field(FIXTURE_NEW, "preventedContinuation", |s| {
-        s.prevented_continuation.is_some()
+        s.prevented_continuation().is_some()
     });
     assert_eq!(
         top_level, parsed,
@@ -331,7 +331,7 @@ fn fill_rate_tool_use_id_system() {
     // (camelCase, lowercase d) in some other contexts, so we must use top-level JSON
     // key matching to count only the exact string "toolUseID".
     let (parsed, top_level) =
-        count_system_field(FIXTURE_NEW, "toolUseID", |s| s.tool_use_id.is_some());
+        count_system_field(FIXTURE_NEW, "toolUseID", |s| s.tool_use_id().is_some());
     assert_eq!(
         top_level, parsed,
         "toolUseID fill-rate mismatch: JSONL has {} top-level occurrences in system entries, \
@@ -375,7 +375,7 @@ fn fill_rate_hook_errors_if_present() {
             .lines()
             .filter(|l| !l.trim().is_empty())
             .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
-            .filter(|e| matches!(e, Entry::System(s) if s.hook_errors.is_some()))
+            .filter(|e| matches!(e, Entry::System(s) if s.hook_errors().is_some()))
             .count();
         assert_eq!(
             top_level_grep, parsed,
@@ -393,7 +393,7 @@ fn fill_rate_message_count() {
     // turn_duration system entries carry messageCount. Renamed field
     // (message_count → messageCount); parity guards the rename spelling.
     let (parsed, top_level) =
-        count_system_field(FIXTURE_NEW, "messageCount", |s| s.message_count.is_some());
+        count_system_field(FIXTURE_NEW, "messageCount", |s| s.message_count().is_some());
     assert_eq!(
         top_level, parsed,
         "messageCount fill-rate mismatch: JSONL has {} top-level occurrences in system entries, \
@@ -428,37 +428,43 @@ fn fill_rate_attachment_top_level_field() {
 
 #[test]
 fn fill_rate_attachment_subtype_resolves() {
-    // The nested `attachment.type` subtype must be readable via the helper for
-    // every attachment entry that has an `attachment` object.
-    let with_subtype = FIXTURE_NEW
+    // V2 design: AttachmentBody models the top-6 subtypes by volume and
+    // collapses the long tail into `AttachmentBody::Unknown`. So the helper
+    // resolves to a typed variant for the common cases and lands on
+    // `AttachmentBody::Unknown` for everything else. Parity is then:
+    //
+    //   {attachment entries that have a typed attachment body}
+    //     ==
+    //   {attachment entries where the JSONL attachment object exists}
+    //
+    // i.e. every attachment with a nested object lands somewhere in the enum
+    // (Some-variant including Unknown).
+    let with_any_body = FIXTURE_NEW
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<Entry>(l).ok())
-        .filter(|e| matches!(e, Entry::Attachment(a) if a.attachment_subtype().is_some()))
+        .filter(|e| matches!(e, Entry::Attachment(a) if a.attachment.is_some()))
         .count();
 
-    let grep_subtype = FIXTURE_NEW
+    let grep_attachment_obj = FIXTURE_NEW
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|v| {
             v.get("type").and_then(|t| t.as_str()) == Some("attachment")
-                && v.get("attachment")
-                    .and_then(|a| a.get("type"))
-                    .and_then(|t| t.as_str())
-                    .is_some()
+                && v.get("attachment").is_some_and(|a| a.is_object())
         })
         .count();
 
     assert_eq!(
-        grep_subtype, with_subtype,
-        "attachment subtype resolution mismatch: {} JSONL entries have attachment.type, \
-         helper resolved {}",
-        grep_subtype, with_subtype
+        grep_attachment_obj, with_any_body,
+        "every JSONL attachment-with-object must land in some AttachmentBody variant: \
+         {} object-bearing entries vs {} parsed bodies",
+        grep_attachment_obj, with_any_body
     );
     assert!(
-        with_subtype > 0,
-        "fixture must contain at least one attachment with a nested subtype"
+        with_any_body > 0,
+        "fixture must contain at least one attachment with a nested object"
     );
 }
 

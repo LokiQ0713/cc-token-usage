@@ -30,11 +30,14 @@ fn parse_entry_roundtrip_all_types() {
             "user",
         ),
         (
-            r#"{"type":"assistant","uuid":"a1","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#,
+            // Assistant entries always carry a parentUuid (v2 invariant).
+            r#"{"type":"assistant","uuid":"a1","parentUuid":"p","sessionId":"s1","message":{"model":"claude-opus-4-6","role":"assistant","content":[{"type":"text","text":"ok"}]}}"#,
             "assistant",
         ),
         (
-            r#"{"type":"system","uuid":"sys1","sessionId":"s1","subtype":"init"}"#,
+            // `init` is not in the v2 SystemBody enum — it lands in Unknown
+            // and the entry still routes to Entry::System.
+            r#"{"type":"system","uuid":"sys1","sessionId":"s1","subtype":"informational","content":"x"}"#,
             "system",
         ),
         (
@@ -134,7 +137,7 @@ fn parse_realistic_assistant_turn() {
     let entry = parse_entry(json).unwrap();
     match entry {
         Entry::Assistant(a) => {
-            assert_eq!(a.parent_uuid.as_deref(), Some("abc"));
+            assert_eq!(a.parent_uuid.as_str(), "abc");
             assert_eq!(a.is_sidechain, Some(false));
             assert_eq!(a.uuid.as_deref(), Some("def"));
             let msg = a.message.as_ref().unwrap();
@@ -307,7 +310,7 @@ mod scanner_tests {
             r#"{{"type":"user","uuid":"u1","sessionId":"{session_id}","message":{{"role":"user","content":"first"}}}}
 GARBAGE LINE HERE
 {{"malformed json
-{{"type":"assistant","uuid":"a1","sessionId":"{session_id}","message":{{"model":"claude-opus-4-6","role":"assistant","content":[{{"type":"text","text":"reply"}}]}}}}
+{{"type":"assistant","uuid":"a1","parentUuid":"u1","sessionId":"{session_id}","message":{{"model":"claude-opus-4-6","role":"assistant","content":[{{"type":"text","text":"reply"}}]}}}}
 
 {{"type":"ai-title","sessionId":"{session_id}","aiTitle":"Test"}}"#
         );

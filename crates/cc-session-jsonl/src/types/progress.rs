@@ -1,27 +1,63 @@
+//! `ProgressEntry` — a JSONL entry where `type == "progress"`.
+//!
+//! Progress events stream during tool execution (hook lifecycle, sub-agent
+//! transcripts, bash output, MCP status, server-side search). They share the
+//! universal DAG-key set with the trunk message entries but carry tool-use
+//! tracking IDs and a discriminated [`ProgressData`] payload whose inner
+//! `type` selects the variant.
+
 use serde::{Deserialize, Serialize};
 
-use super::transcript_entry;
+use super::common::DagNode;
 
-transcript_entry! {
-    /// A progress event entry recording hook/agent/bash/mcp/search execution progress.
-    ///
-    /// Introduced in Claude Code v2.1.x. Progress events are streamed during tool
-    /// execution and share the common transcript fields (`parentUuid`, `uuid`,
-    /// `sessionId`, etc.) with user/assistant entries, plus tool-use tracking IDs
-    /// and a discriminated [`ProgressData`] payload whose variant matches the
-    /// progress subtype (hook, agent, bash, mcp, search, query).
-    ///
-    /// Note: the JSON keys `parentToolUseID` and `toolUseID` use uppercase `ID`
-    /// (not the camelCase `Id` pattern used by the surrounding transcript fields),
-    /// so they are spelled out with explicit `#[serde(rename = ...)]` overrides.
-    pub struct ProgressEntry {
-        #[serde(rename = "parentToolUseID")]
-        pub parent_tool_use_id: Option<String>,
+/// A progress event entry recording hook/agent/bash/mcp/search execution progress.
+///
+/// Introduced in Claude Code v2.1.x. Spelled-out fields (no `transcript_entry!`
+/// macro) to match the v2 design philosophy of "each type owns what it has".
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressEntry {
+    // ── 9 truly-universal DAG fields ──
+    pub uuid: Option<String>,
+    pub parent_uuid: Option<String>,
+    pub session_id: Option<String>,
+    pub timestamp: Option<String>,
+    pub cwd: Option<String>,
+    pub version: Option<String>,
+    pub git_branch: Option<String>,
+    pub user_type: Option<String>,
+    pub entrypoint: Option<String>,
+    pub is_sidechain: Option<bool>,
 
-        #[serde(rename = "toolUseID")]
-        pub tool_use_id: Option<String>,
+    // ── Optional contextual fields commonly seen on progress events ──
+    pub slug: Option<String>,
+    pub agent_id: Option<String>,
 
-        pub data: Option<ProgressData>,
+    // ── Tool-use linkage (capital-ID spelling per real-data shape) ──
+    #[serde(rename = "parentToolUseID")]
+    pub parent_tool_use_id: Option<String>,
+    #[serde(rename = "toolUseID")]
+    pub tool_use_id: Option<String>,
+
+    /// Discriminated progress payload — see [`ProgressData`].
+    pub data: Option<ProgressData>,
+}
+
+impl DagNode for ProgressEntry {
+    fn uuid(&self) -> Option<&str> {
+        self.uuid.as_deref()
+    }
+    fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+    fn timestamp(&self) -> Option<&str> {
+        self.timestamp.as_deref()
+    }
+    fn parent_uuid(&self) -> Option<&str> {
+        self.parent_uuid.as_deref()
+    }
+    fn is_sidechain(&self) -> Option<bool> {
+        self.is_sidechain
     }
 }
 

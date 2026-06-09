@@ -122,7 +122,6 @@ mod tests {
 
     fn turn(ts: &str, model: &str, input: u64, output: u64) -> ValidatedTurn {
         ValidatedTurn {
-            parent_uuid: None,
             uuid: format!("u-{ts}"),
             request_id: None,
             timestamp: ts.parse::<DateTime<Utc>>().unwrap(),
@@ -159,11 +158,9 @@ mod tests {
         let first = turns.iter().map(|t| t.timestamp).min();
         let last = turns.iter().map(|t| t.timestamp).max();
         SessionData {
-            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             session_id: id.into(),
             project: Some("p".into()),
             turns,
-            user_entries: vec![],
             subagents: vec![],
             plugins: vec![],
             skills: vec![],
@@ -298,6 +295,10 @@ mod tests {
             entry.cost
         );
         // input $5 + output $25 = $30
-        assert!((entry.cost - 30.0).abs() < 1e-6, "bucket cost: {}", entry.cost);
+        assert!(
+            (entry.cost - 30.0).abs() < 1e-6,
+            "bucket cost: {}",
+            entry.cost
+        );
     }
 }

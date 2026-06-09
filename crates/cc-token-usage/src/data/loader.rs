@@ -76,11 +76,8 @@ pub fn load_all(
 /// Parsed result from a single main session file, ready for serial assembly.
 struct ParsedMain {
     session_id: String,
-    /// Path to the main session JSONL file.
-    source_path: PathBuf,
     project: Option<String>,
     turns: Vec<super::models::ValidatedTurn>,
-    user_entries: Vec<super::models::ValidatedUserEntry>,
     version: Option<String>,
     first_ts: Option<DateTime<Utc>>,
     last_ts: Option<DateTime<Utc>>,
@@ -129,16 +126,14 @@ fn load_from_files(
     let parsed_mains: Vec<Result<ParsedMain>> = main_files
         .par_iter()
         .map(|sf| {
-            let (turns, user_entries, quality, metadata, hooks) = parse_session_file(&sf.path, false)
+            let (turns, quality, metadata, hooks) = parse_session_file(&sf.path, false)
                 .with_context(|| format!("failed to parse session: {}", sf.path.display()))?;
             let version = extract_version(&sf.path);
             let (first_ts, last_ts) = time_range(turns.iter().map(|t| &t.timestamp));
             Ok(ParsedMain {
                 session_id: sf.session_id.clone(),
-                source_path: sf.path.clone(),
                 project: sf.project.clone(),
                 turns,
-            user_entries,
                 version,
                 first_ts,
                 last_ts,
@@ -163,10 +158,8 @@ fn load_from_files(
             pm.session_id.clone(),
             SessionData {
                 session_id: pm.session_id,
-                source_path: pm.source_path,
                 project: pm.project,
                 turns: pm.turns,
-                user_entries: pm.user_entries,
                 subagents: Vec::new(),
                 plugins: Vec::new(),
                 skills: Vec::new(),
@@ -185,7 +178,7 @@ fn load_from_files(
     let parsed_agents: Vec<Result<ParsedAgent>> = agent_files
         .par_iter()
         .map(|sf| {
-            let (turns, _user_entries, quality, _meta, _hooks) = parse_session_file(&sf.path, true)
+            let (turns, quality, _meta, _hooks) = parse_session_file(&sf.path, true)
                 .with_context(|| format!("failed to parse agent file: {}", sf.path.display()))?;
             let target_id = sf
                 .parent_session_id
@@ -230,10 +223,8 @@ fn load_from_files(
                 target_id.clone(),
                 SessionData {
                     session_id: target_id.clone(),
-                    source_path: PathBuf::new(), // orphan — no main session file
                     project,
                     turns: Vec::new(),
-                    user_entries: vec![],
                     subagents: Vec::new(),
                     plugins: Vec::new(),
                     skills: Vec::new(),
@@ -447,7 +438,6 @@ mod tests {
     ) -> ValidatedTurn {
         ValidatedTurn {
             uuid: format!("u-{ts}"),
-            parent_uuid: None,
             request_id: Some(format!("r-{ts}")),
             timestamp: ts.parse().unwrap(),
             model: "claude-opus-4-6".into(),
@@ -541,8 +531,8 @@ mod tests {
 
         // Two valid main turns. requestIds r-main-1, r-main-2.
         // The second carries attributionPlugin/Skill.
-        let main_turn_1 = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"11111111-2222-3333-4444-555555555555","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-1"}"#;
-        let main_turn_2 = r#"{"type":"assistant","uuid":"m2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"bye"}]},"sessionId":"11111111-2222-3333-4444-555555555555","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-2","attributionPlugin":"superpowers","attributionSkill":"superpowers:brainstorming"}"#;
+        let main_turn_1 = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"11111111-2222-3333-4444-555555555555","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
+        let main_turn_2 = r#"{"type":"assistant","uuid":"m2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"bye"}]},"sessionId":"11111111-2222-3333-4444-555555555555","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-2","attributionPlugin":"superpowers","attributionSkill":"superpowers:brainstorming"}"#;
         // One stop_hook_summary system entry.
         let main_hook = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash hook.sh","durationMs":50}],"hookErrors":[],"preventedContinuation":false,"sessionId":"11111111-2222-3333-4444-555555555555"}"#;
         fs::write(
@@ -556,8 +546,8 @@ mod tests {
         fs::create_dir_all(&subagents_dir).unwrap();
 
         // Agent A: 2 unique turns. r-agentA-1, r-agentA-2.
-        let agent_a_turn_1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:02:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"agent-a-1"}]},"sessionId":"agent-aaa1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-agentA-1"}"#;
-        let agent_a_turn_2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:03:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":11,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"agent-a-2"}]},"sessionId":"agent-aaa1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-agentA-2"}"#;
+        let agent_a_turn_1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:02:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"agent-a-1"}]},"sessionId":"agent-aaa1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-agentA-1"}"#;
+        let agent_a_turn_2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:03:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":11,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"agent-a-2"}]},"sessionId":"agent-aaa1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-agentA-2"}"#;
         fs::write(
             subagents_dir.join("agent-aaa1.jsonl"),
             format!("{}\n{}\n", agent_a_turn_1, agent_a_turn_2),
@@ -572,8 +562,8 @@ mod tests {
 
         // Agent B: 1 turn that *also* appears in the main session by requestId
         // (cross-file dup) and 1 unique turn.
-        let agent_b_dup = r#"{"type":"assistant","uuid":"b1","timestamp":"2026-05-01T10:04:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"dup"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-main-2"}"#; // same rid as main_turn_2
-        let agent_b_unique = r#"{"type":"assistant","uuid":"b2","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"unique"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-agentB-2"}"#;
+        let agent_b_dup = r#"{"type":"assistant","uuid":"b1","timestamp":"2026-05-01T10:04:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"dup"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-main-2"}"#; // same rid as main_turn_2
+        let agent_b_unique = r#"{"type":"assistant","uuid":"b2","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"unique"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-agentB-2"}"#;
         fs::write(
             subagents_dir.join("agent-bbb2.jsonl"),
             format!("{}\n{}\n", agent_b_dup, agent_b_unique),
@@ -718,7 +708,7 @@ mod tests {
 
         // One assistant turn so the session has some content (otherwise the
         // session has no first_timestamp).
-        let asst = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"22222222-3333-4444-5555-666666666666","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-1"}"#;
+        let asst = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"22222222-3333-4444-5555-666666666666","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
         // Three stop_hook_summary entries: same command, varying flags.
         let h1 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash run.sh","durationMs":100}],"hookErrors":[],"preventedContinuation":false,"sessionId":"22222222-3333-4444-5555-666666666666"}"#;
         let h2 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash run.sh","durationMs":200}],"hookErrors":[{"msg":"oops"}],"preventedContinuation":false,"sessionId":"22222222-3333-4444-5555-666666666666"}"#;
@@ -750,7 +740,7 @@ mod tests {
         let project = tmp.path().join("projects").join("-Users-test-proj");
         fs::create_dir_all(&project).unwrap();
         let uuid = "33333333-4444-5555-6666-777777777777";
-        let asst = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"33333333-4444-5555-6666-777777777777","version":"2.1.90","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-1"}"#;
+        let asst = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"33333333-4444-5555-6666-777777777777","version":"2.1.90","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
         fs::write(project.join(format!("{}.jsonl", uuid)), format!("{asst}\n")).unwrap();
 
         let calc = PricingCalculator::new();
@@ -789,7 +779,7 @@ mod tests {
         // Note: NO `<project>/<parent_uuid>.jsonl` — the parent main session
         // was deleted by the user.
 
-        let agent_turn = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"orphan-agent"}]},"sessionId":"agent-orphan-1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-orphan-1"}"#;
+        let agent_turn = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"orphan-agent"}]},"sessionId":"agent-orphan-1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-orphan-1"}"#;
         fs::write(
             subagents_dir.join("agent-orphan-1.jsonl"),
             format!("{}\n", agent_turn),
@@ -851,7 +841,6 @@ mod tests {
             for i in 0..turns {
                 tlist.push(ValidatedTurn {
                     uuid: format!("{}-{}", agent_id, i),
-            parent_uuid: None,
                     request_id: Some(format!("{}-r-{}", agent_id, i)),
                     timestamp: "2026-05-01T10:00:00Z".parse().unwrap(),
                     model: "claude-opus-4-6".into(),
@@ -895,10 +884,8 @@ mod tests {
 
         let session = SessionData {
             session_id: "s1".into(),
-            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             project: Some("p".into()),
             turns: Vec::new(),
-            user_entries: vec![],
             subagents: vec![
                 make_agent("agent-aaa", Some("builder"), Some("task A"), 2),
                 make_agent("agent-bbb", Some("builder"), Some("task B"), 3),
@@ -944,7 +931,6 @@ mod tests {
         let calc = PricingCalculator::new();
         let make_turn = |id: &str| ValidatedTurn {
             uuid: id.to_string(),
-            parent_uuid: None,
             request_id: Some(format!("r-{}", id)),
             timestamp: "2026-05-01T10:00:00Z".parse().unwrap(),
             model: "claude-opus-4-6".into(),
@@ -977,10 +963,8 @@ mod tests {
 
         let session = SessionData {
             session_id: "s1".into(),
-            source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
             project: Some("p".into()),
             turns: Vec::new(),
-            user_entries: vec![],
             subagents: vec![Subagent {
                 agent_id: "agent-no-meta".into(),
                 agent_type: None, // .meta.json missing
@@ -1023,8 +1007,8 @@ mod tests {
         let subagents_dir = project.join(parent_uuid).join("subagents");
         fs::create_dir_all(&subagents_dir).unwrap();
         // Two turns under the orphan parent.
-        let t1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"x"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-orph-1"}"#;
-        let t2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"y"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-orph-2"}"#;
+        let t1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"x"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-orph-1"}"#;
+        let t2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"y"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-orph-2"}"#;
         fs::write(
             subagents_dir.join("agent-orphan-z.jsonl"),
             format!("{}\n{}\n", t1, t2),
@@ -1068,7 +1052,7 @@ mod tests {
         let main_path = project.join(format!("{}.jsonl", session_uuid));
 
         // One ordinary main turn (requestId r-main-1).
-        let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-1"}"#;
+        let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
         fs::write(&main_path, format!("{}\n", main_turn)).unwrap();
 
         // Workflow run directory: <uuid>/subagents/workflows/wf_run123/
@@ -1081,8 +1065,8 @@ mod tests {
 
         // Two workflow agent transcripts, each with one sidechain assistant turn
         // carrying real usage. Unique requestIds (not present in the main file).
-        let wf_agent_a = r#"{"type":"assistant","uuid":"wa1","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-a"}]},"sessionId":"agent-wfa","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-wf-a-1"}"#;
-        let wf_agent_b = r#"{"type":"assistant","uuid":"wb1","timestamp":"2026-05-01T10:06:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-b"}]},"sessionId":"agent-wfb","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-wf-b-1"}"#;
+        let wf_agent_a = r#"{"type":"assistant","uuid":"wa1","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-a"}]},"sessionId":"agent-wfa","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-wf-a-1"}"#;
+        let wf_agent_b = r#"{"type":"assistant","uuid":"wb1","timestamp":"2026-05-01T10:06:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-b"}]},"sessionId":"agent-wfb","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-wf-b-1"}"#;
         fs::write(wf_dir.join("agent-wfa.jsonl"), format!("{}\n", wf_agent_a)).unwrap();
         fs::write(wf_dir.join("agent-wfb.jsonl"), format!("{}\n", wf_agent_b)).unwrap();
         // Meta sidecar for agent A only (verify workflow meta hydration).
@@ -1203,7 +1187,7 @@ mod tests {
         let uuid = "44444444-5555-6666-7777-888888888888";
 
         // Main session with one turn.
-        let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"44444444-5555-6666-7777-888888888888","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":null,"requestId":"r-main-1"}"#;
+        let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"44444444-5555-6666-7777-888888888888","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
         fs::write(
             project.join(format!("{}.jsonl", uuid)),
             format!("{}\n", main_turn),
@@ -1216,10 +1200,10 @@ mod tests {
         for i in 0..10 {
             // Each agent file has 2 turns, unique request_ids.
             let line1 = format!(
-                r#"{{"type":"assistant","uuid":"a{i}-1","timestamp":"2026-05-01T10:0{i}:00Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"a"}}]}},"sessionId":"agent-id{i:03}","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-{i}-1"}}"#
+                r#"{{"type":"assistant","uuid":"a{i}-1","timestamp":"2026-05-01T10:0{i}:00Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"a"}}]}},"sessionId":"agent-id{i:03}","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-{i}-1"}}"#
             );
             let line2 = format!(
-                r#"{{"type":"assistant","uuid":"a{i}-2","timestamp":"2026-05-01T10:0{i}:01Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"a"}}]}},"sessionId":"agent-id{i:03}","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":null,"requestId":"r-{i}-2"}}"#
+                r#"{{"type":"assistant","uuid":"a{i}-2","timestamp":"2026-05-01T10:0{i}:01Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"a"}}]}},"sessionId":"agent-id{i:03}","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-{i}-2"}}"#
             );
             fs::write(
                 subagents_dir.join(format!("agent-id{i:03}.jsonl")),

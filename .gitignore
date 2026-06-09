@@ -3,3 +3,6 @@ npm-package/node_modules/
 *.swp
 *.swo
 .DS_Store
+
+# dev-committee runtime state (auto-added)
+.committee/runs/

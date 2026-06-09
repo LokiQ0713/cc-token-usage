@@ -6,8 +6,6 @@ pub enum OutputFormat {
     Text,
     Html,
     Json,
-    /// Session DAG visualization (standalone HTML).
-    Dag,
 }
 
 #[derive(Debug, Clone, ValueEnum)]

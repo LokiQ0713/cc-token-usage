@@ -31,7 +31,6 @@ use chrono::{DateTime, Utc};
 fn turn(uuid: &str, ts: &str, model: &str, input: u64, output: u64) -> ValidatedTurn {
     ValidatedTurn {
         uuid: uuid.into(),
-        parent_uuid: None,
         request_id: Some(format!("req-{uuid}")),
         timestamp: ts.parse::<DateTime<Utc>>().unwrap(),
         model: model.into(),
@@ -67,11 +66,9 @@ fn session(id: &str, project: &str, turns: Vec<ValidatedTurn>) -> SessionData {
     let first = turns.iter().map(|t| t.timestamp).min();
     let last = turns.iter().map(|t| t.timestamp).max();
     SessionData {
-        source_path: std::path::PathBuf::from("/tmp/test.jsonl"),
         session_id: id.into(),
         project: Some(project.into()),
         turns,
-        user_entries: vec![],
         subagents: vec![],
         plugins: vec![],
         skills: vec![],
@@ -101,8 +98,20 @@ fn fixture_sessions() -> Vec<SessionData> {
         "22222222-2222-2222-2222-222222222222",
         "-Users-dev-beta",
         vec![
-            turn("b1", "2025-03-15T09:00:00Z", "claude-sonnet-4-5", 3_000, 1_500),
-            turn("b2", "2025-03-15T09:30:00Z", "claude-sonnet-4-5", 1_000, 400),
+            turn(
+                "b1",
+                "2025-03-15T09:00:00Z",
+                "claude-sonnet-4-5",
+                3_000,
+                1_500,
+            ),
+            turn(
+                "b2",
+                "2025-03-15T09:30:00Z",
+                "claude-sonnet-4-5",
+                1_000,
+                400,
+            ),
         ],
     );
     let gamma = session(
@@ -154,4 +163,3 @@ fn snapshot_trend_monthly_fixture() {
     let rendered = render_trend(&trend);
     insta::assert_snapshot!(rendered);
 }
-

@@ -25,11 +25,16 @@ pub struct AiTitleMessage {
 }
 
 /// The last prompt sent in the session.
+///
+/// Survey §3 (`last-prompt`): `sessionId` required, `lastPrompt` 97% fill,
+/// `leafUuid` 83.9% — used by Claude Code to remember "the prompt that left
+/// off here" when the session resumes from a particular branch leaf.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastPromptMessage {
     pub session_id: Option<String>,
     pub last_prompt: Option<String>,
+    pub leaf_uuid: Option<String>,
 }
 
 /// A task summary entry with timestamp.
