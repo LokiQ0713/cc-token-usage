@@ -114,6 +114,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc-session-dag"
+version = "0.1.0"
+dependencies = [
+ "cc-session-jsonl",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cc-session-jsonl"
 version = "0.4.0"
 dependencies = [
