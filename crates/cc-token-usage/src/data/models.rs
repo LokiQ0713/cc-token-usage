@@ -56,9 +56,13 @@ impl From<cc_session_jsonl::types::Usage> for TokenUsage {
                 web_search_requests: s.web_search_requests,
                 web_fetch_requests: s.web_fetch_requests,
             }),
-            service_tier: u.service_tier,
-            inference_geo: u.inference_geo,
-            speed: u.speed,
+            // cc-session-jsonl v2 promoted these to typed enums. The analysis
+            // layer continues to carry them as plain strings (it never
+            // dispatches on them — they end up in HashMap<String, _> buckets
+            // and JSON output verbatim), so project through `.as_str()`.
+            service_tier: u.service_tier.map(|t| t.as_str().to_string()),
+            inference_geo: u.inference_geo.map(|g| g.as_str().to_string()),
+            speed: u.speed.map(|s| s.as_str().to_string()),
         }
     }
 }
@@ -392,7 +396,7 @@ mod tests {
                 assert_eq!(msg.parent_uuid.as_str(), "abc");
                 assert_eq!(msg.is_sidechain, Some(false));
 
-                let api = msg.message.unwrap();
+                let api = msg.message;
                 assert_eq!(api.model.as_deref(), Some("claude-opus-4-6"));
                 assert_eq!(
                     api.stop_reason,
@@ -503,7 +507,7 @@ mod tests {
         let entry: cc_session_jsonl::types::Entry = serde_json::from_str(json).unwrap();
         match entry {
             cc_session_jsonl::types::Entry::Assistant(msg) => {
-                let content = msg.message.unwrap().content.unwrap();
+                let content = msg.message.content.unwrap();
                 assert_eq!(content.len(), 2);
                 assert!(
                     matches!(&content[0], cc_session_jsonl::types::ContentBlock::Thinking { thinking: Some(t), .. } if t.contains("analyze"))
@@ -525,7 +529,7 @@ mod tests {
 
         match entry {
             cc_session_jsonl::types::Entry::Assistant(msg) => {
-                let api = msg.message.unwrap();
+                let api = msg.message;
                 assert_eq!(api.model.as_deref(), Some("<synthetic>"));
                 assert_eq!(
                     api.stop_reason,
@@ -558,10 +562,11 @@ mod tests {
                 web_search_requests: Some(2),
                 web_fetch_requests: Some(1),
             }),
-            service_tier: Some("standard".into()),
-            inference_geo: Some("us".into()), // dropped in conversion
-            iterations: None,                 // dropped in conversion
-            speed: Some("fast".into()),
+            // v2: service_tier / inference_geo / speed are typed enums.
+            service_tier: Some(cc_session_jsonl::types::ServiceTier::Standard),
+            inference_geo: Some(cc_session_jsonl::types::InferenceGeo::NotAvailable),
+            iterations: None, // dropped in conversion
+            speed: Some(cc_session_jsonl::types::Speed::Standard),
         };
 
         let local: TokenUsage = lib_usage.into();
@@ -570,7 +575,8 @@ mod tests {
         assert_eq!(local.cache_creation_input_tokens, Some(50));
         assert_eq!(local.cache_read_input_tokens, Some(300));
         assert_eq!(local.service_tier.as_deref(), Some("standard"));
-        assert_eq!(local.speed.as_deref(), Some("fast"));
+        assert_eq!(local.inference_geo.as_deref(), Some("not_available"));
+        assert_eq!(local.speed.as_deref(), Some("standard"));
 
         let cache = local.cache_creation.unwrap();
         assert_eq!(cache.ephemeral_5m_input_tokens, Some(30));

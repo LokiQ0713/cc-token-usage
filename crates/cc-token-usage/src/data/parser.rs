@@ -57,7 +57,8 @@ fn extract_user_text(user_entry: &UserEntry) -> Option<String> {
 // ─── Pipeline Stage 3: Validation ──────────────────────────────────────────
 
 enum FilterReason {
-    NoApiMessage,
+    // `NoApiMessage` removed: cc-session-jsonl v2 now models
+    // `AssistantEntry.message` as required (`ApiMessage`, not Option).
     Sidechain,
     Synthetic,
     NoModel,
@@ -88,7 +89,12 @@ fn validate_assistant(
     is_agent: bool,
     now: DateTime<Utc>,
 ) -> std::result::Result<ValidatedFields, FilterReason> {
-    let api: ApiMessage = msg.message.ok_or(FilterReason::NoApiMessage)?;
+    // v2: AssistantEntry.message is now `ApiMessage` (not Option) — survey §3
+    // confirmed 100% present on every assistant entry (including the 59
+    // synthetic api-error ones). The `NoApiMessage` filter reason is kept
+    // around (it would still fire if the cc-session-jsonl layer one day
+    // re-introduces optionality), but the access is direct.
+    let api: ApiMessage = msg.message;
 
     // Sidechain filter (skip for agent files -- they always have isSidechain=true)
     if !is_agent && msg.is_sidechain == Some(true) {
@@ -112,10 +118,13 @@ fn validate_assistant(
         return Err(FilterReason::ZeroUsage);
     }
 
-    // Capture service fields before conversion consumes them
-    let service_tier = lib_usage.service_tier.clone();
-    let speed = lib_usage.speed.clone();
-    let inference_geo = lib_usage.inference_geo.clone();
+    // Capture service fields before conversion consumes them.
+    // cc-session-jsonl v2 made these typed enums; the analysis layer still
+    // wants strings (they flow into HashMap<String, usize> buckets and JSON
+    // output without semantic interpretation), so we project through .as_str().
+    let service_tier = lib_usage.service_tier.map(|t| t.as_str().to_string());
+    let speed = lib_usage.speed.map(|s| s.as_str().to_string());
+    let inference_geo = lib_usage.inference_geo.map(|g| g.as_str().to_string());
 
     // Convert to local TokenUsage
     let usage: TokenUsage = lib_usage.into();
@@ -293,8 +302,11 @@ pub fn parse_session_file(
         // Stage 2: Type filter + metadata collection
         let msg = match entry {
             Entry::Assistant(msg) => {
-                // Count API errors even for entries that will fail validation
-                if msg.api_error.is_some() || msg.error.is_some() {
+                // Count API errors even for entries that will fail validation.
+                // v2 dropped the always-empty `api_error` field; only `error`
+                // (now typed as `Option<AssistantError>`) is observed in real
+                // data and remains the signal for synthetic api-error entries.
+                if msg.error.is_some() {
                     metadata.api_error_count += 1;
                 }
                 msg
@@ -792,10 +804,11 @@ mod tests {
 
     #[test]
     fn counts_api_errors() {
-        // V2: assistant entries are guaranteed to have a parentUuid — even
-        // synthetic api_error entries are children of the user prompt that
-        // triggered the failed call.
-        let error_entry = r#"{"type":"assistant","uuid":"err1","parentUuid":"p1","timestamp":"2026-03-16T10:00:00Z","sessionId":"s1","apiError":"rate_limit","error":"Rate limited"}"#;
+        // V2: assistant entries are guaranteed to have a `message` field —
+        // even synthetic api_error entries carry a `<synthetic>` message with
+        // the failure text in `content`. The `error` field is the typed signal
+        // and replaces the old (always-empty) `api_error` field.
+        let error_entry = r#"{"type":"assistant","uuid":"err1","parentUuid":"p1","timestamp":"2026-03-16T10:00:00Z","sessionId":"s1","error":"rate_limit","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: rate limited"}]}}"#;
         let f = write_jsonl(&[error_entry, VALID_ASSISTANT]);
         let (_turns, _quality, meta, _hooks) = parse_session_file(f.path(), false).unwrap();
 

@@ -67,6 +67,24 @@ pub struct PassthroughEntry {
     pub agent_id: Option<String>,
 }
 
+impl common::DagNode for PassthroughEntry {
+    fn uuid(&self) -> Option<&str> {
+        Some(self.uuid.as_str())
+    }
+    fn session_id(&self) -> Option<&str> {
+        Some(self.session_id.as_str())
+    }
+    fn timestamp(&self) -> Option<&str> {
+        self.timestamp.as_deref()
+    }
+    fn parent_uuid(&self) -> Option<&str> {
+        self.parent_uuid.as_deref()
+    }
+    fn is_sidechain(&self) -> Option<bool> {
+        self.is_sidechain
+    }
+}
+
 /// All entry types in a Claude Code session JSONL file.
 ///
 /// Serialization uses `#[serde(tag = "type")]` (derived). Deserialization
@@ -551,6 +569,43 @@ mod tests {
             }
             other => panic!("Expected User, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn passthrough_implements_dag_node_trait() {
+        // PassthroughEntry's whole reason for existing is keeping parent→child
+        // chains intact across unknown types; if it doesn't implement DagNode,
+        // any DAG consumer iterating `&dyn DagNode` will silently drop these.
+        use crate::types::common::DagNode;
+        let p = PassthroughEntry {
+            uuid: "u-passthrough".into(),
+            parent_uuid: Some("u-parent".into()),
+            session_id: "sess-1".into(),
+            timestamp: Some("2026-06-09T00:00:00Z".into()),
+            entry_type: "future-feature-xyz".into(),
+            is_sidechain: Some(false),
+            agent_id: None,
+        };
+        assert_eq!(p.uuid(), Some("u-passthrough"));
+        assert_eq!(p.session_id(), Some("sess-1"));
+        assert_eq!(p.timestamp(), Some("2026-06-09T00:00:00Z"));
+        assert_eq!(p.parent_uuid(), Some("u-parent"));
+        assert_eq!(p.is_sidechain(), Some(false));
+
+        // parent_uuid is Option<String> on the struct: when None, the trait
+        // accessor returns None (root of a passthrough chain).
+        let root = PassthroughEntry {
+            uuid: "u-root".into(),
+            parent_uuid: None,
+            session_id: "sess-1".into(),
+            timestamp: None,
+            entry_type: "future-feature-xyz".into(),
+            is_sidechain: None,
+            agent_id: None,
+        };
+        assert!(root.parent_uuid().is_none());
+        assert!(root.timestamp().is_none());
+        assert!(root.is_sidechain().is_none());
     }
 
     #[test]

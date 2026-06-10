@@ -20,7 +20,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{DagNode, OriginKind, PromptSource};
+use super::common::{DagNode, Entrypoint, OriginKind, PermissionMode, PromptSource, UserType};
 
 /// A user-authored message entry in a Claude Code session.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -34,8 +34,12 @@ pub struct UserEntry {
     pub cwd: Option<String>,
     pub version: Option<String>,
     pub git_branch: Option<String>,
-    pub user_type: Option<String>,
-    pub entrypoint: Option<String>,
+    /// 100% present in the survey but always `"external"`. Typed for
+    /// drift defence (an internal-tier role would land in `Unknown`).
+    pub user_type: Option<UserType>,
+    /// 100% present in the survey; `cli` or `sdk-cli`. New entrypoints
+    /// land in [`Entrypoint::Unknown`].
+    pub entrypoint: Option<Entrypoint>,
     pub is_sidechain: Option<bool>,
 
     // ── Logical-parent fallback (rare; not used by user entries today but
@@ -49,10 +53,13 @@ pub struct UserEntry {
     pub slug: Option<String>,
     /// Sub-agent identifier (subagent trunk entries carry this).
     pub agent_id: Option<String>,
-    /// Teammates feature — zero hits on this machine but present in the API.
-    pub team_name: Option<String>,
-    pub agent_name: Option<String>,
-    pub agent_color: Option<String>,
+
+    // ── Teammates feature: deliberately not modelled. The survey
+    //    confirmed `teamName`, `agentName`, `agentColor` have 0 hits in this
+    //    dataset; serde silently ignores unknown keys so a future teammates-
+    //    enabled session still parses cleanly. If/when teammates ships on
+    //    this machine, restore these as `Option<String>` based on real
+    //    observed values rather than the SDK-implied shape. ──
 
     // ── Message body & tool-result fallback ──
     pub message: Option<UserMessage>,
@@ -67,7 +74,9 @@ pub struct UserEntry {
     pub source_tool_assistant_uuid: Option<String>,
 
     // ── Mode / meta flags ──
-    pub permission_mode: Option<String>,
+    /// Inline permission-mode marker (8.5% fill rate). Typed so unknown
+    /// modes degrade rather than blow up the entry.
+    pub permission_mode: Option<PermissionMode>,
     /// Tool-use placeholder marker (Claude Code 2.1.104+).
     pub is_meta: Option<bool>,
 
@@ -228,7 +237,7 @@ mod tests {
         assert_eq!(entry.cwd.as_deref(), Some("/Users/loki/project"));
         assert_eq!(entry.version.as_deref(), Some("2.0.77"));
         assert_eq!(entry.git_branch.as_deref(), Some("feature-x"));
-        assert_eq!(entry.user_type.as_deref(), Some("external"));
+        assert_eq!(entry.user_type, Some(UserType::External));
 
         let msg = entry.message.as_ref().unwrap();
         assert_eq!(msg.role.as_deref(), Some("user"));
@@ -326,7 +335,7 @@ mod tests {
         let entry: Entry = serde_json::from_str(json).unwrap();
         match entry {
             Entry::User(u) => {
-                assert_eq!(u.permission_mode.as_deref(), Some("bypassPermissions"));
+                assert_eq!(u.permission_mode, Some(PermissionMode::BypassPermissions));
             }
             Entry::PermissionMode(_) => {
                 panic!(

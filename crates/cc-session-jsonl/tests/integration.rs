@@ -140,7 +140,7 @@ fn parse_realistic_assistant_turn() {
             assert_eq!(a.parent_uuid.as_str(), "abc");
             assert_eq!(a.is_sidechain, Some(false));
             assert_eq!(a.uuid.as_deref(), Some("def"));
-            let msg = a.message.as_ref().unwrap();
+            let msg = &a.message;
             assert_eq!(msg.model.as_deref(), Some("claude-opus-4-6"));
             let usage = msg.usage.as_ref().unwrap();
             assert_eq!(usage.input_tokens, Some(3));
@@ -237,7 +237,7 @@ mod scanner_tests {
 
         // Verify assistant entry contents
         if let Entry::Assistant(a) = &session.main_entries[1] {
-            let msg = a.message.as_ref().unwrap();
+            let msg = &a.message;
             let usage = msg.usage.as_ref().unwrap();
             assert_eq!(usage.input_tokens, Some(1500));
             assert_eq!(usage.output_tokens, Some(800));

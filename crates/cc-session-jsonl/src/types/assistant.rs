@@ -4,20 +4,33 @@
 //! V2 changes vs the old macro:
 //! - All fields enumerated explicitly; no shared `transcript_entry!`.
 //! - `parent_uuid` is `String` (assistant entries are always replies — see
-//!   `docs/cc-session-jsonl-v2-field-survey.md` §2). All other "common"
-//!   fields stay `Option<String>` to tolerate cross-version JSONL.
+//!   `docs/cc-session-jsonl-v2-field-survey.md` §2). `message: ApiMessage`
+//!   (not Option) — survey §3 confirms 100% present on every assistant
+//!   entry including the 59 synthetic api-error entries. All other "common"
+//!   fields stay `Option<…>` to tolerate cross-version JSONL.
 //! - New attribution fields: `attribution_agent`, `attribution_mcp_server`,
 //!   `attribution_mcp_tool` (the latter two appear together in MCP-driven
 //!   turns, ~3% sample rate).
 //! - `api_error_status: Option<u16>` for HTTP-code-bearing API errors.
+//! - `error: Option<AssistantError>` — typed enum covering the 5 observed
+//!   string values + drift soft-landing (see [`AssistantError`]).
 //! - `diagnostics` is now a typed `Diagnostics` struct so the
 //!   `cache_miss_reason` discriminator is a Rust enum (not a `Value`).
 //! - The ghost keys `message.stop_details` and `message.container` are
 //!   silently dropped (they exist in JSONL but are always `null`).
+//! - Three previously-modelled zero-sample fields removed: `apiError`,
+//!   `isVirtual`, `advisorModel` (0 hits across 25,429 surveyed assistant
+//!   entries). Teammates fields `teamName`/`agentName`/`agentColor` are
+//!   likewise omitted. Serde silently drops unknown keys so reappearance
+//!   in future data won't fail the parse — restore them with a real
+//!   observed type if/when they're emitted.
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{CacheMissReasonKind, DagNode, StopReason};
+use super::common::{
+    AssistantError, CacheMissReasonKind, DagNode, Entrypoint, InferenceGeo, ServiceTier, Speed,
+    StopReason, UserType,
+};
 
 /// An assistant response entry. One per `ContentBlock` emitted by the model.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -33,26 +46,64 @@ pub struct AssistantEntry {
     pub cwd: Option<String>,
     pub version: Option<String>,
     pub git_branch: Option<String>,
-    pub user_type: Option<String>,
-    pub entrypoint: Option<String>,
+    /// 100% present in the survey but always `"external"`. Typed for
+    /// drift defence (an internal-tier role would land in `Unknown`).
+    pub user_type: Option<UserType>,
+    /// 100% present in the survey; `cli` or `sdk-cli`. New entrypoints
+    /// land in [`Entrypoint::Unknown`].
+    pub entrypoint: Option<Entrypoint>,
     pub is_sidechain: Option<bool>,
 
     // ── Assistant-specific carriers ──
-    pub message: Option<ApiMessage>,
+    /// **REQUIRED (v2 strict).** Survey §3 assistant row: 100% present on
+    /// every assistant entry including the 59 synthetic api-error entries
+    /// (whose model is `<synthetic>` but who still carry `message.content`
+    /// with the failure text). Encoding required-ness in the type keeps the
+    /// "stated invariant matches reality" discipline that drives v2.
+    pub message: ApiMessage,
     pub request_id: Option<String>,
     pub agent_id: Option<String>,
     pub slug: Option<String>,
 
     // ── Error / status surface (synthetic and API-error scenarios) ──
-    pub api_error: Option<String>,
-    pub error: Option<String>,
+    //
+    // Synthetic assistant entries (model = `<synthetic>`) carry these fields
+    // when the CLI failed to reach the API. Survey §3: `isApiErrorMessage`
+    // 0.3%, `error` 0.1%, `apiErrorStatus` 0.1%. Real-data sample (25,601
+    // assistant entries on this machine, June 2026):
+    //   - `error` is present in 35 entries; always co-occurs with
+    //     `isApiErrorMessage: true` and `model: "<synthetic>"`.
+    //   - `isApiErrorMessage: false` appears alone in 25 entries (no `error`,
+    //     no `apiErrorStatus`) — likely a synthetic non-error marker.
+    //   - `apiErrorStatus` only fires when the failure was an HTTP error
+    //     (401/403/429/500/529); absent for network/cert/timeout failures.
+    /// Typed error category. Real-data values: `rate_limit`,
+    /// `authentication_failed`, `server_error`, `oauth_org_not_allowed`,
+    /// literal `"unknown"`. New strings degrade to [`AssistantError::Other`].
+    pub error: Option<AssistantError>,
+    /// Optional free-form companion detail. 0 hits across 25,601 assistant
+    /// entries in the survey but kept because the wire shape is documented
+    /// (Anthropic API error responses carry it); re-evaluate if it stays
+    /// empty across the next year.
     pub error_details: Option<String>,
+    /// Marker that this entry is a CLI-synthesized placeholder. When `true`,
+    /// `error` is also present (35/35 surveyed cases). When `false` (25/25
+    /// surveyed cases), no other error fields are set — likely a non-error
+    /// synthetic marker the CLI emits for tracking.
     pub is_api_error_message: Option<bool>,
-    pub is_virtual: Option<bool>,
-    pub advisor_model: Option<String>,
     /// HTTP status code carried by some API-error entries (~0.1% in the
-    /// survey).
+    /// survey). Only present for HTTP-level failures (e.g. 401/403/429/5xx);
+    /// absent for cert/network/timeout failures where `error == "unknown"`.
     pub api_error_status: Option<u16>,
+
+    // Removed (v2 zero-sample cleanup):
+    //   • `api_error` (Option<String>) — 0 hits in 25,429 surveyed entries,
+    //     no callsite anywhere in the workspace. The closely-named `error`
+    //     above (which IS observed) absorbs the same conceptual slot.
+    //   • `is_virtual`  (Option<bool>)  — 0 hits, no callsite, no doc anchor.
+    //   • `advisor_model` (Option<String>) — 0 hits, no callsite, no doc
+    //     anchor. Re-introduce as `Option<T>` keyed on real observed values
+    //     if/when one of these reappears in production data.
 
     // ── Attribution family (Claude Code 2.1.138+) ──
     /// Triggering plugin (e.g. `"superpowers"`). 3.1% of assistant entries.
@@ -66,12 +117,9 @@ pub struct AssistantEntry {
     pub attribution_mcp_server: Option<String>,
     /// MCP tool attribution (3.1%).
     pub attribution_mcp_tool: Option<String>,
-
-    // ── Teammates feature (zero hits in the survey sample but present in
-    //    the API; kept for completeness/future use). ──
-    pub team_name: Option<String>,
-    pub agent_name: Option<String>,
-    pub agent_color: Option<String>,
+    // Teammates feature: deliberately not modelled. `teamName`, `agentName`,
+    // `agentColor` have 0 hits in the surveyed dataset. Serde silently drops
+    // unknown keys so future teammates-enabled sessions still parse cleanly.
 }
 
 impl DagNode for AssistantEntry {
@@ -131,13 +179,18 @@ pub struct Usage {
     pub cache_read_input_tokens: Option<u64>,
     pub cache_creation: Option<CacheCreation>,
     pub server_tool_use: Option<ServerToolUse>,
-    pub service_tier: Option<String>,
-    pub inference_geo: Option<String>,
+    /// Anthropic API service tier; real-data values: `standard` only.
+    pub service_tier: Option<ServiceTier>,
+    /// Geographic region tag; real-data values: `not_available`, `""`.
+    /// Empty string lands in [`InferenceGeo::Empty`] as a distinct variant
+    /// (it accounts for ~35% of carrying turns).
+    pub inference_geo: Option<InferenceGeo>,
     /// `iterations` appears as `[]` (legacy) or `[{...}]` arrays in real
     /// data; we keep the raw Value because the inner shape is undocumented
     /// and rarely consumed downstream.
     pub iterations: Option<serde_json::Value>,
-    pub speed: Option<String>,
+    /// Request speed bucket; real-data values: `standard` only.
+    pub speed: Option<Speed>,
 }
 
 /// Cache-creation token breakdown by TTL bucket.
@@ -254,7 +307,7 @@ mod tests {
         assert_eq!(entry.request_id.as_deref(), Some("req_001"));
         assert_eq!(entry.agent_id.as_deref(), Some("agent-xyz"));
 
-        let msg = entry.message.as_ref().unwrap();
+        let msg = &entry.message;
         assert_eq!(msg.id.as_deref(), Some("msg_01XYZ"));
         assert_eq!(msg.model.as_deref(), Some("claude-opus-4-6"));
         assert_eq!(msg.stop_reason, Some(StopReason::EndTurn));
@@ -323,7 +376,7 @@ mod tests {
             }
         }"#;
         let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        let diag = entry.message.unwrap().diagnostics.unwrap();
+        let diag = entry.message.diagnostics.unwrap();
         let cmr = diag.cache_miss_reason.unwrap();
         assert_eq!(cmr.kind, Some(CacheMissReasonKind::ToolsChanged));
         assert_eq!(cmr.cache_missed_input_tokens, Some(89018));
@@ -345,7 +398,7 @@ mod tests {
             }
         }"#;
         let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-        let msg = entry.message.unwrap();
+        let msg = entry.message;
         assert_eq!(msg.stop_reason, Some(StopReason::Unknown));
     }
 

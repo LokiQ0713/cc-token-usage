@@ -150,7 +150,13 @@ pub enum AttachmentBody {
     QueuedCommand {
         command_mode: Option<String>,
         prompt: Option<String>,
-        image_paste_ids: Option<Vec<String>>,
+        /// Identifiers of pasted images carried into the queued command.
+        /// Element type stays raw JSON (`serde_json::Value`) for parity with
+        /// `UserEntry.image_paste_ids` — real data emits both string ids
+        /// (legacy) and integer ids (newer), and the symmetry stops a
+        /// queued_command with integer ids from soft-landing as
+        /// [`AttachmentBody::Unknown`].
+        image_paste_ids: Option<Vec<serde_json::Value>>,
         source_uuid: Option<String>,
     },
 

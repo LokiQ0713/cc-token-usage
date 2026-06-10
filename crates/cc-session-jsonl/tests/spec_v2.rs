@@ -75,8 +75,15 @@ fn spec_user_full_fields_deserialization() {
     assert_eq!(entry.cwd.as_deref(), Some("/home/spec/project"));
     assert_eq!(entry.version.as_deref(), Some("2.1.140"));
     assert_eq!(entry.git_branch.as_deref(), Some("main"));
-    assert_eq!(entry.user_type.as_deref(), Some("external"));
-    assert_eq!(entry.entrypoint.as_deref(), Some("cli"));
+    // v2: userType / entrypoint are typed enums with `Unknown` soft-landing.
+    assert_eq!(
+        entry.user_type,
+        Some(cc_session_jsonl::types::UserType::External)
+    );
+    assert_eq!(
+        entry.entrypoint,
+        Some(cc_session_jsonl::types::Entrypoint::Cli)
+    );
     assert_eq!(entry.is_sidechain, Some(false));
 
     // v2 new fields (survey §3 user row)
@@ -250,7 +257,7 @@ fn spec_assistant_full_fields_deserialization() {
     assert_eq!(entry.attribution_mcp_server.as_deref(), Some("plugin:fs"));
     assert_eq!(entry.attribution_mcp_tool.as_deref(), Some("read_file"));
 
-    let msg = entry.message.as_ref().unwrap();
+    let msg = &entry.message;
     assert_eq!(msg.stop_reason, Some(StopReason::EndTurn));
 
     let usage = msg.usage.as_ref().unwrap();
@@ -1289,7 +1296,7 @@ fn spec_cache_miss_reason_kind_unknown_soft_landing() {
 fn spec_content_block_unknown_type_becomes_other() {
     let json = r#"{"type":"assistant","parentUuid":"p","sessionId":"s1","message":{"model":"m","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"server_tool_use","id":"srv_01","name":"web_search"},{"type":"text","text":"hi"}]}}"#;
     let entry: AssistantEntry = serde_json::from_str(json).unwrap();
-    let content = entry.message.unwrap().content.unwrap();
+    let content = entry.message.content.unwrap();
     assert_eq!(content.len(), 2);
     assert!(
         matches!(content[0], ContentBlock::Other),
@@ -1347,7 +1354,7 @@ fn spec_ghost_keys_null_stop_details_and_container_accepted() {
     let entry: AssistantEntry = serde_json::from_str(json)
         .expect("Ghost keys stop_details=null and container=null must NOT cause parse failure");
     assert_eq!(entry.parent_uuid, "p-ghost-001");
-    let msg = entry.message.unwrap();
+    let msg = entry.message;
     assert_eq!(msg.stop_reason, Some(StopReason::EndTurn));
     // Fields we DO model are still accessible
     let usage = msg.usage.unwrap();
@@ -1363,7 +1370,7 @@ fn spec_ghost_keys_via_entry_enum_and_parse_entry() {
         .expect("parse_entry must succeed with stop_details=null and container=null");
     match entry {
         Entry::Assistant(a) => {
-            let msg = a.message.unwrap();
+            let msg = a.message;
             assert_eq!(msg.stop_reason, Some(StopReason::ToolUse));
         }
         other => panic!("Expected Assistant, got {other:?}"),
@@ -1827,24 +1834,14 @@ fn spec_iter2_user_image_paste_ids_mixed_elements_parse() {
     }
 }
 
-/// iter-2 / attachment consistency gap: QueuedCommand.image_paste_ids is still
-/// Vec<String> in the implementation (NOT yet Vec<Value>).
-/// Spec symmetry: the same integer-id production phenomenon that triggered the
-/// UserEntry fix applies equally to QueuedCommand (survey §5 queued_command row).
-///
-/// This test documents the CURRENT BEHAVIOR: integer ids cause the
-/// `queued_command` body to fall to `AttachmentBody::Unknown` (the custom
-/// deserializer silently swallows the Vec<String> decode failure).
-/// A correct fix would change QueuedCommand.image_paste_ids to Vec<Value>
-/// so the body parses as QueuedCommand with integer elements preserved,
-/// matching the spec-symmetry implied by the UserEntry fix.
-///
-/// Marked `#[ignore]` because it documents a known spec-coverage gap (the
-/// implementer left QueuedCommand un-fixed) rather than a passing invariant.
+/// iter-2 → iter-3 follow-through: `AttachmentBody::QueuedCommand.image_paste_ids`
+/// is now `Option<Vec<serde_json::Value>>`, matching the same widening done on
+/// `UserEntry.image_paste_ids` (survey §5 queued_command row). Production sometimes
+/// emits integer ids inside a queued_command attachment; without this fix the
+/// whole `QueuedCommand` variant would soft-land in `AttachmentBody::Unknown`.
 #[test]
-#[ignore = "spec gap: QueuedCommand.image_paste_ids not yet Vec<Value> — see iter-2 notes"]
 fn spec_iter2_queued_command_image_paste_ids_integer_elements_parse() {
-    use cc_session_jsonl::types::attachment::AttachmentEntry;
+    use cc_session_jsonl::types::attachment::{AttachmentBody, AttachmentEntry};
     let json = r#"{
         "type": "attachment",
         "uuid": "att-qc-int-ids",
@@ -1864,4 +1861,686 @@ fn spec_iter2_queued_command_image_paste_ids_integer_elements_parse() {
         Some("queued_command"),
         "queued_command with integer imagePasteIds must parse as QueuedCommand, not Unknown"
     );
+    match entry.attachment.as_ref().unwrap() {
+        AttachmentBody::QueuedCommand {
+            image_paste_ids, ..
+        } => {
+            let ids = image_paste_ids.as_ref().expect("ids must be Some");
+            assert_eq!(ids.len(), 3);
+            assert_eq!(ids[0].as_i64(), Some(1));
+            assert_eq!(ids[2].as_i64(), Some(3));
+        }
+        other => panic!("expected QueuedCommand variant, got {other:?}"),
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// iter-3 spec-derived tests — run a66abe-1
+//
+// Six requirement clauses that the earlier spec_v2 suite left untested
+// (confirmed by gap analysis against the code + spec). Each expected value
+// comes from the requirement specification, NOT from running the code.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Item 1 — PassthroughEntry impl DagNode: &dyn DagNode dispatch ────────
+
+/// Item 1: PassthroughEntry must be usable as &dyn DagNode.
+/// Spec §1: "Passthrough 必须能被 &dyn DagNode 当 DAG 节点访问".
+/// The earlier `spec_passthrough_dag_fields_preserved` test only checks the
+/// parsed struct directly. This test calls every DagNode method through a
+/// trait object so we catch any impl-missing or vtable gaps.
+///
+/// Golden: uuid/session_id/timestamp/parent_uuid/is_sidechain return the
+/// exact values supplied in the JSON — derived from the spec, not from the
+/// implementation.
+#[test]
+fn spec_item1_passthrough_accessible_as_dyn_dag_node() {
+    use cc_session_jsonl::types::common::DagNode;
+    use cc_session_jsonl::types::PassthroughEntry;
+
+    let p = PassthroughEntry {
+        uuid: "pt-dag-001".into(),
+        parent_uuid: Some("pt-parent-001".into()),
+        session_id: "pt-sess-001".into(),
+        timestamp: Some("2026-06-09T10:00:00Z".into()),
+        entry_type: "future-type-abc".into(),
+        is_sidechain: Some(false),
+        agent_id: None,
+    };
+
+    // Coerce to trait object — this is what the spec requires
+    let node: &dyn DagNode = &p;
+    assert_eq!(
+        node.uuid(),
+        Some("pt-dag-001"),
+        "DagNode::uuid() must return the passthrough uuid"
+    );
+    assert_eq!(
+        node.session_id(),
+        Some("pt-sess-001"),
+        "DagNode::session_id() must return the passthrough sessionId"
+    );
+    assert_eq!(
+        node.timestamp(),
+        Some("2026-06-09T10:00:00Z"),
+        "DagNode::timestamp() must return the passthrough timestamp"
+    );
+    assert_eq!(
+        node.parent_uuid(),
+        Some("pt-parent-001"),
+        "DagNode::parent_uuid() must return the passthrough parentUuid"
+    );
+    assert_eq!(
+        node.is_sidechain(),
+        Some(false),
+        "DagNode::is_sidechain() must return the passthrough isSidechain"
+    );
+}
+
+/// Item 1: PassthroughEntry with null parentUuid — DagNode::parent_uuid() returns None.
+/// Spec: "is_sidechain 都能返回" - even when parentUuid is absent (root node).
+#[test]
+fn spec_item1_passthrough_null_parent_uuid_via_dag_node() {
+    use cc_session_jsonl::types::common::DagNode;
+    use cc_session_jsonl::types::PassthroughEntry;
+
+    let root = PassthroughEntry {
+        uuid: "pt-root-001".into(),
+        parent_uuid: None,
+        session_id: "pt-sess-root".into(),
+        timestamp: None,
+        entry_type: "future-root-type".into(),
+        is_sidechain: None,
+        agent_id: None,
+    };
+
+    let node: &dyn DagNode = &root;
+    assert_eq!(node.uuid(), Some("pt-root-001"));
+    assert!(
+        node.parent_uuid().is_none(),
+        "DagNode::parent_uuid() on root passthrough must return None"
+    );
+    assert!(
+        node.timestamp().is_none(),
+        "DagNode::timestamp() when absent must return None via trait object"
+    );
+    assert!(
+        node.is_sidechain().is_none(),
+        "DagNode::is_sidechain() when absent must return None via trait object"
+    );
+}
+
+// ── Item 2 — AssistantEntry.message is REQUIRED (non-Option) ─────────────
+
+/// Item 2: AssistantEntry without the `message` field must yield
+/// ParseError::StructDrift — NOT ParseError::Json.
+///
+/// Spec: "缺 message 的 assistant entry → ParseError::StructDrift"
+///
+/// This is the key test the implementer's suite was missing: existing tests
+/// only prove "message present → OK" (a mirror test). This test proves
+/// "message absent → StructDrift" (an independent oracle test).
+///
+/// Golden: error variant is StructDrift with entry_type == "assistant".
+#[test]
+fn spec_item2_assistant_missing_message_is_struct_drift() {
+    // Well-formed JSON, known entry type "assistant", but `message` field
+    // is entirely absent. Since message: ApiMessage (not Option), serde
+    // must fail — and the v2 strict design must surface it as StructDrift.
+    let json = r#"{"type":"assistant","uuid":"a1","parentUuid":"p1","sessionId":"s1"}"#;
+    let err = parse_entry(json).unwrap_err();
+    match err {
+        cc_session_jsonl::ParseError::StructDrift { entry_type, .. } => {
+            assert_eq!(
+                entry_type, "assistant",
+                "StructDrift must name the correct entry type 'assistant'"
+            );
+        }
+        cc_session_jsonl::ParseError::Json(_) => {
+            panic!(
+                "Missing message on AssistantEntry must be StructDrift, not ParseError::Json. \
+                 The strict v2 design requires known-type + bad-shape → StructDrift so that \
+                 schema regressions are counted and signalled separately from malformed JSON."
+            );
+        }
+        other => panic!("Expected StructDrift, got: {other}"),
+    }
+}
+
+/// Item 2: AssistantEntry with message = null (explicit null) must also
+/// yield StructDrift (null is not a valid ApiMessage value).
+/// Golden: StructDrift with entry_type == "assistant".
+#[test]
+fn spec_item2_assistant_message_explicit_null_is_struct_drift() {
+    let json =
+        r#"{"type":"assistant","uuid":"a2","parentUuid":"p1","sessionId":"s1","message":null}"#;
+    let err = parse_entry(json).unwrap_err();
+    match err {
+        cc_session_jsonl::ParseError::StructDrift { entry_type, .. } => {
+            assert_eq!(entry_type, "assistant");
+        }
+        other => panic!(
+            "message:null on AssistantEntry must be StructDrift, got: {other}"
+        ),
+    }
+}
+
+// ── Item 3 — 7 typed enums: known variants + Unknown soft-landing ─────────
+//
+// Spec: "每个 enum 必须支持 (a) 已知 variant 解析；(b) #[serde(other)] Unknown
+//       软着陆未知值；(c) 跟原始 Option<String> 字段相同的解析路径不破坏"
+//
+// The five enums already covered in spec_v2 (PermissionMode, StopReason,
+// PromptSource, OriginKind, CacheMissReasonKind) are not repeated here.
+// This section adds the six enums left uncovered in spec_v2 that ARE part
+// of this iteration's spec, plus the PermissionMode::Auto variant that was
+// added to cover the real-data "auto" permission mode.
+
+use cc_session_jsonl::types::common::{
+    AssistantError, Entrypoint, InferenceGeo, ServiceTier, Speed, UserType,
+};
+
+// ── C-new.1 UserType ──
+
+/// UserType(a): known variant "external" → UserType::External.
+/// Golden: spec §3 states userType is present on 100% of entries, always
+/// "external" on this machine. Wire value "external" → External variant.
+#[test]
+fn spec_item3_user_type_external_parses() {
+    let v: UserType = serde_json::from_str(r#""external""#).unwrap();
+    assert_eq!(v, UserType::External, "\"external\" must map to UserType::External");
+}
+
+/// UserType(b): unknown future value → UserType::Unknown (not a parse error).
+/// Spec: new values from future Claude Code releases (e.g. "internal") must
+/// degrade gracefully, not error the whole entry.
+/// Golden: any string not in the enum → Unknown variant.
+#[test]
+fn spec_item3_user_type_future_value_soft_lands() {
+    let v: UserType = serde_json::from_str(r#""internal_anthropic_user_2030""#).unwrap();
+    assert_eq!(
+        v,
+        UserType::Unknown,
+        "Unknown userType value must soft-land in UserType::Unknown"
+    );
+}
+
+/// UserType(c): the full assistant entry with a future userType value must
+/// still parse (field-level drift, not entry-level drift).
+/// Spec invariant: "value drift ≠ struct drift". A novel userType string
+/// lands in Unknown and the entry continues to parse.
+#[test]
+fn spec_item3_user_type_novel_value_in_entry_does_not_drift() {
+    // "internal" is not a modelled variant — should degrade to Unknown, NOT StructDrift
+    let json = r#"{
+        "type":"assistant",
+        "uuid":"a1",
+        "parentUuid":"p",
+        "sessionId":"s1",
+        "userType":"internal",
+        "message":{"model":"m","role":"assistant","content":[]}
+    }"#;
+    let entry = parse_entry(json).expect("Novel userType must not cause StructDrift");
+    match entry {
+        Entry::Assistant(a) => {
+            assert_eq!(
+                a.user_type,
+                Some(UserType::Unknown),
+                "Novel userType must land in UserType::Unknown, not fail the entry"
+            );
+        }
+        other => panic!("Expected Assistant, got {other:?}"),
+    }
+}
+
+// ── C-new.2 Entrypoint ──
+
+/// Entrypoint(a): known variants "cli" and "sdk-cli" parse correctly.
+/// Wire values from common.rs: kebab-case ("cli", "sdk-cli").
+#[test]
+fn spec_item3_entrypoint_known_variants_parse() {
+    let cli: Entrypoint = serde_json::from_str(r#""cli""#).unwrap();
+    assert_eq!(cli, Entrypoint::Cli, "\"cli\" must map to Entrypoint::Cli");
+
+    let sdk: Entrypoint = serde_json::from_str(r#""sdk-cli""#).unwrap();
+    assert_eq!(sdk, Entrypoint::SdkCli, "\"sdk-cli\" must map to Entrypoint::SdkCli");
+}
+
+/// Entrypoint(b): future value (e.g. "vscode-extension-2030") → Unknown.
+/// Spec: new IDE integrations or IDE-specific entrypoints must not fail parse.
+#[test]
+fn spec_item3_entrypoint_future_value_soft_lands() {
+    let v: Entrypoint = serde_json::from_str(r#""vscode-extension-2030""#).unwrap();
+    assert_eq!(
+        v,
+        Entrypoint::Unknown,
+        "Novel entrypoint value must soft-land in Entrypoint::Unknown"
+    );
+}
+
+/// Entrypoint(c): novel entrypoint in a full entry must not cause StructDrift.
+#[test]
+fn spec_item3_entrypoint_novel_value_in_entry_does_not_drift() {
+    let json = r#"{
+        "type":"user",
+        "uuid":"u1",
+        "sessionId":"s1",
+        "entrypoint":"web-ui-2030",
+        "message":{"role":"user","content":"hi"}
+    }"#;
+    let entry = parse_entry(json).expect("Novel entrypoint must not cause StructDrift");
+    match entry {
+        Entry::User(u) => {
+            assert_eq!(
+                u.entrypoint,
+                Some(Entrypoint::Unknown),
+                "Novel entrypoint value must land in Entrypoint::Unknown"
+            );
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+// ── C-new.3 ServiceTier ──
+
+/// ServiceTier(a): known variants parse correctly.
+/// Wire values: snake_case. Real-data: "standard". Spec also models
+/// "batch" and "priority" per the Anthropic Messages API spec.
+#[test]
+fn spec_item3_service_tier_known_variants_parse() {
+    let standard: ServiceTier = serde_json::from_str(r#""standard""#).unwrap();
+    assert_eq!(standard, ServiceTier::Standard);
+
+    let batch: ServiceTier = serde_json::from_str(r#""batch""#).unwrap();
+    assert_eq!(batch, ServiceTier::Batch);
+
+    let priority: ServiceTier = serde_json::from_str(r#""priority""#).unwrap();
+    assert_eq!(priority, ServiceTier::Priority);
+}
+
+/// ServiceTier(b): unknown future tier → ServiceTier::Unknown.
+/// Spec: Anthropic may add new service tiers; they must not break parse.
+#[test]
+fn spec_item3_service_tier_future_value_soft_lands() {
+    let v: ServiceTier = serde_json::from_str(r#""enterprise_2030""#).unwrap();
+    assert_eq!(
+        v,
+        ServiceTier::Unknown,
+        "Novel service_tier value must soft-land in ServiceTier::Unknown"
+    );
+}
+
+/// ServiceTier(c): ServiceTier::as_str() returns correct wire-format values.
+/// Golden: the wire strings come from the spec (common.rs), not from running
+/// code. These are the strings that appear in real JSONL and the API docs.
+#[test]
+fn spec_item3_service_tier_as_str_golden_values() {
+    assert_eq!(ServiceTier::Standard.as_str(), "standard");
+    assert_eq!(ServiceTier::Batch.as_str(), "batch");
+    assert_eq!(ServiceTier::Priority.as_str(), "priority");
+    assert_eq!(ServiceTier::Unknown.as_str(), "unknown");
+}
+
+// ── C-new.4 Speed ──
+
+/// Speed(a): known variant "standard" → Speed::Standard.
+/// Real-data: ~74% of newer assistant turns carry this field.
+#[test]
+fn spec_item3_speed_standard_parses() {
+    let v: Speed = serde_json::from_str(r#""standard""#).unwrap();
+    assert_eq!(v, Speed::Standard, "\"standard\" must map to Speed::Standard");
+}
+
+/// Speed(b): unknown future speed value → Speed::Unknown.
+/// Spec: speed tier surface is small but not frozen.
+#[test]
+fn spec_item3_speed_future_value_soft_lands() {
+    let v: Speed = serde_json::from_str(r#""turbo_2030""#).unwrap();
+    assert_eq!(
+        v,
+        Speed::Unknown,
+        "Novel speed value must soft-land in Speed::Unknown"
+    );
+}
+
+/// Speed(c): Speed::as_str() golden values.
+#[test]
+fn spec_item3_speed_as_str_golden_values() {
+    assert_eq!(Speed::Standard.as_str(), "standard");
+    assert_eq!(Speed::Unknown.as_str(), "unknown");
+}
+
+// ── C-new.5 InferenceGeo ──
+
+/// InferenceGeo(a): "not_available" and "" (empty string) are distinct modelled
+/// variants. The empty-string variant is critical: ~8,886 occurrences in real
+/// data (survey §3). Wire value "" must map to InferenceGeo::Empty (not Unknown).
+/// Golden: both values come from the spec, not from running code.
+#[test]
+fn spec_item3_inference_geo_known_variants_parse() {
+    let na: InferenceGeo = serde_json::from_str(r#""not_available""#).unwrap();
+    assert_eq!(na, InferenceGeo::NotAvailable, "\"not_available\" must map to NotAvailable");
+
+    // The empty-string case is the critical one — thousands of real entries.
+    // Without the dedicated #[serde(rename = "")] variant, "" would fall
+    // through to Unknown, losing the semantic distinction.
+    let empty: InferenceGeo = serde_json::from_str(r#""""#).unwrap();
+    assert_eq!(
+        empty,
+        InferenceGeo::Empty,
+        "Empty string must map to InferenceGeo::Empty (not Unknown)"
+    );
+}
+
+/// InferenceGeo(b): unknown geographic tag → InferenceGeo::Unknown.
+/// Spec: geo tags are not frozen; new regions must not break parse.
+#[test]
+fn spec_item3_inference_geo_future_value_soft_lands() {
+    let v: InferenceGeo = serde_json::from_str(r#""eu-west-1-2030""#).unwrap();
+    assert_eq!(
+        v,
+        InferenceGeo::Unknown,
+        "Novel inference_geo value must soft-land in InferenceGeo::Unknown"
+    );
+}
+
+/// InferenceGeo(c): as_str() golden values.
+/// Golden: the wire strings come from the spec (common.rs).
+#[test]
+fn spec_item3_inference_geo_as_str_golden_values() {
+    assert_eq!(InferenceGeo::NotAvailable.as_str(), "not_available");
+    assert_eq!(InferenceGeo::Empty.as_str(), "");
+    assert_eq!(InferenceGeo::Unknown.as_str(), "unknown");
+}
+
+// ── C-new.6 AssistantError ──
+
+/// AssistantError(a): all five known string values parse to the correct variant.
+/// Wire values from real data (survey §3): rate_limit, authentication_failed,
+/// server_error, oauth_org_not_allowed, and the literal string "unknown"
+/// (the API's own catch-all — distinct from our drift bucket).
+/// Golden: all values come from the spec, not from code introspection.
+#[test]
+fn spec_item3_assistant_error_known_variants_parse() {
+    let rl: AssistantError = serde_json::from_str(r#""rate_limit""#).unwrap();
+    assert_eq!(rl, AssistantError::RateLimit);
+
+    let af: AssistantError = serde_json::from_str(r#""authentication_failed""#).unwrap();
+    assert_eq!(af, AssistantError::AuthenticationFailed);
+
+    let se: AssistantError = serde_json::from_str(r#""server_error""#).unwrap();
+    assert_eq!(se, AssistantError::ServerError);
+
+    let oauth: AssistantError = serde_json::from_str(r#""oauth_org_not_allowed""#).unwrap();
+    assert_eq!(oauth, AssistantError::OauthOrgNotAllowed);
+
+    // The literal string "unknown" is the API's documented catch-all category,
+    // observed 9 times in the survey. It maps to AssistantError::Unknown —
+    // distinct from AssistantError::Other which is our drift sentinel.
+    let api_unknown: AssistantError = serde_json::from_str(r#""unknown""#).unwrap();
+    assert_eq!(
+        api_unknown,
+        AssistantError::Unknown,
+        "\"unknown\" is the API's own bucket — must map to AssistantError::Unknown"
+    );
+    assert_eq!(api_unknown.as_str(), "unknown");
+}
+
+/// AssistantError(b): a future error category → AssistantError::Other.
+/// Spec: "Drift soft-landing for error categories the parser hasn't seen yet.
+/// Distinct from Unknown (which is the literal value the API emits)."
+/// Golden: any string not explicitly modelled → Other (not Unknown, not error).
+#[test]
+fn spec_item3_assistant_error_future_value_soft_lands_in_other() {
+    let v: AssistantError = serde_json::from_str(r#""future_error_category_2030""#).unwrap();
+    assert_eq!(
+        v,
+        AssistantError::Other,
+        "Novel AssistantError value must land in Other (not Unknown or error)"
+    );
+    // as_str() for the drift variant returns "other" — distinct from "unknown"
+    assert_eq!(
+        v.as_str(),
+        "other",
+        "AssistantError::Other.as_str() must return \"other\", not \"unknown\""
+    );
+}
+
+/// AssistantError: the literal "unknown" vs drift "Other" are semantically
+/// distinct — the spec models them separately. Verify they round-trip
+/// differently so callers can distinguish "API said unknown" from "we haven't
+/// seen this value yet".
+#[test]
+fn spec_item3_assistant_error_unknown_vs_other_are_distinct() {
+    let api_catch_all: AssistantError = serde_json::from_str(r#""unknown""#).unwrap();
+    let drift: AssistantError = serde_json::from_str(r#""brand_new_category""#).unwrap();
+    assert_ne!(
+        api_catch_all, drift,
+        "The API's literal 'unknown' and the drift bucket 'Other' must be distinct variants"
+    );
+    assert_eq!(api_catch_all.as_str(), "unknown");
+    assert_eq!(drift.as_str(), "other");
+}
+
+// ── C-new.7 PermissionMode::Auto ─────────────────────────────────────────
+
+/// PermissionMode::Auto: real-data value observed alongside bypassPermissions
+/// and default (not in the original survey field list, added from real-data).
+/// Spec: "Observed in real data ... emitted by the CLI when the user is running
+/// with --auto style flow."
+/// Golden: wire value "auto" → PermissionMode::Auto (not Unknown).
+#[test]
+fn spec_item3_permission_mode_auto_parses() {
+    use cc_session_jsonl::types::common::PermissionMode;
+    let auto: PermissionMode = serde_json::from_str(r#""auto""#).unwrap();
+    assert_eq!(
+        auto,
+        PermissionMode::Auto,
+        "\"auto\" must map to PermissionMode::Auto (it's a real-data-observed variant)"
+    );
+    // Confirm it's NOT Unknown — if someone forgot to add Auto, it would
+    // soft-land in Unknown and this test would catch it.
+    assert_ne!(auto, PermissionMode::Unknown, "PermissionMode::Auto must be a distinct variant, not Unknown");
+}
+
+// ── Item 4 — QueuedCommand.image_paste_ids: mixed (string + integer) ─────
+
+/// Item 4 (supplement): QueuedCommand.image_paste_ids with mixed string + integer
+/// elements must parse — not soft-land in Unknown. The spec-v2 iter-3 test
+/// `spec_iter2_queued_command_image_paste_ids_integer_elements_parse` covers
+/// pure-integer arrays. This test covers the mixed case and the same user
+/// `imagePasteIds` field for cross-type consistency.
+///
+/// Spec invariant: "同样 integer + mixed 形态在两个 entry 类型上都解析成功".
+/// Golden: first element is string "abc", second is integer 99 — from spec.
+#[test]
+fn spec_item4_queued_command_image_paste_ids_mixed_parses() {
+    use cc_session_jsonl::types::attachment::{AttachmentBody, AttachmentEntry};
+    let json = r#"{
+        "type": "attachment",
+        "uuid": "att-qc-mixed",
+        "sessionId": "s1",
+        "attachment": {
+            "type": "queued_command",
+            "commandMode": "prompt",
+            "prompt": "go",
+            "imagePasteIds": ["abc", 99, "xyz"]
+        }
+    }"#;
+    let entry: AttachmentEntry = serde_json::from_str(json)
+        .expect("queued_command with mixed imagePasteIds must parse without StructDrift");
+    assert_eq!(
+        entry.attachment_subtype(),
+        Some("queued_command"),
+        "mixed imagePasteIds must not cause QueuedCommand to soft-land in Unknown"
+    );
+    match entry.attachment.as_ref().unwrap() {
+        AttachmentBody::QueuedCommand { image_paste_ids, .. } => {
+            let ids = image_paste_ids.as_ref().expect("ids must be Some");
+            assert_eq!(ids.len(), 3, "must have 3 elements");
+            // Golden: string, int, string
+            assert_eq!(ids[0].as_str(), Some("abc"), "first element must be string \"abc\"");
+            assert_eq!(ids[1].as_i64(), Some(99), "second element must be integer 99");
+            assert_eq!(ids[2].as_str(), Some("xyz"), "third element must be string \"xyz\"");
+        }
+        other => panic!("expected QueuedCommand variant, got {other:?}"),
+    }
+}
+
+// ── Item 5 — 6 zero-sample fields silently ignored ────────────────────────
+//
+// Spec: "真实数据出现这些字段时（哪怕零概率），entry 仍能解析（serde 默认 ignore unknown keys）"
+//
+// The 6 fields removed in v2 (zero hits in survey §3):
+//   apiError (Option<String>), isVirtual (Option<bool>), advisorModel (Option<String>),
+//   teamName (Option<String>), agentName (Option<String>), agentColor (Option<String>)
+//
+// They must be silently dropped, not cause StructDrift.
+// These are NOT regression snapshots — the spec explicitly says serde drops
+// unknown keys, so the expectation comes from the design requirement.
+
+/// Item 5: `apiError` (old Option<String> field) present in JSON → silently
+/// dropped by serde, entry parses successfully.
+/// Spec: "Serde silently drops unknown keys so reappearance in future data won't
+/// fail the parse".
+#[test]
+fn spec_item5_removed_api_error_field_silently_ignored() {
+    let json = r#"{
+        "type": "assistant",
+        "uuid": "a-ze-001",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "apiError": "rate_limit",
+        "message": {"model": "m", "role": "assistant", "content": []}
+    }"#;
+    let entry = parse_entry(json).expect(
+        "Removed zero-sample field 'apiError' must be silently ignored, not cause StructDrift"
+    );
+    assert!(matches!(entry, Entry::Assistant(_)));
+}
+
+/// Item 5: `isVirtual` (old Option<bool> field) present → silently dropped.
+#[test]
+fn spec_item5_removed_is_virtual_field_silently_ignored() {
+    let json = r#"{
+        "type": "assistant",
+        "uuid": "a-ze-002",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "isVirtual": true,
+        "message": {"model": "m", "role": "assistant", "content": []}
+    }"#;
+    let entry = parse_entry(json).expect(
+        "Removed zero-sample field 'isVirtual' must be silently ignored, not cause StructDrift"
+    );
+    assert!(matches!(entry, Entry::Assistant(_)));
+}
+
+/// Item 5: `advisorModel` (old Option<String> field) present → silently dropped.
+#[test]
+fn spec_item5_removed_advisor_model_field_silently_ignored() {
+    let json = r#"{
+        "type": "assistant",
+        "uuid": "a-ze-003",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "advisorModel": "claude-opus-3-5",
+        "message": {"model": "m", "role": "assistant", "content": []}
+    }"#;
+    let entry = parse_entry(json).expect(
+        "Removed zero-sample field 'advisorModel' must be silently ignored, not cause StructDrift"
+    );
+    assert!(matches!(entry, Entry::Assistant(_)));
+}
+
+/// Item 5: `teamName` (teammates field, 0 hits in survey) present → silently dropped.
+#[test]
+fn spec_item5_teammates_team_name_silently_ignored() {
+    let json = r#"{
+        "type": "assistant",
+        "uuid": "a-ze-004",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "teamName": "acme-corp",
+        "message": {"model": "m", "role": "assistant", "content": []}
+    }"#;
+    let entry = parse_entry(json).expect(
+        "Teammates field 'teamName' must be silently ignored even though not modelled"
+    );
+    assert!(matches!(entry, Entry::Assistant(_)));
+}
+
+/// Item 5: `agentName` (teammates field) present → silently dropped.
+#[test]
+fn spec_item5_teammates_agent_name_silently_ignored() {
+    let json = r#"{
+        "type": "assistant",
+        "uuid": "a-ze-005",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "agentName": "Builder",
+        "message": {"model": "m", "role": "assistant", "content": []}
+    }"#;
+    let entry = parse_entry(json).expect(
+        "Teammates field 'agentName' must be silently ignored even though not modelled"
+    );
+    assert!(matches!(entry, Entry::Assistant(_)));
+}
+
+/// Item 5: `agentColor` (teammates field) present → silently dropped.
+/// This test also covers the multi-field case (all three teammates fields
+/// together) since real teammates sessions would emit all of them at once.
+#[test]
+fn spec_item5_teammates_agent_color_silently_ignored() {
+    // Use r##"..."## so that the hash in the color value "#ff0000" doesn't
+    // confuse the Rust raw-string delimiter parser.
+    let json = r##"{
+        "type": "assistant",
+        "uuid": "a-ze-006",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "agentColor": "#ff0000",
+        "message": {"model": "m", "role": "assistant", "content": []}
+    }"##;
+    let entry = parse_entry(json).expect(
+        "Teammates field 'agentColor' must be silently ignored even though not modelled"
+    );
+    assert!(matches!(entry, Entry::Assistant(_)));
+}
+
+/// Item 5 (combined): All 6 zero-sample fields present simultaneously.
+/// Spec: serde ignores unknown keys regardless of how many there are.
+/// Golden: entry parses successfully; specific field values are absent from
+/// the struct (they are simply dropped, not surfaced anywhere).
+#[test]
+fn spec_item5_all_six_zero_sample_fields_simultaneously_ignored() {
+    let json = r##"{
+        "type": "assistant",
+        "uuid": "a-ze-all",
+        "parentUuid": "p1",
+        "sessionId": "s1",
+        "apiError": "rate_limit",
+        "isVirtual": false,
+        "advisorModel": "claude-opus-3-5",
+        "teamName": "acme-corp",
+        "agentName": "Builder",
+        "agentColor": "#00ff00",
+        "message": {
+            "model": "claude-opus-4-6",
+            "role": "assistant",
+            "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": "done"}]
+        }
+    }"##;
+    let entry = parse_entry(json).expect(
+        "All 6 zero-sample removed fields present simultaneously must not cause StructDrift"
+    );
+    match entry {
+        Entry::Assistant(a) => {
+            // The modelled fields parse correctly — the extra fields are dropped
+            assert_eq!(a.parent_uuid, "p1");
+            assert_eq!(a.uuid.as_deref(), Some("a-ze-all"));
+        }
+        other => panic!("Expected Assistant, got {other:?}"),
+    }
 }
