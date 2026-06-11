@@ -238,7 +238,67 @@ skill_listing/queued_command，覆盖 ~95%）+ 长尾走 `#[serde(other)] Unknow
 
 ---
 
-## 8. 已知局限与后续
+## 8. 字段建模三原则（后续 review 与 amend 的判据）
+
+`v2 ship` 后多轮二级字段 review 沉淀出三条全局规则，与 §0 / §7 的字段级判据互补：
+
+### 8.1 「wire 上真实出现的字段都保留解析」
+
+只要 wire 上某字段**实际出现过**（survey 命中 > 0），cc-session-jsonl 就保留解析——即使值恒定单一、即使消费方不用。
+
+- **零样本字段**（survey 0 hits + 0 callsites）→ **删** + 留 tombstone 注释（见 a66abe-1 案例：`teamName` / `agentColor` 等 6 个字段）
+- **单值字段**（100% 同一值，如 `userType: "external"`）→ **保留**，作 drift canary。未来 Anthropic 引入新 tier 时，typed enum 的 `Unknown` variant 会立刻报警
+
+判据：survey 数据驱动，不是"这字段对当前消费方有没有用"驱动。
+
+### 8.2 「有可能缺失 → Option」
+
+**默认**：所有字段 `Option<T>`，反映 wire 上理论上的可能缺失。
+
+**例外**仅 2 个（v2 强约束，逻辑必然非空）：
+- `AssistantEntry.message: ApiMessage`（assistant entry 的唯一负载，缺则无意义）
+- `AssistantEntry.parent_uuid: String`（assistant 永远是某条 user/assistant 的回复，根本不可能是会话根）
+
+任何其他字段哪怕 survey 100% fill 也保留 Option——survey 只是当前快照，不是逻辑必然。
+
+### 8.3 「混合 typed」模式 — 多形态字段的务实建模
+
+当一个字段 wire shape 跨多种形态、且分布 long-tail（典型如 `toolUseResult` 45 个 shape / Top-5 覆盖 ~77%），不要强行做完整 typed enum，用**混合方案**：
+
+```rust
+#[serde(untagged)]
+pub enum ToolUseResult {
+    Rejected(String),                    // 高频纯字符串变体
+    Typed(TypedToolResult),              // 已识别的 N 个工具 shape（typed enum）
+    Other(serde_json::Value),            // 长尾兜底，消费方直接 JSON 渲染
+}
+```
+
+判据：
+- **高频集中 shape**（>1% 出现率）+ **稳定 keys** → 进 typed
+- **长尾低频** + **shape 随版本/工具演化** → 进 `Other(Value)`
+- 消费方看到 `Other` 直接 JSON pretty-print 显示也合理
+
+**适用字段**（按本轮 review 沉淀）：
+- `user.toolUseResult`（Bash/Edit/Read/Write/Task/AskUserQuestion/WebFetch/WebSearch + 长尾）
+- `user.message.content`（5 个 content_kind 形态）
+- `user.origin` / `user.mcpMeta`（核心字段 + extra: Option<Value> 兜底其他键）
+- `assistant.message.context_management`（同模式）
+
+### 8.4 决策的方法学 — survey 工具
+
+字段建模决策**必须先 survey**，不能凭印象。工具：
+
+```bash
+find ~/.claude/projects -name '*.jsonl' | \
+    python3 scripts/survey-jsonl-field.py <field> [<entry_type>] [--samples N]
+```
+
+输出每个字段的 shape signature 分布 + 真实样本，是 §8.1 / §8.3 判断的输入。在 `scripts/survey-jsonl-field.py`。
+
+---
+
+## 9. 已知局限与后续
 
 - **单机数据集**：本表基于一台机器。`teamName/agentName/agentColor`(0)、auth-fail/synthetic 路径（样本极小）
   等都需在 doc 的 178-session 数据集**交叉验证**再定 required。本表 REQUIRED = 强候选，非终判。
