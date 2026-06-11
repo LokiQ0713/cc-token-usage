@@ -109,7 +109,10 @@ fn spec_user_full_fields_deserialization() {
         .as_ref()
         .expect("imagePasteIds must be Some");
     assert_eq!(ids.len(), 2);
-    assert_eq!(ids[0].as_str(), Some("img-1"));
+    match &ids[0] {
+        cc_session_jsonl::types::user::ImagePasteId::String(s) => assert_eq!(s, "img-1"),
+        other => panic!("expected String id, got {other:?}"),
+    }
 }
 
 /// A.1(b) UserEntry with ONLY required fields (all optionals omitted).
@@ -1786,6 +1789,7 @@ fn spec_iter2_api_error_cause_array_soft_lands() {
 /// Golden: array of 3 integers, each accessible as i64.
 #[test]
 fn spec_iter2_user_image_paste_ids_integer_elements_parse() {
+    use cc_session_jsonl::types::user::ImagePasteId;
     let json = r#"{
         "type": "user",
         "uuid": "u-int-ids",
@@ -1800,19 +1804,32 @@ fn spec_iter2_user_image_paste_ids_integer_elements_parse() {
                 .as_ref()
                 .expect("imagePasteIds with integers must be Some");
             assert_eq!(ids.len(), 3, "must have 3 elements");
-            assert_eq!(ids[0].as_i64(), Some(1), "first element must be integer 1");
-            assert_eq!(ids[1].as_i64(), Some(3), "second element must be integer 3");
-            assert_eq!(ids[2].as_i64(), Some(7), "third element must be integer 7");
+            assert!(
+                matches!(ids[0], ImagePasteId::Integer(1)),
+                "first element must be integer 1, got {:?}",
+                ids[0]
+            );
+            assert!(
+                matches!(ids[1], ImagePasteId::Integer(3)),
+                "second element must be integer 3, got {:?}",
+                ids[1]
+            );
+            assert!(
+                matches!(ids[2], ImagePasteId::Integer(7)),
+                "third element must be integer 7, got {:?}",
+                ids[2]
+            );
         }
         other => panic!("Expected User, got {other:?}"),
     }
 }
 
 /// iter-2 A.1e: imagePasteIds with mixed elements (string + integer) — both parse.
-/// Spec: Vec<Value> accepts heterogeneous arrays.
+/// Spec: `ImagePasteId` enum accepts heterogeneous arrays.
 /// Golden: first element is string "abc", second is integer 99.
 #[test]
 fn spec_iter2_user_image_paste_ids_mixed_elements_parse() {
+    use cc_session_jsonl::types::user::ImagePasteId;
     let json = r#"{
         "type": "user",
         "uuid": "u-mixed-ids",
@@ -1827,8 +1844,15 @@ fn spec_iter2_user_image_paste_ids_mixed_elements_parse() {
                 .as_ref()
                 .expect("mixed imagePasteIds must be Some");
             assert_eq!(ids.len(), 2);
-            assert_eq!(ids[0].as_str(), Some("abc"));
-            assert_eq!(ids[1].as_i64(), Some(99));
+            match &ids[0] {
+                ImagePasteId::String(s) => assert_eq!(s, "abc"),
+                other => panic!("expected String, got {other:?}"),
+            }
+            assert!(
+                matches!(ids[1], ImagePasteId::Integer(99)),
+                "second element must be integer 99, got {:?}",
+                ids[1]
+            );
         }
         other => panic!("Expected User, got {other:?}"),
     }
@@ -2542,5 +2566,1094 @@ fn spec_item5_all_six_zero_sample_fields_simultaneously_ignored() {
             assert_eq!(a.uuid.as_deref(), Some("a-ze-all"));
         }
         other => panic!("Expected Assistant, got {other:?}"),
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// committee run 9c2e4f-1 — independent spec tests for §8.3 mixed-typed
+// promotion and Origin/McpMeta extras capture.
+//
+// Spec source: §8.3 of docs/cc-session-jsonl-v2-field-survey.md and the task
+// description for committee run 9c2e4f-1. All expected values below come from
+// the requirement spec (golden) or from real-data samples captured via
+//   find ~/.claude/projects -name '*.jsonl' | python3 scripts/survey-jsonl-field.py
+// — NOT from running the implementation. These are independent oracle tests
+// designed to catch what positive-path implementer tests typically miss:
+// subset-key collisions, empty/null edges, strict-type rejection, untagged
+// first-match-wins gotchas, and explicit long-tail-must-fall-through cases.
+// ════════════════════════════════════════════════════════════════════════════
+
+use cc_session_jsonl::types::user::{
+    ImagePasteId as ImagePasteIdV2, McpMeta, Origin as OriginV2, ToolUseResult, TypedToolResult,
+};
+
+// ── Task A: tool_use_result — Rejected / Typed / Other dispatch ──────────
+
+/// Task A.1 — Pure JSON string at top level → `Rejected(String)`.
+/// Spec source: real-data sample (309 hits, ~5% of all toolUseResult hits)
+///   "Error: The user doesn't want to proceed with this tool use ..."
+/// Golden: shape = String at the top of `toolUseResult` → must land in
+/// `ToolUseResult::Rejected` and preserve the rejection message verbatim.
+#[test]
+fn spec_9c2e4f_tool_use_result_rejected_real_sample_preserves_message() {
+    let sample = "Error: The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said: stop";
+    // Wrap into a JSON string literal so the parser sees a top-level string.
+    let wire = serde_json::to_string(sample).unwrap();
+    let r: ToolUseResult = serde_json::from_str(&wire).unwrap();
+    match r {
+        ToolUseResult::Rejected(msg) => assert_eq!(
+            msg, sample,
+            "Rejected variant must preserve the rejection message verbatim, not transform it"
+        ),
+        other => panic!(
+            "Plain-string toolUseResult must land in ToolUseResult::Rejected, got {other:?}"
+        ),
+    }
+}
+
+/// Task A.2 — TaskCreate subset-key collision: a *broader* shape that happens
+/// to also carry a `task` key (alongside other keys) must NOT misdispatch to
+/// `TaskCreate`. Spec §8.3 dispatch rule: "TaskCreate matches *only* when the
+/// object has exactly one key named `task`". Any extra key must push it down
+/// the dispatch chain to a different typed variant or to `Other`.
+///
+/// Golden: an object `{task, command, status}` does NOT match the single-key
+/// `TaskCreate` shape — so it lands in `Other(Value)` (no other typed shape
+/// matches). The `task` field must still be accessible via the captured Value.
+/// If the implementation were to use a naive "contains `task` key" check
+/// instead of the spec's single-key rule, this test would catch it.
+#[test]
+fn spec_9c2e4f_tool_use_result_task_key_with_extra_keys_is_not_task_create() {
+    // Two extra keys alongside `task` — TaskCreate spec is single-key.
+    let json =
+        r#"{"task":{"id":"99","subject":"test"},"command":"stop","status":"interrupted"}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskCreate(_)) => {
+            panic!(
+                "Broader shape with `task` PLUS extra keys must NOT misdispatch to \
+                 TaskCreate. The spec rule is single-key {{task}} only."
+            );
+        }
+        ToolUseResult::Other(v) => {
+            // No other typed shape matches → falls to Other(Value).
+            // The captured Value must still hold the original keys for downstream
+            // consumers that pretty-print it.
+            assert_eq!(v["command"], "stop", "Other Value must preserve extra key 'command'");
+            assert_eq!(v["status"], "interrupted", "Other Value must preserve key 'status'");
+            assert_eq!(v["task"]["id"], "99", "Other Value must preserve nested 'task' field");
+        }
+        other => panic!(
+            "Object with `task` + extra keys should fall to Other(Value), got {other:?}"
+        ),
+    }
+}
+
+/// Task A.3 — TaskCreate single-key positive control. With *only* `{task}`,
+/// dispatch MUST match `TaskCreate`. This is the "match anchor" for A.2 to
+/// have meaning: A.2 is only useful if the single-key shape genuinely works.
+/// Spec source: §8.3 shape signature `obj{task}` (141 hits / 2.34%).
+#[test]
+fn spec_9c2e4f_tool_use_result_task_create_single_key_positive_anchor() {
+    let json = r#"{"task":{"id":"1","subject":"do the thing"}}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskCreate(t)) => {
+            assert_eq!(t.task.id.as_deref(), Some("1"));
+            assert_eq!(t.task.subject.as_deref(), Some("do the thing"));
+        }
+        other => panic!("Single-key {{task}} object must match TaskCreate, got {other:?}"),
+    }
+}
+
+/// Task A.4 — Empty object `{}` boundary. Spec does not say where it lands
+/// (no required keys match any typed shape). The dispatch chain falls through
+/// to `Other(Value)` with the empty map preserved. The critical assertion is
+/// that it does NOT panic and does NOT mis-match a typed variant.
+///
+/// This is a regression-snapshot test for landing location (Other), and a
+/// golden test for "does not panic / does not StructDrift".
+#[test]
+fn spec_9c2e4f_tool_use_result_empty_object_does_not_panic() {
+    let json = "{}";
+    let r: ToolUseResult = serde_json::from_str(json)
+        .expect("empty object toolUseResult must not StructDrift");
+    match r {
+        ToolUseResult::Other(v) => {
+            assert!(v.is_object(), "Other Value should preserve the original object shape");
+            assert_eq!(v.as_object().unwrap().len(), 0, "empty object must round-trip empty");
+        }
+        ToolUseResult::Typed(_) => panic!(
+            "Empty object must not match any typed variant (every typed shape has \
+             required keys; empty object satisfies none of them)"
+        ),
+        ToolUseResult::Rejected(_) => panic!(
+            "Empty object cannot be a Rejected variant (Rejected is for top-level strings)"
+        ),
+    }
+}
+
+/// Task A.5 — top-level `null` for `tool_use_result` produces `None` on the
+/// wrapping Option<ToolUseResult>. Spec: `Option<T>` accepts JSON null as None
+/// regardless of inner type.
+#[test]
+fn spec_9c2e4f_user_tool_use_result_explicit_null_is_none() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-tur-null",
+        "sessionId": "s1",
+        "toolUseResult": null,
+        "message": {"role": "user", "content": "hi"}
+    }"#;
+    let entry = parse_entry(json).expect("toolUseResult:null must parse without error");
+    match entry {
+        Entry::User(u) => {
+            assert!(
+                u.tool_use_result.is_none(),
+                "Explicit toolUseResult:null must produce None on the wrapping Option"
+            );
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+/// Task A.6 — `tool_use_result` field absent vs `null`: both must produce
+/// the SAME observable result (None). This is the absent-field counterpart to
+/// A.5. Together they pin "absent and null are observationally equivalent".
+#[test]
+fn spec_9c2e4f_user_tool_use_result_absent_is_none() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-tur-absent",
+        "sessionId": "s1",
+        "message": {"role": "user", "content": "hi"}
+    }"#;
+    let entry = parse_entry(json).unwrap();
+    match entry {
+        Entry::User(u) => {
+            assert!(
+                u.tool_use_result.is_none(),
+                "Absent toolUseResult field must produce None on the Option wrapper"
+            );
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+/// Task A.7 — The long-tail ToolSearch shape `{matches, query,
+/// total_deferred_tools}` (76 hits, 1.26% — real-data sample from the survey)
+/// must land in `Other(Value)`. This is the big anti-mirroring test: it would
+/// be very easy for a dispatch implementation to accidentally match this on
+/// `query` (shared with WebSearch) or some other partial overlap. Spec says
+/// dispatch is by *required-key signature in descending order* — none of the
+/// typed shapes have this signature.
+///
+/// Golden: shape `{matches, query, total_deferred_tools}` → `Other(Value)`
+/// with all three keys preserved.
+#[test]
+fn spec_9c2e4f_tool_use_result_tool_search_long_tail_lands_in_other() {
+    // Verbatim shape signature from survey real-data sample.
+    let json = r#"{
+        "matches": ["TaskCreate", "TaskUpdate", "TaskList"],
+        "query": "select:TaskCreate,TaskUpdate,TaskList",
+        "total_deferred_tools": 86
+    }"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Other(v) => {
+            assert_eq!(v["matches"][0], "TaskCreate", "matches[0] must preserve");
+            assert_eq!(v["query"], "select:TaskCreate,TaskUpdate,TaskList");
+            assert_eq!(v["total_deferred_tools"], 86);
+        }
+        ToolUseResult::Typed(t) => panic!(
+            "ToolSearch shape {{matches, query, total_deferred_tools}} MUST land in Other, \
+             not be misdispatched to a typed variant. Got Typed({t:?})"
+        ),
+        ToolUseResult::Rejected(_) => panic!("Object shape must not become Rejected"),
+    }
+}
+
+/// Task A.8 — Untagged variant ambiguity / first-match-wins gotcha.
+/// `obj{durationSeconds, query, results}` (22 hits in real data) is WebSearch
+/// without searchCount. Confirm the dispatch matches it correctly. If the
+/// implementation used `#[serde(untagged)]` naively, this might collide with
+/// other shapes that also have `query` or `results` fields.
+///
+/// Golden: WebSearch without searchCount → Typed(WebSearch) with
+/// search_count = None.
+#[test]
+fn spec_9c2e4f_tool_use_result_web_search_no_search_count_dispatch() {
+    let json = r#"{"durationSeconds":1.5,"query":"rust async","results":[]}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::WebSearch(w)) => {
+            assert_eq!(w.search_count, None, "missing searchCount → None on optional");
+            assert_eq!(w.query.as_deref(), Some("rust async"));
+        }
+        other => panic!(
+            "WebSearch without searchCount must dispatch to Typed(WebSearch), got {other:?}"
+        ),
+    }
+}
+
+/// Task A.9 — agentId promotion still works when toolUseResult is a typed
+/// TaskCompleted variant. Spec source: §8.3 + the agentId promotion design
+/// (already covered in spec_v2 but for the Other variant). Here we pin the
+/// same behaviour for the typed variant case — the implementation must look
+/// inside the typed payload, not just inside the Other(Value).
+///
+/// Golden: when toolUseResult is shape `{agentId, agentType, content, prompt,
+/// status, ...}` (TaskCompleted signature) the user.agent_id is promoted from
+/// the nested agentId.
+#[test]
+fn spec_9c2e4f_user_agent_id_promoted_from_typed_task_completed() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-promo-typed",
+        "sessionId": "s1",
+        "toolUseResult": {
+            "agentId": "ag-typed-001",
+            "agentType": "general-purpose",
+            "content": [{"type": "text", "text": "done"}],
+            "prompt": "do x",
+            "status": "completed",
+            "toolStats": {},
+            "totalDurationMs": 1234,
+            "totalTokens": 100,
+            "totalToolUseCount": 2,
+            "usage": {"input_tokens": 50, "output_tokens": 50}
+        },
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu1", "content": "ok"}]}
+    }"#;
+    let entry = parse_entry(json).unwrap();
+    match entry {
+        Entry::User(u) => {
+            // Confirm dispatch went to typed variant — promotion source.
+            match u.tool_use_result.as_ref() {
+                Some(ToolUseResult::Typed(TypedToolResult::TaskCompleted(_))) => {}
+                other => panic!(
+                    "Expected toolUseResult to dispatch to Typed(TaskCompleted), got {other:?}"
+                ),
+            }
+            // Spec: agentId promotion still applies even when typed.
+            assert_eq!(
+                u.agent_id.as_deref(),
+                Some("ag-typed-001"),
+                "agentId must be promoted from typed TaskCompleted variant"
+            );
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+/// Task A.10 — Round-trip: deserialise an Other(Value) shape and re-serialise.
+/// Spec §8.3: "消费方看到 Other 直接 JSON pretty-print 显示也合理" — the captured
+/// Value must round-trip back to the original wire shape so downstream
+/// renderers can show the raw JSON.
+#[test]
+fn spec_9c2e4f_tool_use_result_other_round_trip_preserves_shape() {
+    let original = r#"{"completelyNewShape":true,"someArray":[1,2,3],"nested":{"inner":"value"}}"#;
+    let r: ToolUseResult = serde_json::from_str(original).unwrap();
+    let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["completelyNewShape"], true);
+    assert_eq!(v["someArray"][1], 2);
+    assert_eq!(v["nested"]["inner"], "value");
+    // Re-serialise to wire and ensure all keys survive.
+    let wire = serde_json::to_string(&r).unwrap();
+    let reparsed: serde_json::Value = serde_json::from_str(&wire).unwrap();
+    assert_eq!(reparsed["completelyNewShape"], true);
+    assert_eq!(reparsed["someArray"][2], 3);
+}
+
+/// Task A.11 — boolean and number at top level fall to Other (not panic).
+/// Spec: `serde_json::Value` accepts every JSON token, so even non-object,
+/// non-string shapes must land in Other rather than StructDrift the parse.
+/// This is the "everything else" floor of the dispatch.
+#[test]
+fn spec_9c2e4f_tool_use_result_top_level_number_lands_in_other() {
+    let r: ToolUseResult = serde_json::from_str("42").unwrap();
+    match r {
+        ToolUseResult::Other(v) => assert_eq!(v.as_i64(), Some(42)),
+        other => panic!("Top-level number must land in Other(Value), got {other:?}"),
+    }
+}
+
+/// Task A.12 — top-level boolean must NOT be confused with the Rejected
+/// string variant (only String values are Rejected). Golden: bool → Other.
+#[test]
+fn spec_9c2e4f_tool_use_result_top_level_bool_lands_in_other_not_rejected() {
+    let r: ToolUseResult = serde_json::from_str("true").unwrap();
+    match r {
+        ToolUseResult::Other(v) => assert_eq!(v.as_bool(), Some(true)),
+        ToolUseResult::Rejected(_) => panic!(
+            "Top-level bool MUST land in Other, not Rejected. Rejected is for top-level \
+             strings only — if a bool matched Rejected, the dispatch logic is mis-typed."
+        ),
+        other => panic!("Top-level bool must land in Other(Value), got {other:?}"),
+    }
+}
+
+/// Task A.13 — Edit and Write share `originalFile`, `structuredPatch`,
+/// `userModified`. The discriminator is the `oldString`/`newString` pair on
+/// Edit vs the `content`+`type` pair on Write. Verify a Write payload is NOT
+/// mis-dispatched to Edit.
+///
+/// Golden: shape `{content, filePath, originalFile, structuredPatch, type,
+/// userModified}` → Typed(Write), not Typed(Edit). This is a real-data
+/// distinction (395 Write hits vs 1013 Edit hits in the survey).
+#[test]
+fn spec_9c2e4f_tool_use_result_write_not_misdispatched_as_edit() {
+    let json = r##"{
+        "type": "create",
+        "filePath": "/new.md",
+        "content": "# title",
+        "originalFile": "",
+        "structuredPatch": [],
+        "userModified": false
+    }"##;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::Write(w)) => {
+            assert_eq!(w.kind.as_deref(), Some("create"));
+            assert_eq!(w.file_path.as_deref(), Some("/new.md"));
+        }
+        ToolUseResult::Typed(TypedToolResult::Edit(_)) => {
+            panic!(
+                "Write payload (no oldString/newString) must NOT mis-dispatch to Edit — \
+                 the shape discriminator is `oldString`+`newString` for Edit"
+            );
+        }
+        other => panic!("Expected Typed(Write), got {other:?}"),
+    }
+}
+
+// ── Task B: image_paste_ids — strict element typing ─────────────────────
+
+/// Task B.1 — Float element in imagePasteIds MUST cause StructDrift on the
+/// entry. Spec: `ImagePasteId::Integer` is `i64` (strict). A JSON number like
+/// `1.5` matches neither `Integer(i64)` (lossy fit failure) nor `String`
+/// (wrong type), so the whole `Vec<ImagePasteId>` deserialise fails →
+/// the parser must surface this as `ParseError::StructDrift`, not Json.
+///
+/// Anti-mirroring catch: an implementer might use `f64` or `Number` and let
+/// floats slide through. This test pins that strict i64 typing is the spec.
+#[test]
+fn spec_9c2e4f_user_image_paste_ids_float_element_causes_struct_drift() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-ipi-float",
+        "sessionId": "s1",
+        "imagePasteIds": [1, 1.5, 3]
+    }"#;
+    let err = parse_entry(json).unwrap_err();
+    match err {
+        cc_session_jsonl::ParseError::StructDrift { entry_type, .. } => {
+            assert_eq!(
+                entry_type, "user",
+                "Float element in imagePasteIds must cause StructDrift{{entry_type:\"user\"}}"
+            );
+        }
+        other => panic!(
+            "Float element in imagePasteIds must be StructDrift (i64 is strict), got: {other}"
+        ),
+    }
+}
+
+/// Task B.2 — `null` element in imagePasteIds MUST cause StructDrift.
+/// Spec: no `ImagePasteId` variant accepts null. The whole array fails to
+/// deserialise and the parser surfaces StructDrift.
+#[test]
+fn spec_9c2e4f_user_image_paste_ids_null_element_causes_struct_drift() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-ipi-null",
+        "sessionId": "s1",
+        "imagePasteIds": [1, null, 3]
+    }"#;
+    let err = parse_entry(json).unwrap_err();
+    match err {
+        cc_session_jsonl::ParseError::StructDrift { entry_type, .. } => {
+            assert_eq!(entry_type, "user");
+        }
+        other => panic!(
+            "null element in imagePasteIds must be StructDrift, got: {other}"
+        ),
+    }
+}
+
+/// Task B.3 — Object element `{}` in imagePasteIds MUST cause StructDrift.
+/// Spec: no variant matches an object. The whole array fails, surfaced as
+/// StructDrift on the user entry.
+#[test]
+fn spec_9c2e4f_user_image_paste_ids_object_element_causes_struct_drift() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-ipi-obj",
+        "sessionId": "s1",
+        "imagePasteIds": [1, {}, 3]
+    }"#;
+    let err = parse_entry(json).unwrap_err();
+    match err {
+        cc_session_jsonl::ParseError::StructDrift { entry_type, .. } => {
+            assert_eq!(entry_type, "user");
+        }
+        other => panic!(
+            "object element in imagePasteIds must be StructDrift, got: {other}"
+        ),
+    }
+}
+
+/// Task B.4 — Boolean element in imagePasteIds MUST cause StructDrift.
+/// Same principle as B.1-B.3: no variant accepts bool, whole array fails.
+#[test]
+fn spec_9c2e4f_user_image_paste_ids_bool_element_causes_struct_drift() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-ipi-bool",
+        "sessionId": "s1",
+        "imagePasteIds": [1, true, 3]
+    }"#;
+    let err = parse_entry(json).unwrap_err();
+    match err {
+        cc_session_jsonl::ParseError::StructDrift { entry_type, .. } => {
+            assert_eq!(entry_type, "user");
+        }
+        other => panic!(
+            "bool element in imagePasteIds must be StructDrift, got: {other}"
+        ),
+    }
+}
+
+/// Task B.5 — Negative integer is a valid i64 → must succeed and decode as
+/// `Integer(-1)`. This pins that the strict i64 typing accepts the full i64
+/// range, not just non-negative integers.
+/// Golden: -1 → Integer(-1).
+#[test]
+fn spec_9c2e4f_user_image_paste_ids_negative_integer_parses() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-ipi-neg",
+        "sessionId": "s1",
+        "imagePasteIds": [-1, -42, 0]
+    }"#;
+    let entry = parse_entry(json).expect("negative integers are valid i64 elements");
+    match entry {
+        Entry::User(u) => {
+            let ids = u.image_paste_ids.as_ref().expect("imagePasteIds must be Some");
+            assert_eq!(ids.len(), 3);
+            assert!(matches!(ids[0], ImagePasteIdV2::Integer(-1)));
+            assert!(matches!(ids[1], ImagePasteIdV2::Integer(-42)));
+            assert!(matches!(ids[2], ImagePasteIdV2::Integer(0)));
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+/// Task B.6 — Empty `imagePasteIds: []` → Some(empty Vec), not None.
+/// Spec: an empty array is still a valid array; the Option wrapper is Some.
+/// This is the boundary between "field absent" (None) and "field empty"
+/// (Some with len 0) — production may emit either; both must parse, but they
+/// MUST produce distinguishable results.
+#[test]
+fn spec_9c2e4f_user_image_paste_ids_empty_array_is_some_empty_vec() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-ipi-empty",
+        "sessionId": "s1",
+        "imagePasteIds": []
+    }"#;
+    let entry = parse_entry(json).expect("empty array imagePasteIds must parse");
+    match entry {
+        Entry::User(u) => {
+            let ids = u
+                .image_paste_ids
+                .as_ref()
+                .expect("imagePasteIds: [] must yield Some(Vec), not None");
+            assert_eq!(ids.len(), 0, "empty array must produce empty Vec");
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+/// Task B.7 — Round-trip preservation. An array `[1, "abc", 99]` must
+/// round-trip back to the same wire shape (integers as integers, strings as
+/// strings — no coercion).
+#[test]
+fn spec_9c2e4f_image_paste_ids_round_trip_preserves_element_types() {
+    let json = r#"[1,"abc",99]"#;
+    let ids: Vec<ImagePasteIdV2> = serde_json::from_str(json).unwrap();
+    let wire = serde_json::to_string(&ids).unwrap();
+    // Verify: the round-trip JSON has integers as 1 / 99 (not "1" / "99")
+    // and the string as "abc" (not abc or 0).
+    assert!(
+        wire.contains("[1,") && wire.contains(",99]"),
+        "round-trip must preserve integers as JSON numbers, got: {wire}"
+    );
+    assert!(
+        wire.contains("\"abc\""),
+        "round-trip must preserve strings as JSON strings, got: {wire}"
+    );
+}
+
+// ── Task C: Origin / McpMeta — extra-key capture ────────────────────────
+
+/// Task C.1 — Origin with kind + multiple extras. Both extra keys end up in
+/// the `extra` map. Spec §8.3: "Origin/McpMeta carry a #[serde(flatten)]
+/// `extra` map so any future wire keys survive deserialisation rather than
+/// being silently dropped." This is the canary test: a future IDE
+/// integration that adds ideName+ideVersion must not lose these fields.
+///
+/// Golden: kind="ide", extra={"ideName":"VSCode", "ideVersion":"1.95"}.
+#[test]
+fn spec_9c2e4f_origin_ide_with_name_and_version_in_extra() {
+    let json = r#"{"kind":"ide","ideName":"VSCode","ideVersion":"1.95"}"#;
+    let origin: OriginV2 = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        origin.kind,
+        Some(cc_session_jsonl::types::common::OriginKind::Ide),
+        "kind=ide must map to OriginKind::Ide"
+    );
+    assert_eq!(
+        origin.extra.get("ideName").and_then(|v| v.as_str()),
+        Some("VSCode"),
+        "ideName must survive deserialisation in extra map"
+    );
+    assert_eq!(
+        origin.extra.get("ideVersion").and_then(|v| v.as_str()),
+        Some("1.95"),
+        "ideVersion must survive deserialisation in extra map"
+    );
+}
+
+/// Task C.2 — Origin with only `kind` must produce empty extra Map (0 keys).
+/// Spec §8.3 + real-data: the surveyed dataset's 37 origin entries ALL carry
+/// only `{kind}` — so empty extras are the common case. Golden: extra.len()
+/// must equal 0, not None / not Some(empty).
+#[test]
+fn spec_9c2e4f_origin_kind_only_has_empty_extra_map() {
+    // Real-data sample (37/37 hits): `{kind: "task-notification"}`.
+    let json = r#"{"kind":"task-notification"}"#;
+    let origin: OriginV2 = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        origin.extra.len(),
+        0,
+        "Origin with only `kind` must have an empty extra map, not Some/None of map"
+    );
+    assert!(
+        origin.extra.is_empty(),
+        "extra.is_empty() must return true when no extra keys present"
+    );
+}
+
+/// Task C.3 — McpMeta with structuredContent + extras. Same principle as
+/// Origin: non-structured_content keys must land in `extra` map.
+///
+/// Golden: structured_content preserved, extras (serverName, toolName)
+/// preserved in extra map.
+#[test]
+fn spec_9c2e4f_mcp_meta_structured_content_plus_extras() {
+    let json = r#"{
+        "structuredContent": {"k": "v"},
+        "serverName": "gmail",
+        "toolName": "searchThreads"
+    }"#;
+    let mcp: McpMeta = serde_json::from_str(json).unwrap();
+    assert!(mcp.structured_content.is_some(), "structuredContent must parse to Some");
+    let sc = mcp.structured_content.as_ref().unwrap();
+    assert_eq!(sc["k"], "v", "structuredContent inner field must be preserved");
+    assert_eq!(
+        mcp.extra.get("serverName").and_then(|v| v.as_str()),
+        Some("gmail"),
+        "serverName must end up in McpMeta.extra"
+    );
+    assert_eq!(
+        mcp.extra.get("toolName").and_then(|v| v.as_str()),
+        Some("searchThreads"),
+        "toolName must end up in McpMeta.extra"
+    );
+}
+
+/// Task C.4 — McpMeta with ONLY structuredContent (real-data 100% case)
+/// must have an empty extra map. Real-data sample (42/42 hits): every
+/// `mcpMeta` carried only `{structuredContent}`.
+///
+/// Golden: extra.len() == 0.
+#[test]
+fn spec_9c2e4f_mcp_meta_structured_content_only_has_empty_extras() {
+    let json = r#"{"structuredContent":{"hello":"world"}}"#;
+    let mcp: McpMeta = serde_json::from_str(json).unwrap();
+    assert!(mcp.structured_content.is_some());
+    assert_eq!(
+        mcp.extra.len(),
+        0,
+        "McpMeta with only structuredContent must have empty extra map"
+    );
+}
+
+/// Task C.5 — Origin round-trip preserves extras. Re-serialise after
+/// deserialisation and ensure the wire JSON still contains the extra keys
+/// (NOT silently dropped). The serialisation rule from the implementation
+/// uses `skip_serializing_if = "Map::is_empty"` so empty extras are omitted
+/// but populated extras must appear at the top level (flattened).
+#[test]
+fn spec_9c2e4f_origin_round_trip_with_extras_preserves_keys() {
+    let json = r#"{"kind":"ide","ideName":"VSCode","ideVersion":"1.95"}"#;
+    let origin: OriginV2 = serde_json::from_str(json).unwrap();
+    let v: serde_json::Value = serde_json::to_value(&origin).unwrap();
+    // After serialisation, all three original keys must still be present at
+    // the top level (extras are flattened by `#[serde(flatten)]`).
+    assert_eq!(v["kind"], "ide");
+    assert_eq!(v["ideName"], "VSCode");
+    assert_eq!(v["ideVersion"], "1.95");
+}
+
+/// Task C.6 — McpMeta round-trip preserves extras. Same as C.5 but for the
+/// McpMeta type. This complements existing Origin round-trip tests to make
+/// the McpMeta extras round-trip path is symmetric.
+#[test]
+fn spec_9c2e4f_mcp_meta_round_trip_with_extras_preserves_keys() {
+    let json = r#"{"structuredContent":{"a":"b"},"serverName":"srv","toolName":"tl"}"#;
+    let mcp: McpMeta = serde_json::from_str(json).unwrap();
+    let v: serde_json::Value = serde_json::to_value(&mcp).unwrap();
+    // structuredContent uses serde rename_all = camelCase → matches input shape
+    assert_eq!(v["structuredContent"]["a"], "b");
+    assert_eq!(v["serverName"], "srv");
+    assert_eq!(v["toolName"], "tl");
+}
+
+/// Task C.7 — Origin where `kind` is absent but extras present. Spec: kind
+/// is `Option<OriginKind>`, so it should be None. Extras are still captured.
+/// This is a boundary test — does the dispatch correctly differentiate the
+/// absent-kind case from "kind plus extras"? Golden: kind=None, extra populated.
+#[test]
+fn spec_9c2e4f_origin_absent_kind_with_extras_preserves_extras() {
+    let json = r#"{"customField":"value","anotherField":42}"#;
+    let origin: OriginV2 = serde_json::from_str(json).unwrap();
+    assert!(
+        origin.kind.is_none(),
+        "Origin without `kind` field must have kind=None"
+    );
+    assert_eq!(
+        origin.extra.get("customField").and_then(|v| v.as_str()),
+        Some("value"),
+        "extras must be captured even when kind is absent"
+    );
+    assert_eq!(
+        origin.extra.get("anotherField").and_then(|v| v.as_i64()),
+        Some(42),
+        "non-string extras must also be captured"
+    );
+}
+
+/// Task C.8 — Empty Origin object `{}` parses without error.
+/// Spec: every field on Origin is optional (kind + extras), so empty `{}`
+/// is a valid origin with kind=None and extra empty.
+#[test]
+fn spec_9c2e4f_origin_empty_object_parses_with_empty_extras() {
+    let json = "{}";
+    let origin: OriginV2 = serde_json::from_str(json).unwrap();
+    assert!(origin.kind.is_none(), "empty origin must have kind=None");
+    assert!(origin.extra.is_empty(), "empty origin must have empty extras");
+}
+
+/// Task C.9 — Origin with `kind: null` (explicit null) — must parse with
+/// kind=None. Spec: serde Option<OriginKind> treats null as None.
+#[test]
+fn spec_9c2e4f_origin_explicit_null_kind_is_none() {
+    let json = r#"{"kind":null,"customField":"x"}"#;
+    let origin: OriginV2 = serde_json::from_str(json).unwrap();
+    assert!(origin.kind.is_none(), "explicit kind:null must parse as None");
+    // The extras after the null kind must still be captured.
+    assert_eq!(
+        origin.extra.get("customField").and_then(|v| v.as_str()),
+        Some("x"),
+        "extras alongside null kind must still be captured"
+    );
+}
+
+/// Task C.10 — UserEntry-level integration: an entry with an origin carrying
+/// extras must surface those extras via `entry.origin.extra`. This crosses the
+/// integration layer (parser → UserEntry → Origin) to confirm the extras
+/// capture isn't lost somewhere upstream.
+///
+/// Golden: extras visible on the UserEntry-attached Origin.
+#[test]
+fn spec_9c2e4f_user_entry_origin_extras_visible_end_to_end() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-or-e2e",
+        "sessionId": "s1",
+        "origin": {"kind": "ide", "ideName": "Cursor", "ideVersion": "0.40"},
+        "message": {"role": "user", "content": "x"}
+    }"#;
+    let entry = parse_entry(json).expect("UserEntry with origin extras must parse");
+    match entry {
+        Entry::User(u) => {
+            let origin = u.origin.as_ref().expect("origin must be Some");
+            assert_eq!(
+                origin.kind,
+                Some(cc_session_jsonl::types::common::OriginKind::Ide)
+            );
+            assert_eq!(
+                origin.extra.get("ideName").and_then(|v| v.as_str()),
+                Some("Cursor"),
+                "Origin extras must propagate end-to-end through UserEntry"
+            );
+            assert_eq!(
+                origin.extra.get("ideVersion").and_then(|v| v.as_str()),
+                Some("0.40")
+            );
+        }
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+// ── Additional anti-mirroring catches ───────────────────────────────────
+
+/// Anti-mirror — TaskCreate single-key but `task` value is empty object.
+/// Spec: the single-key check is on keys, not on the value of `task`. Even
+/// when `task` is `{}` the dispatch is to TaskCreate (descriptor is all
+/// optional). Golden: matches TaskCreate with empty descriptor.
+#[test]
+fn spec_9c2e4f_tool_use_result_task_create_with_empty_task_value() {
+    let json = r#"{"task":{}}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskCreate(t)) => {
+            assert!(t.task.id.is_none(), "empty task object → id None");
+            assert!(t.task.subject.is_none(), "empty task object → subject None");
+        }
+        other => panic!(
+            "Single-key {{task:{{}}}} object must still match TaskCreate, got {other:?}"
+        ),
+    }
+}
+
+/// Anti-mirror — A novel future shape `{completelyNewShape: true, foo:
+/// [1,2,3]}` must land in Other(Value) without panic and without misdispatch
+/// to any typed variant. This is the canonical "new tool shape arrives"
+/// test for forward compatibility. Spec §8.3: long-tail divergent shapes
+/// land in Other and downstream renders them as JSON.
+#[test]
+fn spec_9c2e4f_tool_use_result_novel_future_shape_lands_in_other() {
+    let json = r#"{"completelyNewShape": true, "foo": [1,2,3]}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Other(v) => {
+            assert_eq!(v["completelyNewShape"], true);
+            assert_eq!(v["foo"][2], 3);
+        }
+        ToolUseResult::Typed(t) => panic!(
+            "Novel shape `{{completelyNewShape, foo}}` must NOT be misdispatched to any \
+             typed variant. Got Typed({t:?}) — dispatch logic is over-eager."
+        ),
+        ToolUseResult::Rejected(_) => panic!("Object shape must not become Rejected"),
+    }
+}
+
+/// Anti-mirror — TaskUpdate-with-verification is a SUPERSET of TaskUpdate.
+/// Spec §8.3 dispatch ordering: descending key count. The implementer must
+/// match TaskUpdate-with-verification BEFORE plain TaskUpdate so that the
+/// extra `verificationNudgeNeeded` field is captured (not dropped) and the
+/// dispatch lands on the more specific variant.
+///
+/// Golden: shape with statusChange+success+taskId+updatedFields+verification
+/// → Typed(TaskUpdate) with verification_nudge_needed=Some(false). If the
+/// implementation matched plain TaskUpdate first, `verification_nudge_needed`
+/// might end up Some(false) anyway (because it's Option on the same struct).
+/// So this isn't catching dispatch-order — but it IS catching that
+/// verification_nudge_needed is correctly captured.
+#[test]
+fn spec_9c2e4f_tool_use_result_task_update_with_verification_captures_field() {
+    let json = r#"{
+        "statusChange": {"from": "in_progress", "to": "completed"},
+        "success": true,
+        "taskId": "1",
+        "updatedFields": ["status"],
+        "verificationNudgeNeeded": false
+    }"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskUpdate(t)) => {
+            assert_eq!(
+                t.verification_nudge_needed,
+                Some(false),
+                "verification_nudge_needed must be captured (not dropped)"
+            );
+            assert_eq!(t.success, Some(true));
+            assert_eq!(t.task_id.as_deref(), Some("1"));
+        }
+        other => panic!("Expected Typed(TaskUpdate), got {other:?}"),
+    }
+}
+
+/// Anti-mirror — `Bash` with `gitOperation` as nested object (real-data
+/// shape `{commit: {sha, kind}}`) must dispatch to Bash and preserve the
+/// raw gitOperation value. The dispatch key set is the 5-key Bash signature;
+/// `gitOperation` is OPTIONAL on the BashResult struct, but its absence
+/// must not change the dispatch decision.
+///
+/// Golden: shape `{stdout, stderr, interrupted, isImage, noOutputExpected,
+/// gitOperation}` → Typed(Bash) with git_operation preserved as raw Value.
+#[test]
+fn spec_9c2e4f_tool_use_result_bash_git_operation_object_preserved() {
+    let json = r#"{
+        "stdout": "ok",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false,
+        "gitOperation": {"commit": {"sha": "abc123", "kind": "regular"}}
+    }"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::Bash(b)) => {
+            let gop = b
+                .git_operation
+                .as_ref()
+                .expect("gitOperation must be preserved on Bash");
+            assert_eq!(gop["commit"]["sha"], "abc123", "nested gitOperation preserved");
+            assert_eq!(gop["commit"]["kind"], "regular");
+        }
+        other => panic!("Expected Typed(Bash) with gitOperation, got {other:?}"),
+    }
+}
+
+/// Anti-mirror — TaskAsync's distinguishing key combo is `isAsync+agentId+
+/// status+outputFile`. A payload with `status+agentId` but NO `isAsync` (and
+/// NO `outputFile`) must NOT mis-dispatch to TaskAsync. Such a payload might
+/// match TaskCompleted (if it has the rest) or fall through to Other.
+#[test]
+fn spec_9c2e4f_tool_use_result_no_is_async_no_output_file_not_task_async() {
+    // Has status+agentId but no isAsync, no outputFile, no other typed-shape
+    // signatures → falls to Other.
+    let json = r#"{"status":"running","agentId":"a-1","someExtra":"v"}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskAsyncLaunched(_)) => panic!(
+            "Payload missing `isAsync` and `outputFile` must NOT be misdispatched to \
+             TaskAsync. Spec requires isAsync+agentId+status+outputFile."
+        ),
+        ToolUseResult::Other(_) => {} // expected
+        other => panic!("Expected Other for ambiguous shape, got {other:?}"),
+    }
+}
+
+/// Anti-mirror — ImagePasteId mixed `[string, int, string]` round-trip
+/// must distinguish each element's original wire type (not collapse all
+/// to one type). Already partially covered in spec_v2, but this test is
+/// explicit about the round-trip preserving element-level types.
+#[test]
+fn spec_9c2e4f_image_paste_ids_round_trip_element_type_distinction() {
+    let json = r#"["paste-1", 42, "paste-2"]"#;
+    let ids: Vec<ImagePasteIdV2> = serde_json::from_str(json).unwrap();
+    assert!(matches!(&ids[0], ImagePasteIdV2::String(s) if s == "paste-1"));
+    assert!(matches!(ids[1], ImagePasteIdV2::Integer(42)));
+    assert!(matches!(&ids[2], ImagePasteIdV2::String(s) if s == "paste-2"));
+    let v: serde_json::Value = serde_json::to_value(&ids).unwrap();
+    // Wire round-trip: element 0 is a string, element 1 is a JSON number
+    // (NOT the string "42"), element 2 is a string.
+    assert_eq!(v[0].as_str(), Some("paste-1"));
+    assert!(
+        v[1].is_i64(),
+        "round-trip must preserve integer-typed element as JSON number, not coerce to string"
+    );
+    assert_eq!(v[1].as_i64(), Some(42));
+    assert_eq!(v[2].as_str(), Some("paste-2"));
+}
+
+/// Anti-mirror — ImagePasteId huge integer at the boundary of i64. Spec:
+/// the variant is `Integer(i64)`. i64::MAX is a valid value; i64::MAX + 1
+/// would overflow. We test that i64::MAX parses successfully — pinning that
+/// the variant is full-range i64, not e.g. i32 or u32 by mistake.
+#[test]
+fn spec_9c2e4f_image_paste_ids_i64_max_parses() {
+    let json = format!(r#"[{}]"#, i64::MAX);
+    let ids: Vec<ImagePasteIdV2> = serde_json::from_str(&json).unwrap();
+    assert_eq!(ids.len(), 1);
+    match ids[0] {
+        ImagePasteIdV2::Integer(n) => assert_eq!(
+            n,
+            i64::MAX,
+            "i64::MAX must round-trip exactly through ImagePasteId::Integer"
+        ),
+        ref other => panic!("expected Integer(i64::MAX), got {other:?}"),
+    }
+}
+
+// ── Implementation-defined fall-through documentation ───────────────────
+
+/// Anti-mirror — `tool_use_result: true` (top-level bool) on a UserEntry.
+/// Spec is silent here. Spec philosophy "value drift ≠ struct drift" suggests
+/// the tri-state enum should accept it via the Other(Value) branch (since
+/// `serde_json::Value` accepts any JSON token).
+///
+/// Implementation behaviour pinned: tool_use_result=true → Some(Other(true)).
+/// If the implementer chose strict StructDrift here instead, this test
+/// would catch the divergence. Regression-snapshot: locks the observed
+/// behaviour for downstream consumers to depend on.
+#[test]
+fn spec_9c2e4f_user_tool_use_result_top_level_bool_value_lands_in_other() {
+    let json = r#"{
+        "type": "user",
+        "uuid": "u-tur-bool",
+        "sessionId": "s1",
+        "toolUseResult": true,
+        "message": {"role": "user", "content": "x"}
+    }"#;
+    let entry = parse_entry(json)
+        .expect("toolUseResult as top-level bool must not StructDrift (Value accepts any token)");
+    match entry {
+        Entry::User(u) => match u.tool_use_result.as_ref() {
+            Some(ToolUseResult::Other(v)) => {
+                assert_eq!(v.as_bool(), Some(true), "Other captures original bool value");
+            }
+            other => panic!(
+                "toolUseResult=true must land in Some(Other(Value::Bool)), got {other:?}"
+            ),
+        },
+        other => panic!("Expected User, got {other:?}"),
+    }
+}
+
+/// Anti-mirror — Read tool dispatch is `{file, type} AND obj.len() == 2`.
+/// A shape with `{file, type}` PLUS extra keys must NOT misdispatch to Read.
+/// Spec source: types/user.rs line ~347 (`has_keys(obj, &["file", "type"])
+/// && obj.len() == 2`). If the implementer dropped the length check, a
+/// payload like `{file, type, extraField}` would mis-match Read.
+#[test]
+fn spec_9c2e4f_tool_use_result_file_type_with_extra_key_is_not_read() {
+    let json = r#"{"file":{"filePath":"/x.md","content":"hi"},"type":"text","extraKey":"v"}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::Read(_)) => {
+            panic!(
+                "Shape `{{file, type, extraKey}}` (3 keys) must NOT misdispatch to Read \
+                 (spec requires obj.len() == 2). Got Read variant."
+            );
+        }
+        ToolUseResult::Other(v) => {
+            assert_eq!(v["extraKey"], "v", "extra key must be preserved in Other");
+        }
+        other => panic!(
+            "Expected Other for `{{file, type, extraKey}}`, got {other:?}"
+        ),
+    }
+}
+
+/// Anti-mirror — Read positive control. `{file, type}` with exactly 2 keys
+/// MUST match Read. This anchors the subset-collision test above.
+#[test]
+fn spec_9c2e4f_tool_use_result_read_two_keys_positive_anchor() {
+    let json = r#"{"file":{"filePath":"/x.md","content":"hi"},"type":"text"}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::Read(r)) => {
+            assert_eq!(r.kind.as_deref(), Some("text"));
+            let file = r.file.as_ref().unwrap();
+            assert_eq!(file["filePath"], "/x.md");
+        }
+        other => panic!("2-key {{file, type}} must match Read, got {other:?}"),
+    }
+}
+
+/// Anti-mirror — AskUserQuestion dispatch is `{answers, questions}` (2-key
+/// minimum). A shape with annotations as well must STILL dispatch to
+/// AskUserQuestion (annotations is optional on the result struct).
+/// Survey real-data: shape `{annotations, answers, questions}` has 40 hits.
+#[test]
+fn spec_9c2e4f_tool_use_result_ask_user_question_with_annotations_dispatches() {
+    let json = r#"{
+        "questions": [{"question": "q?"}],
+        "answers": ["a"],
+        "annotations": [{"note": "important"}]
+    }"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::AskUserQuestion(a)) => {
+            assert!(a.questions.is_some());
+            assert!(a.answers.is_some());
+            assert!(a.annotations.is_some(), "annotations must be captured when present");
+        }
+        other => panic!(
+            "{{questions, answers, annotations}} must dispatch to AskUserQuestion, got {other:?}"
+        ),
+    }
+}
+
+/// Anti-mirror — WebFetch shape signature has 6 required keys. If any of
+/// the 6 is missing, dispatch must NOT match WebFetch — spec says
+/// "required-key signature" requires ALL keys present. Golden: 5-of-6
+/// keys → falls to Other, not WebFetch.
+#[test]
+fn spec_9c2e4f_tool_use_result_web_fetch_missing_key_not_dispatched() {
+    // Missing `url` from the 6-key WebFetch signature.
+    let json = r#"{"bytes":1234,"code":200,"codeText":"OK","durationMs":500,"result":"body"}"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::WebFetch(_)) => panic!(
+            "WebFetch dispatch must require all 6 keys (bytes, code, codeText, \
+             durationMs, result, url). Missing `url` must fall to Other."
+        ),
+        ToolUseResult::Other(v) => {
+            assert_eq!(v["code"], 200);
+            assert!(v.get("url").is_none(), "missing key stays missing");
+        }
+        other => panic!("Expected Other for partial WebFetch shape, got {other:?}"),
+    }
+}
+
+/// Anti-mirror — TaskCompleted dispatch is the core 5-key set
+/// `{agentId, agentType, content, prompt, status}`. Even with extra optional
+/// keys present, dispatch must STILL match TaskCompleted (not fall to Other).
+/// Survey real-data: the most-common TaskCompleted shape has 10 keys.
+#[test]
+fn spec_9c2e4f_tool_use_result_task_completed_with_extra_keys_still_dispatches() {
+    let json = r#"{
+        "agentId": "ag-99",
+        "agentType": "general-purpose",
+        "content": [{"type": "text", "text": "done"}],
+        "prompt": "do x",
+        "status": "completed",
+        "totalDurationMs": 1234,
+        "worktreeBranch": "feature/x",
+        "worktreePath": "/tmp/wt"
+    }"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskCompleted(t)) => {
+            assert_eq!(t.agent_id.as_deref(), Some("ag-99"));
+            assert_eq!(t.worktree_branch.as_deref(), Some("feature/x"));
+            assert_eq!(t.worktree_path.as_deref(), Some("/tmp/wt"));
+        }
+        other => panic!(
+            "TaskCompleted with extra optional keys (worktreeBranch, etc.) must STILL \
+             dispatch to TaskCompleted, got {other:?}"
+        ),
+    }
+}
+
+/// Anti-mirror — TaskCompleted core 5 keys MINUS `status` → must NOT
+/// dispatch to TaskCompleted (one core key missing breaks the signature).
+/// Golden: shape with only 4 of 5 core keys → Other(Value).
+#[test]
+fn spec_9c2e4f_tool_use_result_task_completed_missing_core_key_not_dispatched() {
+    let json = r#"{
+        "agentId": "ag-99",
+        "agentType": "general-purpose",
+        "content": "done",
+        "prompt": "do x"
+    }"#;
+    let r: ToolUseResult = serde_json::from_str(json).unwrap();
+    match r {
+        ToolUseResult::Typed(TypedToolResult::TaskCompleted(_)) => panic!(
+            "TaskCompleted dispatch requires all 5 core keys. Missing `status` must \
+             fall to Other."
+        ),
+        ToolUseResult::Other(v) => {
+            assert_eq!(v["agentId"], "ag-99");
+            assert!(v.get("status").is_none());
+        }
+        other => panic!("Expected Other for partial TaskCompleted shape, got {other:?}"),
     }
 }

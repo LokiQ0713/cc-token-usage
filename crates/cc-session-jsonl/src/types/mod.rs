@@ -224,6 +224,21 @@ impl<'de> Deserialize<'de> for Entry {
 
         let entry = match entry_type_ref {
             "user" => {
+                // ── agentId promotion (pre-typed-deserialise peek) ──
+                // Trunk entries carry the subagent identifier inside
+                // `toolUseResult.agentId`, not at top level.  We extract the
+                // fallback id from the raw JSON before typed deserialisation
+                // because after that point `tool_use_result` is a
+                // `ToolUseResult` enum (not a `Value`), and the typed
+                // dispatch doesn't expose a uniform `get("agentId")`
+                // accessor across all variants.  Doing the peek on the raw
+                // JSON keeps the promotion variant-agnostic.
+                let promoted_agent_id: Option<String> = value
+                    .get("toolUseResult")
+                    .and_then(|tur| tur.get("agentId"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
                 let mut user: UserEntry = match serde_json::from_value(value) {
                     Ok(v) => v,
                     Err(e) => {
@@ -233,18 +248,10 @@ impl<'de> Deserialize<'de> for Entry {
                         )));
                     }
                 };
-                // ── agentId promotion ──
-                // Trunk entries carry the subagent identifier inside
-                // `toolUseResult.agentId`, not at top level.  Promote
-                // it so downstream code reads one field uniformly.
+                // Only promote if top-level agentId was absent — preserving
+                // the original "top level wins" precedence rule.
                 if user.agent_id.is_none() {
-                    if let Some(ref tur) = user.tool_use_result {
-                        if let Some(aid) = tur.get("agentId").and_then(|v| v.as_str()) {
-                            if !aid.is_empty() {
-                                user.agent_id = Some(aid.to_string());
-                            }
-                        }
-                    }
+                    user.agent_id = promoted_agent_id;
                 }
                 Entry::User(user)
             }
