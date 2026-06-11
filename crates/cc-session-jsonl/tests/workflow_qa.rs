@@ -2,13 +2,11 @@
 //!
 //! Covers:
 //! - WorkflowRunSnapshot / WorkflowPhase / WorkflowProgress / WorkflowJournalEntry parsing
-//! - scanner Type4 workflow agent discovery
-//! - scan_session_workflows / scan_workflows / load_workflow_agent_meta
-//! - SessionFile.workflow_run_id propagation
+//! - Loader-level workflow agent discovery (via the public `load_all_sessions`
+//!   and `load_session` surface)
+//! - Agent.workflow_run_id propagation
 //! - AttachmentEntry.attachment field (top-level, not in `message`)
 //! - SystemEntry new subtypes: turn_duration with pendingWorkflowCount, local_command, away_summary
-//!
-//! All tests are independent of the builder's existing tests.
 
 use std::fs;
 use tempfile::TempDir;
@@ -73,11 +71,9 @@ fn snapshot_all_scalar_fields_round_trip() {
 fn snapshot_args_can_be_string_or_object() {
     use cc_session_jsonl::types::WorkflowRunSnapshot;
 
-    // args = string
     let s: WorkflowRunSnapshot = serde_json::from_str(r#"{"args": "some string"}"#).unwrap();
     assert!(s.args.as_ref().unwrap().is_string());
 
-    // args = object
     let s: WorkflowRunSnapshot =
         serde_json::from_str(r#"{"args": {"key": "value", "n": 3}}"#).unwrap();
     assert!(s.args.as_ref().unwrap().is_object());
@@ -127,7 +123,6 @@ fn snapshot_phases_round_trip() {
     assert_eq!(phases[1].title.as_deref(), Some("Phase B"));
     assert!(phases[1].detail.is_none());
 
-    // Also parse WorkflowPhase standalone
     let p: WorkflowPhase = serde_json::from_str(r#"{"title":"solo"}"#).unwrap();
     assert_eq!(p.title.as_deref(), Some("solo"));
     assert!(p.detail.is_none());
@@ -147,7 +142,7 @@ fn snapshot_workflow_progress_phase_marker_and_agent_record() {
     assert_eq!(prog[0].kind.as_deref(), Some("workflow_phase"));
     assert_eq!(prog[0].index, Some(1));
     assert_eq!(prog[0].title.as_deref(), Some("prep"));
-    assert!(prog[0].agent_id.is_none()); // not present on phase marker
+    assert!(prog[0].agent_id.is_none());
 
     assert_eq!(prog[1].kind.as_deref(), Some("workflow_agent"));
     assert_eq!(prog[1].label.as_deref(), Some("worker"));
@@ -158,7 +153,6 @@ fn snapshot_workflow_progress_phase_marker_and_agent_record() {
     assert_eq!(prog[1].tokens, Some(5000));
     assert_eq!(prog[1].tool_calls, Some(12));
     assert_eq!(prog[1].duration_ms, Some(30000));
-    // extra unknown field `phaseIndex` and `extraFuture` silently ignored
 }
 
 #[test]
@@ -208,7 +202,6 @@ fn journal_result_entry_with_object_result() {
 #[test]
 fn journal_entry_minimal_no_panic() {
     use cc_session_jsonl::types::WorkflowJournalEntry;
-    // Completely empty — must not panic
     let e: WorkflowJournalEntry = serde_json::from_str("{}").unwrap();
     assert!(e.kind.is_none());
     assert!(e.key.is_none());
@@ -219,7 +212,6 @@ fn journal_entry_minimal_no_panic() {
 #[test]
 fn journal_entry_unknown_fields_ignored() {
     use cc_session_jsonl::types::WorkflowJournalEntry;
-    // Future-compat: unknown fields should be silently ignored
     let json = r#"{"type":"started","key":"v2:abc","agentId":"x","futureField":"ignored","nested":{"a":1}}"#;
     let e: WorkflowJournalEntry = serde_json::from_str(json).unwrap();
     assert_eq!(e.kind.as_deref(), Some("started"));
@@ -230,7 +222,6 @@ fn journal_entry_unknown_fields_ignored() {
 #[test]
 fn system_turn_duration_pending_workflow_count_boundary_zero() {
     use cc_session_jsonl::types::Entry;
-    // pendingWorkflowCount = 0 is a valid value (not None)
     let json = r#"{
         "type":"system","subtype":"turn_duration",
         "durationMs":100,"messageCount":2,"isMeta":false,"pendingWorkflowCount":0
@@ -248,7 +239,6 @@ fn system_turn_duration_pending_workflow_count_boundary_zero() {
 #[test]
 fn system_turn_duration_large_values() {
     use cc_session_jsonl::types::Entry;
-    // Large u64 values — must not overflow
     let json = r#"{
         "type":"system","subtype":"turn_duration",
         "durationMs":999999999,"messageCount":9999,"pendingWorkflowCount":50
@@ -267,7 +257,6 @@ fn system_turn_duration_large_values() {
 #[test]
 fn system_local_command_content_is_value_not_string() {
     use cc_session_jsonl::types::Entry;
-    // content field is Value — can hold string or object depending on CC version
     let json = r#"{
         "type":"system","subtype":"local_command",
         "content":"<command-name>/workflows</command-name>","isMeta":false
@@ -286,7 +275,6 @@ fn system_local_command_content_is_value_not_string() {
 #[test]
 fn system_local_command_content_as_object() {
     use cc_session_jsonl::types::Entry;
-    // Future-proof: content may be an object
     let json =
         r#"{"type":"system","subtype":"local_command","content":{"cmd":"/workflows","args":[]}}"#;
     let entry: Entry = serde_json::from_str(json).unwrap();
@@ -348,7 +336,6 @@ fn attachment_entry_top_level_field_present() {
 #[test]
 fn attachment_entry_with_both_message_and_attachment() {
     use cc_session_jsonl::types::AttachmentEntry;
-    // Forward-compat: both fields can coexist
     let json = r#"{
         "type":"attachment","uuid":"att-2","sessionId":"s1",
         "message":{"role":"user","content":"legacy"},
@@ -363,21 +350,15 @@ fn attachment_entry_with_both_message_and_attachment() {
 #[test]
 fn attachment_subtype_returns_none_when_type_key_absent() {
     use cc_session_jsonl::types::AttachmentEntry;
-    // An attachment object lacking the inner `type` discriminator lands in
-    // AttachmentBody::Unknown (the `#[serde(other)]` fallback).
     let json = r#"{"type":"attachment","uuid":"att-3","sessionId":"s1","attachment":{"data":"no-type-field"}}"#;
     let e: AttachmentEntry = serde_json::from_str(json).unwrap();
     assert!(e.attachment.is_some());
-    // subtype helper returns None when body is Unknown.
     assert!(e.attachment_subtype().is_none());
 }
 
 #[test]
 fn attachment_subtype_skill_listing() {
     use cc_session_jsonl::types::{AttachmentBody, AttachmentEntry};
-    // skill_listing has typed fields. Survey §5 reports an optional `names`
-    // array. (Real data uses `names` not `skills`; the input below is shaped
-    // for the test only and lands `names: None`.)
     let json = r#"{"type":"attachment","uuid":"att-sl","sessionId":"s","attachment":{"type":"skill_listing","names":["a","b"]}}"#;
     let e: AttachmentEntry = serde_json::from_str(json).unwrap();
     assert_eq!(e.attachment_subtype(), Some("skill_listing"));
@@ -392,315 +373,289 @@ fn attachment_subtype_skill_listing() {
 #[test]
 fn attachment_subtype_file() {
     use cc_session_jsonl::types::{AttachmentBody, AttachmentEntry};
-    // `file` is a long-tail subtype (survey §5: 80 entries, ~1% of all
-    // attachments). v2 keeps the long tail in `AttachmentBody::Unknown` so
-    // consumers can still detect "this isn't one of the top-6" without
-    // adding more typed variants for every rare shape.
     let json = r#"{"type":"attachment","uuid":"att-file","sessionId":"s","attachment":{"type":"file","path":"/a/b.txt","content":"hello"}}"#;
     let e: AttachmentEntry = serde_json::from_str(json).unwrap();
     assert!(matches!(
         e.attachment.as_ref().unwrap(),
         AttachmentBody::Unknown
     ));
-    // subtype helper returns None for Unknown.
     assert!(e.attachment_subtype().is_none());
 }
 
-// ─── Layer 2 (scanner): Type4 workflow agent discovery ───────────────────────
+// ─── Layer 2 (loader): workflow discovery via the public surface ─────────────
 
-#[cfg(feature = "scanner")]
-mod scanner_qa {
-    use super::*;
-    use cc_session_jsonl::scanner::{
-        load_workflow_agent_meta, scan_session_workflows, scan_sessions, scan_workflows,
-    };
+use cc_session_jsonl::{load_agent_metadata, load_all_sessions, load_session};
 
-    // Build a minimal tree: main session + one ordinary subagent + one workflow run
-    // with two agents, a journal, and a snapshot. No script.
-    fn build_minimal_workflow_tree(
-        claude_home: &std::path::Path,
-        project_name: &str,
-        session_uuid: &str,
-        run_id: &str,
-    ) {
-        let proj = claude_home.join("projects").join(project_name);
-        let subagents = proj.join(session_uuid).join("subagents");
+/// Build a minimal tree: main session + one ordinary subagent + one workflow run
+/// with two agents, a journal, and a snapshot. No script.
+fn build_minimal_workflow_tree(
+    claude_home: &std::path::Path,
+    project_name: &str,
+    session_uuid: &str,
+    run_id: &str,
+) {
+    let proj = claude_home.join("projects").join(project_name);
+    let subagents = proj.join(session_uuid).join("subagents");
+    let wf_run = subagents.join("workflows").join(run_id);
+    let workflows = proj.join(session_uuid).join("workflows");
+    fs::create_dir_all(&subagents).unwrap();
+    fs::create_dir_all(&wf_run).unwrap();
+    fs::create_dir_all(&workflows).unwrap();
+
+    // Main session
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        format!(
+            r#"{{"type":"user","uuid":"u1","sessionId":"{}"}}"#,
+            session_uuid
+        ),
+    )
+    .unwrap();
+
+    // Ordinary subagent (no workflow_run_id)
+    fs::write(
+        subagents.join("agent-ordinary.jsonl"),
+        r#"{"type":"user","uuid":"oa1","sessionId":"sub"}"#,
+    )
+    .unwrap();
+
+    // Workflow snapshot
+    fs::write(
+        workflows.join(format!("{}.json", run_id)),
+        r#"{"runId":"wf_qa01","workflowName":"qa-test","status":"completed","agentCount":2,"totalTokens":10000}"#,
+    )
+    .unwrap();
+
+    // Two workflow agents
+    fs::write(
+        wf_run.join("agent-wqa01.jsonl"),
+        r#"{"type":"user","uuid":"wa1","sessionId":"wf-sub"}"#,
+    )
+    .unwrap();
+    fs::write(
+        wf_run.join("agent-wqa01.meta.json"),
+        r#"{"agentType":"qa-worker","description":"QA agent one"}"#,
+    )
+    .unwrap();
+    fs::write(
+        wf_run.join("agent-wqa02.jsonl"),
+        r#"{"type":"user","uuid":"wa2","sessionId":"wf-sub"}"#,
+    )
+    .unwrap();
+    // No meta for agent-wqa02 (verify None path)
+
+    // Journal
+    fs::write(
+        wf_run.join("journal.jsonl"),
+        "{\"type\":\"started\",\"key\":\"v2:a1\",\"agentId\":\"wqa01\"}\n{\"type\":\"result\",\"key\":\"v2:a1\",\"agentId\":\"wqa01\",\"result\":\"done\"}",
+    )
+    .unwrap();
+}
+
+#[test]
+fn type4_workflow_agents_discovered_and_tagged_with_run_id() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj", session_uuid, "wf_qa01");
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    let s = &sessions[0];
+
+    // 1 ordinary + 2 workflow agents = 3
+    assert_eq!(s.agents.len(), 3, "agents: {:?}", s.agents);
+
+    let ordinary = s
+        .agents
+        .iter()
+        .find(|a| a.agent_id == "agent-ordinary")
+        .expect("ordinary subagent must be found");
+    assert!(
+        ordinary.workflow_run_id.is_none(),
+        "ordinary subagent must NOT have a workflow_run_id"
+    );
+    assert_eq!(ordinary.parent_session_id, session_uuid);
+
+    let wf_agents: Vec<_> = s
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.as_deref() == Some("wf_qa01"))
+        .collect();
+    assert_eq!(wf_agents.len(), 2, "expected 2 workflow agent files");
+    for wf in &wf_agents {
+        assert_eq!(
+            wf.parent_session_id, session_uuid,
+            "workflow agent must have the correct parent session UUID"
+        );
+        assert!(
+            wf.agent_id.starts_with("agent-wqa0"),
+            "unexpected agent_id: {}",
+            wf.agent_id
+        );
+    }
+}
+
+#[test]
+fn ordinary_subagent_and_workflow_agent_counts_are_independent() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj3", session_uuid, "wf_qa01");
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+
+    let ordinary_count = s
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.is_none())
+        .count();
+    let wf_count = s
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.is_some())
+        .count();
+
+    assert_eq!(ordinary_count, 1, "only 1 ordinary subagent");
+    assert_eq!(wf_count, 2, "exactly 2 workflow agents");
+}
+
+#[test]
+fn load_all_sessions_returns_correct_workflow_metadata() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj4", session_uuid, "wf_qa01");
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+    assert_eq!(s.workflows.len(), 1);
+
+    let wf = &s.workflows[0];
+    assert_eq!(wf.run_id, "wf_qa01");
+    assert_eq!(wf.session_id, session_uuid);
+    assert_eq!(wf.project.as_deref(), Some("-Users-qa-proj4"));
+    assert!(wf.snapshot_path.is_some(), "snapshot file must be found");
+    assert!(wf.journal_path.is_some(), "journal must be found");
+
+    // Snapshot parses correctly
+    let snap = wf.snapshot.as_ref().expect("snapshot must parse");
+    assert_eq!(snap.run_id.as_deref(), Some("wf_qa01"));
+    assert_eq!(snap.workflow_name.as_deref(), Some("qa-test"));
+    assert_eq!(snap.status.as_deref(), Some("completed"));
+    assert_eq!(snap.agent_count, Some(2));
+    assert_eq!(snap.total_tokens, Some(10000));
+
+    // Journal eagerly parsed
+    let journal = wf.journal.as_ref().expect("journal must parse");
+    assert_eq!(journal.len(), 2);
+    assert_eq!(journal[0].kind.as_deref(), Some("started"));
+    assert_eq!(journal[1].kind.as_deref(), Some("result"));
+}
+
+#[test]
+fn load_all_sessions_empty_when_no_workflow_dir() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-plain");
+    fs::create_dir_all(&proj).unwrap();
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user","uuid":"u1","sessionId":"s"}"#,
+    )
+    .unwrap();
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].workflows.is_empty());
+}
+
+#[test]
+fn load_all_sessions_missing_snapshot_still_finds_agents() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-nosnapshot");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_nosnapshot");
+    fs::create_dir_all(&wf_run).unwrap();
+
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user","uuid":"u1"}"#,
+    )
+    .unwrap();
+    fs::write(
+        wf_run.join("agent-solo.jsonl"),
+        r#"{"type":"user","uuid":"x"}"#,
+    )
+    .unwrap();
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+    assert_eq!(s.workflows.len(), 1);
+    assert_eq!(s.workflows[0].run_id, "wf_nosnapshot");
+    assert!(s.workflows[0].snapshot.is_none());
+    assert!(s.workflows[0].snapshot_path.is_none());
+    assert_eq!(s.agents.len(), 1);
+    assert_eq!(
+        s.agents[0].workflow_run_id.as_deref(),
+        Some("wf_nosnapshot")
+    );
+}
+
+#[test]
+fn load_all_sessions_missing_journal_is_ok() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-nojournal");
+    let workflows_dir = proj.join(session_uuid).join("workflows");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_nojournal");
+    fs::create_dir_all(&workflows_dir).unwrap();
+    fs::create_dir_all(&wf_run).unwrap();
+
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user"}"#,
+    )
+    .unwrap();
+    fs::write(
+        workflows_dir.join("wf_nojournal.json"),
+        r#"{"runId":"wf_nojournal","status":"running"}"#,
+    )
+    .unwrap();
+    fs::write(
+        wf_run.join("agent-x.jsonl"),
+        r#"{"type":"user","uuid":"x"}"#,
+    )
+    .unwrap();
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+    assert_eq!(s.workflows.len(), 1);
+    assert!(s.workflows[0].journal_path.is_none());
+    assert!(s.workflows[0].journal.is_none());
+}
+
+#[test]
+fn load_all_sessions_multiple_runs_in_same_session() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-multiruns");
+    let subagents = proj.join(session_uuid).join("subagents");
+    let workflows_dir = proj.join(session_uuid).join("workflows");
+
+    for run_id in &["wf_run001", "wf_run002", "wf_run003"] {
         let wf_run = subagents.join("workflows").join(run_id);
-        let workflows = proj.join(session_uuid).join("workflows");
-        fs::create_dir_all(&subagents).unwrap();
         fs::create_dir_all(&wf_run).unwrap();
-        fs::create_dir_all(&workflows).unwrap();
-
-        // Main session
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            format!(
-                r#"{{"type":"user","uuid":"u1","sessionId":"{}"}}"#,
-                session_uuid
-            ),
-        )
-        .unwrap();
-
-        // Ordinary subagent (no workflow_run_id)
-        fs::write(
-            subagents.join("agent-ordinary.jsonl"),
-            r#"{"type":"user","uuid":"oa1","sessionId":"sub"}"#,
-        )
-        .unwrap();
-
-        // Workflow snapshot
-        fs::write(
-            workflows.join(format!("{}.json", run_id)),
-            r#"{"runId":"wf_qa01","workflowName":"qa-test","status":"completed","agentCount":2,"totalTokens":10000}"#,
-        )
-        .unwrap();
-
-        // Two workflow agents
-        fs::write(
-            wf_run.join("agent-wqa01.jsonl"),
-            r#"{"type":"user","uuid":"wa1","sessionId":"wf-sub"}"#,
-        )
-        .unwrap();
-        fs::write(
-            wf_run.join("agent-wqa01.meta.json"),
-            r#"{"agentType":"qa-worker","description":"QA agent one"}"#,
-        )
-        .unwrap();
-        fs::write(
-            wf_run.join("agent-wqa02.jsonl"),
-            r#"{"type":"user","uuid":"wa2","sessionId":"wf-sub"}"#,
-        )
-        .unwrap();
-        // No meta for agent-wqa02 (verify None path)
-
-        // Journal
-        fs::write(
-            wf_run.join("journal.jsonl"),
-            "{\"type\":\"started\",\"key\":\"v2:a1\",\"agentId\":\"wqa01\"}\n{\"type\":\"result\",\"key\":\"v2:a1\",\"agentId\":\"wqa01\",\"result\":\"done\"}",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn type4_workflow_agents_discovered_and_tagged_with_run_id() {
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj", session_uuid, "wf_qa01");
-
-        let files = scan_sessions(tmp.path()).unwrap();
-
-        // main + ordinary subagent + 2 workflow agents = 4
-        assert_eq!(files.len(), 4, "files: {files:?}");
-
-        let ordinary = files
-            .iter()
-            .find(|f| f.session_id == "agent-ordinary")
-            .expect("ordinary subagent must be found");
-        assert!(ordinary.is_agent);
-        assert!(
-            ordinary.workflow_run_id.is_none(),
-            "ordinary subagent must NOT have a workflow_run_id"
-        );
-        assert_eq!(ordinary.parent_session_id.as_deref(), Some(session_uuid));
-
-        let wf_agents: Vec<_> = files
-            .iter()
-            .filter(|f| f.workflow_run_id.as_deref() == Some("wf_qa01"))
-            .collect();
-        assert_eq!(wf_agents.len(), 2, "expected 2 workflow agent files");
-        for wf in &wf_agents {
-            assert!(wf.is_agent);
-            assert_eq!(
-                wf.parent_session_id.as_deref(),
-                Some(session_uuid),
-                "workflow agent must have the correct parent session UUID"
-            );
-            assert!(
-                wf.session_id.starts_with("agent-wqa0"),
-                "unexpected session_id: {}",
-                wf.session_id
-            );
-        }
-    }
-
-    #[test]
-    fn type3_does_not_enter_workflow_subdir_as_regular_agent() {
-        // Critical: Type3 scan must NOT pick up workflow agents from the `workflows/`
-        // subdirectory as ordinary subagents. Type4 is the sole discoverer.
-        // Verify by checking that workflow agent session_ids are only found with
-        // a non-None workflow_run_id.
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj2", session_uuid, "wf_qa01");
-
-        let files = scan_sessions(tmp.path()).unwrap();
-
-        // Every agent file found in the workflows subdir must have workflow_run_id set
-        for f in &files {
-            if f.session_id.starts_with("agent-wqa") {
-                assert!(
-                    f.workflow_run_id.is_some(),
-                    "agent '{}' was picked up by Type3 (no workflow_run_id) — double discovery!",
-                    f.session_id
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn ordinary_subagent_and_workflow_agent_counts_are_independent() {
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj3", session_uuid, "wf_qa01");
-
-        let files = scan_sessions(tmp.path()).unwrap();
-
-        let ordinary_count = files
-            .iter()
-            .filter(|f| f.is_agent && f.workflow_run_id.is_none())
-            .count();
-        let wf_count = files.iter().filter(|f| f.workflow_run_id.is_some()).count();
-
-        assert_eq!(ordinary_count, 1, "only 1 ordinary subagent");
-        assert_eq!(wf_count, 2, "exactly 2 workflow agents");
-    }
-
-    #[test]
-    fn scan_session_workflows_returns_correct_run_metadata() {
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        build_minimal_workflow_tree(tmp.path(), "-Users-qa-proj4", session_uuid, "wf_qa01");
-
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        assert_eq!(runs.len(), 1);
-
-        let run = &runs[0];
-        assert_eq!(run.run_id, "wf_qa01");
-        assert_eq!(run.session_id, session_uuid);
-        assert_eq!(run.project.as_deref(), Some("-Users-qa-proj4"));
-        assert!(run.snapshot_path.is_some(), "snapshot file must be found");
-        assert!(run.journal_path.is_some(), "journal must be found");
-        assert_eq!(run.agent_files.len(), 2);
-
-        // Snapshot parses correctly
-        let snap = run.snapshot.as_ref().expect("snapshot must parse");
-        assert_eq!(snap.run_id.as_deref(), Some("wf_qa01"));
-        assert_eq!(snap.workflow_name.as_deref(), Some("qa-test"));
-        assert_eq!(snap.status.as_deref(), Some("completed"));
-        assert_eq!(snap.agent_count, Some(2));
-        assert_eq!(snap.total_tokens, Some(10000));
-
-        // agent_files: IDs are stripped of "agent-" prefix, sorted
-        let ids: Vec<&str> = run
-            .agent_files
-            .iter()
-            .map(|a| a.agent_id.as_str())
-            .collect();
-        assert!(ids.contains(&"wqa01"), "wqa01 must be present");
-        assert!(ids.contains(&"wqa02"), "wqa02 must be present");
-
-        // agent-wqa01 has a meta sidecar; agent-wqa02 does not
-        let wqa01 = run
-            .agent_files
-            .iter()
-            .find(|a| a.agent_id == "wqa01")
-            .unwrap();
-        let wqa02 = run
-            .agent_files
-            .iter()
-            .find(|a| a.agent_id == "wqa02")
-            .unwrap();
-        assert!(wqa01.meta_path.is_some(), "wqa01 must have meta sidecar");
-        assert!(
-            wqa02.meta_path.is_none(),
-            "wqa02 must NOT have meta sidecar"
-        );
-    }
-
-    #[test]
-    fn scan_session_workflows_empty_when_no_workflow_dir() {
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        // Only a main session, no workflow directory
-        let proj = tmp.path().join("projects").join("-Users-qa-plain");
-        fs::create_dir_all(&proj).unwrap();
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user","uuid":"u1","sessionId":"s"}"#,
-        )
-        .unwrap();
-
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        assert!(
-            runs.is_empty(),
-            "no workflow runs expected for plain session"
-        );
-    }
-
-    #[test]
-    fn scan_session_workflows_missing_snapshot_still_finds_agents() {
-        // Missing wf_*.json does NOT cause scan_session_workflows to return an empty list —
-        // it still discovers agents from the subagents/workflows/wf_*/ directory.
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-nosnapshot");
-        let wf_run = proj
-            .join(session_uuid)
-            .join("subagents")
-            .join("workflows")
-            .join("wf_nosnapshot");
-        fs::create_dir_all(&wf_run).unwrap();
-
-        // Main session
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user","uuid":"u1"}"#,
-        )
-        .unwrap();
-
-        // Agent transcript (no snapshot file)
-        fs::write(
-            wf_run.join("agent-solo.jsonl"),
-            r#"{"type":"user","uuid":"x"}"#,
-        )
-        .unwrap();
-
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        // build_workflow_run returns None only when BOTH snapshot AND agent_files are absent.
-        // Here agent_files has one entry, so it must return Some.
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].run_id, "wf_nosnapshot");
-        assert!(
-            runs[0].snapshot.is_none(),
-            "no snapshot json → snapshot is None"
-        );
-        assert!(runs[0].snapshot_path.is_none());
-        assert_eq!(runs[0].agent_files.len(), 1);
-    }
-
-    #[test]
-    fn scan_session_workflows_missing_journal_is_ok() {
-        // Journal is optional — should not block discovery
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-nojournal");
-        let workflows_dir = proj.join(session_uuid).join("workflows");
-        let wf_run = proj
-            .join(session_uuid)
-            .join("subagents")
-            .join("workflows")
-            .join("wf_nojournal");
         fs::create_dir_all(&workflows_dir).unwrap();
-        fs::create_dir_all(&wf_run).unwrap();
-
         fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user"}"#,
-        )
-        .unwrap();
-        fs::write(
-            workflows_dir.join("wf_nojournal.json"),
-            r#"{"runId":"wf_nojournal","status":"running"}"#,
+            workflows_dir.join(format!("{}.json", run_id)),
+            format!(r#"{{"runId":"{run_id}","status":"completed","agentCount":1}}"#),
         )
         .unwrap();
         fs::write(
@@ -708,268 +663,226 @@ mod scanner_qa {
             r#"{"type":"user","uuid":"x"}"#,
         )
         .unwrap();
-        // No journal.jsonl
-
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        assert_eq!(runs.len(), 1);
-        assert!(
-            runs[0].journal_path.is_none(),
-            "journal_path must be None when journal absent"
-        );
-        assert_eq!(runs[0].agent_files.len(), 1);
     }
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user"}"#,
+    )
+    .unwrap();
 
-    #[test]
-    fn scan_session_workflows_multiple_runs_in_same_session() {
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-multiruns");
-        let subagents = proj.join(session_uuid).join("subagents");
-        let workflows_dir = proj.join(session_uuid).join("workflows");
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+    assert_eq!(s.workflows.len(), 3);
+    let ids: Vec<&str> = s.workflows.iter().map(|r| r.run_id.as_str()).collect();
+    assert!(ids.contains(&"wf_run001"));
+    assert!(ids.contains(&"wf_run002"));
+    assert!(ids.contains(&"wf_run003"));
+}
 
-        for run_id in &["wf_run001", "wf_run002", "wf_run003"] {
-            let wf_run = subagents.join("workflows").join(run_id);
-            fs::create_dir_all(&wf_run).unwrap();
-            fs::create_dir_all(&workflows_dir).unwrap();
-            fs::write(
-                workflows_dir.join(format!("{}.json", run_id)),
-                format!(r#"{{"runId":"{run_id}","status":"completed","agentCount":1}}"#),
-            )
-            .unwrap();
-            fs::write(
-                wf_run.join("agent-x.jsonl"),
-                r#"{"type":"user","uuid":"x"}"#,
-            )
-            .unwrap();
-        }
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user"}"#,
-        )
-        .unwrap();
+#[test]
+fn load_all_sessions_finds_workflows_across_projects() {
+    let tmp = make_claude_home();
+    let uuid_a = "aaaaaaaa-bbbb-cccc-dddd-000000000001";
+    let uuid_b = "aaaaaaaa-bbbb-cccc-dddd-000000000002";
 
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        assert_eq!(runs.len(), 3, "three distinct runs must be discovered");
-        let ids: Vec<&str> = runs.iter().map(|r| r.run_id.as_str()).collect();
-        assert!(ids.contains(&"wf_run001"));
-        assert!(ids.contains(&"wf_run002"));
-        assert!(ids.contains(&"wf_run003"));
-    }
-
-    #[test]
-    fn scan_workflows_global_finds_all_across_projects() {
-        let tmp = make_claude_home();
-        let uuid_a = "aaaaaaaa-bbbb-cccc-dddd-000000000001";
-        let uuid_b = "aaaaaaaa-bbbb-cccc-dddd-000000000002";
-
-        for (uuid, proj, run_id) in &[
-            (uuid_a, "-Users-qa-proj-x", "wf_pa"),
-            (uuid_b, "-Users-qa-proj-y", "wf_pb"),
-        ] {
-            let p = tmp.path().join("projects").join(proj);
-            let wf_run = p
-                .join(uuid)
-                .join("subagents")
-                .join("workflows")
-                .join(run_id);
-            let wf_dir = p.join(uuid).join("workflows");
-            fs::create_dir_all(&wf_run).unwrap();
-            fs::create_dir_all(&wf_dir).unwrap();
-            fs::write(p.join(format!("{}.jsonl", uuid)), r#"{"type":"user"}"#).unwrap();
-            fs::write(
-                wf_dir.join(format!("{}.json", run_id)),
-                format!(r#"{{"runId":"{run_id}"}}"#),
-            )
-            .unwrap();
-            fs::write(wf_run.join("agent-x.jsonl"), r#"{"type":"user"}"#).unwrap();
-        }
-
-        let runs = scan_workflows(tmp.path()).unwrap();
-        assert_eq!(runs.len(), 2, "must find one run per project");
-        let rids: Vec<&str> = runs.iter().map(|r| r.run_id.as_str()).collect();
-        assert!(rids.contains(&"wf_pa"));
-        assert!(rids.contains(&"wf_pb"));
-    }
-
-    #[test]
-    fn load_workflow_agent_meta_correct_map() {
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        build_minimal_workflow_tree(tmp.path(), "-Users-qa-meta", session_uuid, "wf_qa01");
-
-        let meta_map = load_workflow_agent_meta(session_uuid, tmp.path());
-
-        // wqa01 has a meta sidecar with agentType = "qa-worker", description = "QA agent one"
-        let meta = meta_map.get("wqa01").expect("wqa01 meta must be present");
-        assert_eq!(meta.agent_type.as_deref(), Some("qa-worker"));
-        assert_eq!(meta.description.as_deref(), Some("QA agent one"));
-
-        // wqa02 has no sidecar → not in map
-        assert!(
-            meta_map.get("wqa02").is_none(),
-            "wqa02 has no meta sidecar — must not appear in map"
-        );
-    }
-
-    #[test]
-    fn load_workflow_agent_meta_returns_empty_for_nonexistent_session() {
-        let tmp = make_claude_home();
-        let meta_map = load_workflow_agent_meta("nonexistent-session-id", tmp.path());
-        assert!(meta_map.is_empty());
-    }
-
-    #[test]
-    fn workflow_run_id_absent_for_ordinary_scan_types() {
-        // Types 1, 2, 3 must never get a workflow_run_id
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-classic");
-        let subagents = proj.join(session_uuid).join("subagents");
-        fs::create_dir_all(&subagents).unwrap();
-
-        // Type 1: main session
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user"}"#,
-        )
-        .unwrap();
-        // Type 2: legacy agent
-        fs::write(
-            proj.join("agent-leg001.jsonl"),
-            r#"{"type":"user","sessionId":"parent"}"#,
-        )
-        .unwrap();
-        // Type 3: new-style subagent
-        fs::write(subagents.join("agent-new001.jsonl"), r#"{"type":"user"}"#).unwrap();
-
-        let files = scan_sessions(tmp.path()).unwrap();
-        assert_eq!(files.len(), 3);
-        for f in &files {
-            assert!(
-                f.workflow_run_id.is_none(),
-                "file '{}' should not have workflow_run_id",
-                f.session_id
-            );
-        }
-    }
-
-    #[test]
-    fn wf_dir_with_no_agent_files_but_has_snapshot_only() {
-        // A wf_*.json with no agents in subagents/workflows/wf_*/ but the snapshot file
-        // exists → should still produce a WorkflowRun (not None), with empty agent_files.
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-snapshotonly");
-        let wf_dir = proj.join(session_uuid).join("workflows");
-        fs::create_dir_all(&wf_dir).unwrap();
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user"}"#,
-        )
-        .unwrap();
-        fs::write(
-            wf_dir.join("wf_snaponly.json"),
-            r#"{"runId":"wf_snaponly","status":"failed","agentCount":0}"#,
-        )
-        .unwrap();
-        // No subagents/workflows/wf_snaponly/ directory at all
-
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].run_id, "wf_snaponly");
-        assert!(runs[0].snapshot.is_some());
-        assert!(runs[0].agent_files.is_empty());
-    }
-
-    #[test]
-    fn wf_dir_completely_empty_returns_no_run() {
-        // A wf_* directory under subagents/workflows that contains no agent files AND
-        // no snapshot → build_workflow_run returns None → not included in results.
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-emptyrun");
-        let wf_run = proj
-            .join(session_uuid)
+    for (uuid, proj, run_id) in &[
+        (uuid_a, "-Users-qa-proj-x", "wf_pa"),
+        (uuid_b, "-Users-qa-proj-y", "wf_pb"),
+    ] {
+        let p = tmp.path().join("projects").join(proj);
+        let wf_run = p
+            .join(uuid)
             .join("subagents")
             .join("workflows")
-            .join("wf_empty");
+            .join(run_id);
+        let wf_dir = p.join(uuid).join("workflows");
         fs::create_dir_all(&wf_run).unwrap();
+        fs::create_dir_all(&wf_dir).unwrap();
+        fs::write(p.join(format!("{}.jsonl", uuid)), r#"{"type":"user"}"#).unwrap();
         fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user"}"#,
+            wf_dir.join(format!("{}.json", run_id)),
+            format!(r#"{{"runId":"{run_id}"}}"#),
         )
         .unwrap();
-        // wf_empty dir is empty: no agents, no snapshot in workflows/
+        fs::write(wf_run.join("agent-x.jsonl"), r#"{"type":"user"}"#).unwrap();
+    }
 
-        let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
-        // wf_empty has a subdir but no snapshot and no agent files → returns None → empty
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 2);
+    let mut all_runs: Vec<&str> = sessions
+        .iter()
+        .flat_map(|s| s.workflows.iter().map(|r| r.run_id.as_str()))
+        .collect();
+    all_runs.sort();
+    assert_eq!(all_runs, vec!["wf_pa", "wf_pb"]);
+}
+
+#[test]
+fn load_agent_metadata_correct_map() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    build_minimal_workflow_tree(tmp.path(), "-Users-qa-meta", session_uuid, "wf_qa01");
+
+    let meta_map = load_agent_metadata(tmp.path(), session_uuid);
+
+    // wqa01 has a meta sidecar with agentType = "qa-worker", description = "QA agent one"
+    let meta = meta_map.get("wqa01").expect("wqa01 meta must be present");
+    assert_eq!(meta.agent_type.as_deref(), Some("qa-worker"));
+    assert_eq!(meta.description.as_deref(), Some("QA agent one"));
+
+    // wqa02 has no sidecar → not in map
+    assert!(
+        !meta_map.contains_key("wqa02"),
+        "wqa02 has no meta sidecar — must not appear in map"
+    );
+}
+
+#[test]
+fn load_agent_metadata_returns_empty_for_nonexistent_session() {
+    let tmp = make_claude_home();
+    let meta_map = load_agent_metadata(tmp.path(), "nonexistent-session-id");
+    assert!(meta_map.is_empty());
+}
+
+#[test]
+fn workflow_run_id_absent_for_ordinary_scan_types() {
+    // Types 1, 2, 3 must never get a workflow_run_id
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-classic");
+    let subagents = proj.join(session_uuid).join("subagents");
+    fs::create_dir_all(&subagents).unwrap();
+
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user"}"#,
+    )
+    .unwrap();
+    fs::write(
+        proj.join("agent-leg001.jsonl"),
+        format!(r#"{{"type":"user","sessionId":"{}"}}"#, session_uuid),
+    )
+    .unwrap();
+    fs::write(subagents.join("agent-new001.jsonl"), r#"{"type":"user"}"#).unwrap();
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    for a in &sessions[0].agents {
         assert!(
-            runs.is_empty(),
-            "completely empty wf dir should yield no run"
+            a.workflow_run_id.is_none(),
+            "agent '{}' should not have workflow_run_id",
+            a.agent_id
         );
     }
+}
 
-    #[test]
-    fn scan_sessions_ignores_non_wf_dirs_under_workflows() {
-        // Only `wf_*` subdirectory names should be picked up — other dirs are ignored
-        let tmp = make_claude_home();
-        let session_uuid = make_session_uuid();
-        let proj = tmp.path().join("projects").join("-Users-qa-notwf");
-        let subagents = proj.join(session_uuid).join("subagents");
-        let fake_wf = subagents.join("workflows").join("not-wf-dir");
-        fs::create_dir_all(&fake_wf).unwrap();
-        fs::write(
-            proj.join(format!("{}.jsonl", session_uuid)),
-            r#"{"type":"user"}"#,
-        )
-        .unwrap();
-        fs::write(fake_wf.join("agent-x.jsonl"), r#"{"type":"user"}"#).unwrap();
+#[test]
+fn wf_dir_with_no_agent_files_but_has_snapshot_only() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-snapshotonly");
+    let wf_dir = proj.join(session_uuid).join("workflows");
+    fs::create_dir_all(&wf_dir).unwrap();
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user"}"#,
+    )
+    .unwrap();
+    fs::write(
+        wf_dir.join("wf_snaponly.json"),
+        r#"{"runId":"wf_snaponly","status":"failed","agentCount":0}"#,
+    )
+    .unwrap();
 
-        let files = scan_sessions(tmp.path()).unwrap();
-        // Only the main session; agent under `not-wf-dir/` must be ignored
-        assert_eq!(
-            files.len(),
-            1,
-            "non-wf_ dir must not produce workflow agent files"
-        );
-    }
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+    assert_eq!(s.workflows.len(), 1);
+    assert_eq!(s.workflows[0].run_id, "wf_snaponly");
+    assert!(s.workflows[0].snapshot.is_some());
+    // No workflow agent files on disk → no workflow agents in the session.
+    let wf_agents: Vec<_> = s
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.as_deref() == Some("wf_snaponly"))
+        .collect();
+    assert!(wf_agents.is_empty());
+}
 
-    // ─── Real data (Layer 3) ─────────────────────────────────────────────────
+#[test]
+fn wf_dir_completely_empty_returns_no_run() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-emptyrun");
+    let wf_run = proj
+        .join(session_uuid)
+        .join("subagents")
+        .join("workflows")
+        .join("wf_empty");
+    fs::create_dir_all(&wf_run).unwrap();
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user"}"#,
+    )
+    .unwrap();
 
-    /// Real session ae289b37 contains 3 workflow runs (wf_7c0e6255-566,
-    /// wf_81719e41-156, wf_c210842b-3d9). Verify the scanner finds them all,
-    /// each has a snapshot, agents and a journal.
-    /// See `crates/cc-token-usage/tests/workflow_qa.rs` for the same pattern
-    /// and the rationale: `REQUIRE_REAL_DATA=1` turns silent-skip into panic.
-    fn require_real_data() -> bool {
-        std::env::var("REQUIRE_REAL_DATA").as_deref() == Ok("1")
-    }
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = &sessions[0];
+    assert!(s.workflows.is_empty());
+}
 
-    #[test]
-    #[ignore]
-    fn real_session_ae289b37_workflow_scan() {
-        let home = match std::env::var("HOME").ok() {
-            Some(h) => std::path::PathBuf::from(h),
-            None => {
-                if require_real_data() {
-                    panic!("REQUIRE_REAL_DATA=1 but $HOME is unset");
-                }
-                return;
-            }
-        };
-        let claude_home = home.join(".claude");
-        if !claude_home.is_dir() {
+#[test]
+fn non_wf_dirs_under_workflows_subdir_are_ignored() {
+    let tmp = make_claude_home();
+    let session_uuid = make_session_uuid();
+    let proj = tmp.path().join("projects").join("-Users-qa-notwf");
+    let subagents = proj.join(session_uuid).join("subagents");
+    let fake_wf = subagents.join("workflows").join("not-wf-dir");
+    fs::create_dir_all(&fake_wf).unwrap();
+    fs::write(
+        proj.join(format!("{}.jsonl", session_uuid)),
+        r#"{"type":"user"}"#,
+    )
+    .unwrap();
+    fs::write(fake_wf.join("agent-x.jsonl"), r#"{"type":"user"}"#).unwrap();
+
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 1);
+    // No workflow agents and no workflow runs — `not-wf-dir` is filtered.
+    assert!(sessions[0].workflows.is_empty());
+    assert!(sessions[0].agents.is_empty());
+}
+
+// ─── Real data (Layer 3) ─────────────────────────────────────────────────
+
+fn require_real_data() -> bool {
+    std::env::var("REQUIRE_REAL_DATA").as_deref() == Ok("1")
+}
+
+#[test]
+#[ignore]
+fn real_session_ae289b37_workflow_scan() {
+    let home = match std::env::var("HOME").ok() {
+        Some(h) => std::path::PathBuf::from(h),
+        None => {
             if require_real_data() {
-                panic!("REQUIRE_REAL_DATA=1 but {:?} not found", claude_home);
+                panic!("REQUIRE_REAL_DATA=1 but $HOME is unset");
             }
-            eprintln!("Skipping: ~/.claude not found");
             return;
         }
+    };
+    let claude_home = home.join(".claude");
+    if !claude_home.is_dir() {
+        if require_real_data() {
+            panic!("REQUIRE_REAL_DATA=1 but {:?} not found", claude_home);
+        }
+        eprintln!("Skipping: ~/.claude not found");
+        return;
+    }
 
-        let session_id = "ae289b37-f19a-4797-b14c-52b5ada582ed";
-        let runs = scan_session_workflows(session_id, &claude_home).unwrap();
-
-        if runs.is_empty() {
+    let session_id = "ae289b37-f19a-4797-b14c-52b5ada582ed";
+    let s = match load_session(&claude_home, session_id) {
+        Ok(s) => s,
+        Err(_) => {
             if require_real_data() {
                 panic!(
                     "REQUIRE_REAL_DATA=1 but reference session {} not present locally",
@@ -979,16 +892,30 @@ mod scanner_qa {
             eprintln!("Skipping: session {} not present locally", session_id);
             return;
         }
+    };
 
-        assert_eq!(runs.len(), 3, "expected 3 workflow runs for {}", session_id);
-        for r in &runs {
-            assert!(
-                r.snapshot.is_some(),
-                "{} must have parsed snapshot",
-                r.run_id
-            );
-            assert!(!r.agent_files.is_empty(), "{} must have agents", r.run_id);
-            assert!(r.journal_path.is_some(), "{} must have journal", r.run_id);
-        }
+    assert_eq!(
+        s.workflows.len(),
+        3,
+        "expected 3 workflow runs for {}",
+        session_id
+    );
+    for r in &s.workflows {
+        assert!(
+            r.snapshot.is_some(),
+            "{} must have parsed snapshot",
+            r.run_id
+        );
+        let wf_agents: Vec<_> = s
+            .agents
+            .iter()
+            .filter(|a| a.workflow_run_id.as_deref() == Some(r.run_id.as_str()))
+            .collect();
+        assert!(
+            !wf_agents.is_empty(),
+            "{} must have at least one workflow agent",
+            r.run_id
+        );
+        assert!(r.journal_path.is_some(), "{} must have journal", r.run_id);
     }
 }

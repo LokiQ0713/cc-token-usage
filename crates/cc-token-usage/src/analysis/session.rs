@@ -354,11 +354,7 @@ pub fn build_workflow_summaries(
     calc: &PricingCalculator,
     claude_home: &Path,
 ) -> Vec<WorkflowSummary> {
-    let runs =
-        match cc_session_jsonl::scanner::scan_session_workflows(&session.session_id, claude_home) {
-            Ok(r) => r,
-            Err(_) => return Vec::new(),
-        };
+    let runs = cc_session_jsonl::load_workflows_for_session(claude_home, &session.session_id);
     if runs.is_empty() {
         return Vec::new();
     }

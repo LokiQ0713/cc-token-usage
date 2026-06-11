@@ -1,8 +1,15 @@
-//! Audit: enumerate every file `scanner::scan_sessions` returns and compare
-//! against `find ~/.claude -name *.jsonl`. Anything `find` finds but the
-//! scanner skips must be classified as: (a) legitimate exclusion (journal,
-//! history, backup), or (b) miss (real session file the scanner forgot).
-use cc_session_jsonl::scanner;
+//! Audit: enumerate every JSONL file that `cc_session_jsonl::load_all_sessions`
+//! discovers and compare against `find ~/.claude -name *.jsonl`. Anything `find`
+//! finds but the loader skips must be classified as: (a) legitimate exclusion
+//! (journal, history, backup), or (b) miss (real session file the loader
+//! forgot).
+//!
+//! The loader's file-layout contract is the public surface; the underlying
+//! scanner module is private, so we re-derive each discovered file path from
+//! `Session.main_entries` (via its file location) + `Session.agents[*].path`.
+//! Main session paths are reconstructed from the project + session id since
+//! `Session` carries them implicitly through its `project` + `id` fields.
+use cc_session_jsonl::load_all_sessions;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Command;
@@ -10,10 +17,25 @@ use std::process::Command;
 fn main() -> std::io::Result<()> {
     let home = PathBuf::from(std::env::var("HOME").unwrap()).join(".claude");
 
-    let scanned: BTreeSet<String> = scanner::scan_sessions(&home)?
-        .into_iter()
-        .map(|sf| sf.path.display().to_string())
-        .collect();
+    let sessions = load_all_sessions(&home)?;
+
+    // Collect every JSONL path the loader produced: main session file (derived
+    // from project+sid) + every agent's `.path`.
+    let mut scanned: BTreeSet<String> = BTreeSet::new();
+    for s in &sessions {
+        if let Some(project) = &s.project {
+            let main_path = home
+                .join("projects")
+                .join(project)
+                .join(format!("{}.jsonl", s.id));
+            if main_path.is_file() {
+                scanned.insert(main_path.display().to_string());
+            }
+        }
+        for a in &s.agents {
+            scanned.insert(a.path.display().to_string());
+        }
+    }
 
     let out = Command::new("find")
         .arg(&home)
@@ -27,10 +49,10 @@ fn main() -> std::io::Result<()> {
     let missed: Vec<&String> = all.difference(&scanned).collect();
     let extra: Vec<&String> = scanned.difference(&all).collect();
 
-    println!("scanner found:  {}", scanned.len());
+    println!("loader found:   {}", scanned.len());
     println!("find found:     {}", all.len());
-    println!("missed by scanner (find ∖ scanner): {}", missed.len());
-    println!("scanner extra (scanner ∖ find):    {}", extra.len());
+    println!("missed by loader (find ∖ loader): {}", missed.len());
+    println!("loader extra (loader ∖ find):    {}", extra.len());
 
     let mut buckets: std::collections::BTreeMap<&str, Vec<&String>> = Default::default();
     for p in &missed {
@@ -62,7 +84,7 @@ fn main() -> std::io::Result<()> {
         buckets.entry(k).or_default().push(p);
     }
 
-    println!("\n── missed-by-scanner breakdown ──");
+    println!("\n── missed-by-loader breakdown ──");
     for (k, v) in &buckets {
         println!("  {:<22} {:>4}", k, v.len());
         if *k == "OTHER (suspicious)" {
@@ -86,9 +108,9 @@ fn main() -> std::io::Result<()> {
         .unwrap_or(0);
     println!();
     if suspicious_count == 0 {
-        println!("✓ 全部 missed 文件都属于已知 legitimate exclusion；scanner 覆盖完整。");
+        println!("✓ 全部 missed 文件都属于已知 legitimate exclusion；loader 覆盖完整。");
     } else {
-        println!("✗ 有 {} 个未分类 missed 文件，需要检查 scanner 是否漏了。", suspicious_count);
+        println!("✗ 有 {} 个未分类 missed 文件，需要检查 loader 是否漏了。", suspicious_count);
     }
 
     Ok(())

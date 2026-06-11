@@ -168,17 +168,16 @@ fn real_data_parse_all_sessions() {
     );
 }
 
-/// Real-data check: the known session `ae289b37` ran 3 workflows. Scan its
-/// directory and confirm `scan_session_workflows` discovers all 3 runs with
-/// snapshots, agent transcripts and journals.
+/// Real-data check: the known session `ae289b37` ran 3 workflows. Load it via
+/// `load_session` and confirm all 3 runs surface with snapshots, agent
+/// transcripts and journals.
 ///
 /// Run with:
-/// `cargo test -p cc-session-jsonl --all-features -- --ignored real_data_workflow_runs`
-#[cfg(feature = "scanner")]
+/// `cargo test -p cc-session-jsonl -- --ignored real_data_workflow_runs`
 #[test]
 #[ignore]
 fn real_data_workflow_runs() {
-    use cc_session_jsonl::scan_session_workflows;
+    use cc_session_jsonl::load_session;
 
     let projects_dir = match claude_projects_dir() {
         Some(p) => p,
@@ -187,24 +186,29 @@ fn real_data_workflow_runs() {
             return;
         }
     };
-    // claude_home is the parent of `projects`.
     let claude_home = projects_dir.parent().unwrap();
 
     let session_id = "ae289b37-f19a-4797-b14c-52b5ada582ed";
-    let runs = scan_session_workflows(session_id, claude_home).unwrap();
-
-    if runs.is_empty() {
-        eprintln!("Skipping real_data_workflow_runs: session {session_id} not present locally");
-        return;
-    }
+    let s = match load_session(claude_home, session_id) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("Skipping real_data_workflow_runs: session {session_id} not present locally");
+            return;
+        }
+    };
 
     eprintln!("\n=== Workflow runs for {session_id} ===");
-    for r in &runs {
+    for r in &s.workflows {
+        let wf_agent_count = s
+            .agents
+            .iter()
+            .filter(|a| a.workflow_run_id.as_deref() == Some(r.run_id.as_str()))
+            .count();
         eprintln!(
             "  {} — snapshot={} agents={} scripts={} journal={} totalTokens={:?}",
             r.run_id,
             r.snapshot.is_some(),
-            r.agent_files.len(),
+            wf_agent_count,
             r.script_paths.len(),
             r.journal_path.is_some(),
             r.snapshot.as_ref().and_then(|s| s.total_tokens),
@@ -212,16 +216,28 @@ fn real_data_workflow_runs() {
     }
     eprintln!("=======================================\n");
 
-    assert_eq!(runs.len(), 3, "expected 3 workflow runs for {session_id}");
-    let run_ids: Vec<&str> = runs.iter().map(|r| r.run_id.as_str()).collect();
+    assert_eq!(
+        s.workflows.len(),
+        3,
+        "expected 3 workflow runs for {session_id}"
+    );
+    let run_ids: Vec<&str> = s.workflows.iter().map(|r| r.run_id.as_str()).collect();
     assert!(run_ids.contains(&"wf_7c0e6255-566"));
     assert!(run_ids.contains(&"wf_81719e41-156"));
     assert!(run_ids.contains(&"wf_c210842b-3d9"));
 
-    // Every run should have a parsed snapshot, agent transcripts and a journal.
-    for r in &runs {
+    for r in &s.workflows {
         assert!(r.snapshot.is_some(), "{} snapshot must parse", r.run_id);
-        assert!(!r.agent_files.is_empty(), "{} must have agents", r.run_id);
+        let wf_agent_count = s
+            .agents
+            .iter()
+            .filter(|a| a.workflow_run_id.as_deref() == Some(r.run_id.as_str()))
+            .count();
+        assert!(
+            wf_agent_count > 0,
+            "{} must have at least one workflow agent",
+            r.run_id
+        );
         assert!(r.journal_path.is_some(), "{} must have journal", r.run_id);
     }
 }

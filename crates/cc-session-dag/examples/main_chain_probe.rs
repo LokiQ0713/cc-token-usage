@@ -9,13 +9,17 @@
 //! Oracle: every entry that has raw `uuid` + `parentUuid` must be reachable
 //! through `DagNode`. Any leftover (i.e. classified as metadata but actually
 //! carries DAG keys) means a `DagNode` impl is missing.
+//!
+//! Driven through the public `load_all_sessions` API: every file the loader
+//! discovers contributes its parsed entries (typed pass) and a raw text
+//! re-read (oracle pass).
 
+use cc_session_jsonl::load_all_sessions;
 use cc_session_jsonl::parser::SessionReader;
-use cc_session_jsonl::scanner;
 use cc_session_jsonl::types::{DagNode, Entry};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn entry_type(e: &Entry) -> &'static str {
     match e {
@@ -154,27 +158,217 @@ fn dist(label: &str, mut lens: Vec<usize>) {
     println!("    total={sum}  min={min}  median={median}  mean={mean:.1}  p90={}  p99={}  max={max}", pct(90), pct(99));
 }
 
+/// Walk a single JSONL path: typed pass (counts entries, DAG nodes, leaks via
+/// raw re-read).
+#[allow(clippy::too_many_arguments)]
+fn process_file(
+    path: &Path,
+    type_counts: &mut BTreeMap<&'static str, usize>,
+    dag_nodes_total: &mut usize,
+    sidechain_total: &mut usize,
+    struct_drift_total: &mut usize,
+    skipped_io_total: &mut usize,
+    leaks: &mut HashMap<&'static str, LeakSample>,
+    unknown_types: &mut BTreeMap<String, usize>,
+    by_session: &mut HashMap<String, SessionStats>,
+    nodes_by_session: &mut HashMap<String, Vec<Node>>,
+) {
+    // ── typed pass: DAG nodes ──
+    let Ok(reader) = SessionReader::open(path) else {
+        return;
+    };
+    let mut typed_iter = reader.lenient();
+    for entry in typed_iter.by_ref() {
+        let ty = entry_type(&entry);
+        *type_counts.entry(ty).or_insert(0) += 1;
+        if let Some(d) = as_dag(&entry) {
+            *dag_nodes_total += 1;
+            let is_side = d.is_sidechain() == Some(true);
+            if is_side {
+                *sidechain_total += 1;
+            }
+            if let (Some(uuid), Some(sid)) = (d.uuid(), d.session_id()) {
+                let stats = by_session.entry(sid.to_string()).or_insert_with(|| SessionStats {
+                    session_id: sid.to_string(),
+                    ..SessionStats::default()
+                });
+                stats.files.insert(path.display().to_string());
+                nodes_by_session
+                    .entry(sid.to_string())
+                    .or_default()
+                    .push(Node {
+                        uuid: uuid.to_string(),
+                        parent: d.parent_uuid().map(|s| s.to_string()),
+                        sidechain: is_side,
+                        ts: d.timestamp().unwrap_or("").to_string(),
+                    });
+            }
+        }
+    }
+    *struct_drift_total += typed_iter.struct_drift_count();
+    *skipped_io_total += typed_iter.errors_skipped();
+
+    // ── raw pass: oracle 漏网检测 ──
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let ty_str = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        let has_uuid = v
+            .get("uuid")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| !s.is_empty());
+        let has_parent = v
+            .get("parentUuid")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| !s.is_empty());
+        if !has_uuid {
+            continue;
+        }
+        // 已被 DagNode 覆盖
+        let already_dag = matches!(
+            ty_str,
+            "user" | "assistant" | "system" | "attachment" | "progress"
+        );
+        if already_dag {
+            continue;
+        }
+        let declared_in_enum = matches!(
+            ty_str,
+            "summary"
+                | "custom-title"
+                | "ai-title"
+                | "last-prompt"
+                | "task-summary"
+                | "tag"
+                | "agent-name"
+                | "agent-color"
+                | "agent-setting"
+                | "pr-link"
+                | "mode"
+                | "permission-mode"
+                | "queue-operation"
+                | "speculation-accept"
+                | "worktree-state"
+                | "content-replacement"
+                | "file-history-snapshot"
+                | "attribution-snapshot"
+                | "marble-origami-commit"
+                | "marble-origami-snapshot"
+        );
+        if declared_in_enum {
+            if has_parent || ty_str == "summary" {
+                let raw_sidechain = v
+                    .get("isSidechain")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                let key: &'static str = match ty_str {
+                    "summary" => "summary",
+                    "custom-title" => "custom-title",
+                    "ai-title" => "ai-title",
+                    "last-prompt" => "last-prompt",
+                    "task-summary" => "task-summary",
+                    "tag" => "tag",
+                    "agent-name" => "agent-name",
+                    "agent-color" => "agent-color",
+                    "agent-setting" => "agent-setting",
+                    "pr-link" => "pr-link",
+                    "mode" => "mode",
+                    "permission-mode" => "permission-mode",
+                    "queue-operation" => "queue-operation",
+                    "speculation-accept" => "speculation-accept",
+                    "worktree-state" => "worktree-state",
+                    "content-replacement" => "content-replacement",
+                    "file-history-snapshot" => "file-history-snapshot",
+                    "attribution-snapshot" => "attribution-snapshot",
+                    "marble-origami-commit" => "marble-origami-commit",
+                    "marble-origami-snapshot" => "marble-origami-snapshot",
+                    _ => "?",
+                };
+                let entry = leaks.entry(key).or_insert_with(|| LeakSample {
+                    example_uuid: v
+                        .get("uuid")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    example_parent: v
+                        .get("parentUuid")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string()),
+                    example_session: v
+                        .get("sessionId")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    example_file: path.display().to_string(),
+                    ..Default::default()
+                });
+                entry.count += 1;
+                if raw_sidechain {
+                    entry.sidechain_count += 1;
+                } else {
+                    entry.main_chain_count += 1;
+                }
+            }
+        } else {
+            *unknown_types.entry(ty_str.to_string()).or_insert(0) += 1;
+        }
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let claude_home = std::env::var("CLAUDE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap()).join(".claude"));
 
     let projects_root = claude_home.join("projects");
-    eprintln!("Scanning {} (strictly under projects/) ...", claude_home.display());
-    let files = scanner::scan_sessions(&claude_home)?;
-    let off_boundary: Vec<_> = files
+    eprintln!(
+        "Loading sessions under {} via load_all_sessions ...",
+        claude_home.display()
+    );
+    let sessions = load_all_sessions(&claude_home)?;
+
+    // Enumerate every JSONL path the loader produced (main + agents).
+    let mut all_paths: Vec<PathBuf> = Vec::new();
+    for s in &sessions {
+        if let Some(project) = &s.project {
+            let main_path = claude_home
+                .join("projects")
+                .join(project)
+                .join(format!("{}.jsonl", s.id));
+            if main_path.is_file() {
+                all_paths.push(main_path);
+            }
+        }
+        for a in &s.agents {
+            all_paths.push(a.path.clone());
+        }
+    }
+
+    // Boundary check: every path must live under projects/.
+    let off_boundary: Vec<_> = all_paths
         .iter()
-        .filter(|sf| !sf.path.starts_with(&projects_root))
-        .map(|sf| sf.path.display().to_string())
+        .filter(|p| !p.starts_with(&projects_root))
+        .map(|p| p.display().to_string())
         .collect();
     if !off_boundary.is_empty() {
-        eprintln!("✗ scanner returned {} path(s) outside ~/.claude/projects/:", off_boundary.len());
+        eprintln!(
+            "✗ loader returned {} path(s) outside ~/.claude/projects/:",
+            off_boundary.len()
+        );
         for p in &off_boundary {
             eprintln!("    {p}");
         }
         std::process::exit(1);
     }
-    eprintln!("Found {} session files under projects/", files.len());
+    eprintln!("Found {} JSONL files under projects/", all_paths.len());
 
     let mut type_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut dag_nodes_total = 0usize;
@@ -188,159 +382,27 @@ fn main() -> std::io::Result<()> {
     let mut by_session: HashMap<String, SessionStats> = HashMap::new();
     let mut nodes_by_session: HashMap<String, Vec<Node>> = HashMap::new();
 
-    for sf in &files {
-        // ── typed pass：DAG nodes ──
-        let Ok(reader) = SessionReader::open(&sf.path) else {
-            continue;
-        };
-        let mut typed_iter = reader.lenient();
-        for entry in typed_iter.by_ref() {
-            let ty = entry_type(&entry);
-            *type_counts.entry(ty).or_insert(0) += 1;
-            if let Some(d) = as_dag(&entry) {
-                dag_nodes_total += 1;
-                let is_side = d.is_sidechain() == Some(true);
-                if is_side {
-                    sidechain_total += 1;
-                }
-                if let (Some(uuid), Some(sid)) = (d.uuid(), d.session_id()) {
-                    let stats = by_session.entry(sid.to_string()).or_insert_with(|| {
-                        let mut s = SessionStats::default();
-                        s.session_id = sid.to_string();
-                        s
-                    });
-                    stats.files.insert(sf.path.display().to_string());
-                    nodes_by_session.entry(sid.to_string()).or_default().push(Node {
-                        uuid: uuid.to_string(),
-                        parent: d.parent_uuid().map(|s| s.to_string()),
-                        sidechain: is_side,
-                        ts: d.timestamp().unwrap_or("").to_string(),
-                    });
-                }
-            }
-        }
-        struct_drift_total += typed_iter.struct_drift_count();
-        skipped_io_total += typed_iter.errors_skipped();
-
-        // ── raw pass：oracle 漏网检测 ──
-        let Ok(text) = std::fs::read_to_string(&sf.path) else {
-            continue;
-        };
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            let ty_str = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-            let has_uuid = v
-                .get("uuid")
-                .and_then(|x| x.as_str())
-                .is_some_and(|s| !s.is_empty());
-            let has_parent = v
-                .get("parentUuid")
-                .and_then(|x| x.as_str())
-                .is_some_and(|s| !s.is_empty());
-            if !has_uuid {
-                continue;
-            }
-            // 已被 DagNode 覆盖
-            let already_dag = matches!(
-                ty_str,
-                "user" | "assistant" | "system" | "attachment" | "progress"
-            );
-            if already_dag {
-                continue;
-            }
-            let declared_in_enum = matches!(
-                ty_str,
-                "summary"
-                    | "custom-title"
-                    | "ai-title"
-                    | "last-prompt"
-                    | "task-summary"
-                    | "tag"
-                    | "agent-name"
-                    | "agent-color"
-                    | "agent-setting"
-                    | "pr-link"
-                    | "mode"
-                    | "permission-mode"
-                    | "queue-operation"
-                    | "speculation-accept"
-                    | "worktree-state"
-                    | "content-replacement"
-                    | "file-history-snapshot"
-                    | "attribution-snapshot"
-                    | "marble-origami-commit"
-                    | "marble-origami-snapshot"
-            );
-            if declared_in_enum {
-                if has_parent || ty_str == "summary" {
-                    let raw_sidechain = v
-                        .get("isSidechain")
-                        .and_then(|x| x.as_bool())
-                        .unwrap_or(false);
-                    let key: &'static str = match ty_str {
-                        "summary" => "summary",
-                        "custom-title" => "custom-title",
-                        "ai-title" => "ai-title",
-                        "last-prompt" => "last-prompt",
-                        "task-summary" => "task-summary",
-                        "tag" => "tag",
-                        "agent-name" => "agent-name",
-                        "agent-color" => "agent-color",
-                        "agent-setting" => "agent-setting",
-                        "pr-link" => "pr-link",
-                        "mode" => "mode",
-                        "permission-mode" => "permission-mode",
-                        "queue-operation" => "queue-operation",
-                        "speculation-accept" => "speculation-accept",
-                        "worktree-state" => "worktree-state",
-                        "content-replacement" => "content-replacement",
-                        "file-history-snapshot" => "file-history-snapshot",
-                        "attribution-snapshot" => "attribution-snapshot",
-                        "marble-origami-commit" => "marble-origami-commit",
-                        "marble-origami-snapshot" => "marble-origami-snapshot",
-                        _ => "?",
-                    };
-                    let entry = leaks.entry(key).or_insert_with(|| LeakSample {
-                        example_uuid: v
-                            .get("uuid")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        example_parent: v
-                            .get("parentUuid")
-                            .and_then(|x| x.as_str())
-                            .map(|s| s.to_string()),
-                        example_session: v
-                            .get("sessionId")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        example_file: sf.path.display().to_string(),
-                        ..Default::default()
-                    });
-                    entry.count += 1;
-                    if raw_sidechain {
-                        entry.sidechain_count += 1;
-                    } else {
-                        entry.main_chain_count += 1;
-                    }
-                }
-            } else {
-                *unknown_types.entry(ty_str.to_string()).or_insert(0) += 1;
-            }
-        }
+    for path in &all_paths {
+        process_file(
+            path,
+            &mut type_counts,
+            &mut dag_nodes_total,
+            &mut sidechain_total,
+            &mut struct_drift_total,
+            &mut skipped_io_total,
+            &mut leaks,
+            &mut unknown_types,
+            &mut by_session,
+            &mut nodes_by_session,
+        );
     }
 
     // ── 按 session 构图 ──
     let mut session_list: Vec<SessionStats> = by_session.into_values().collect();
     for s in &mut session_list {
-        let Some(nodes) = nodes_by_session.get(&s.session_id) else { continue };
+        let Some(nodes) = nodes_by_session.get(&s.session_id) else {
+            continue;
+        };
         s.total_nodes = nodes.len();
         s.sidechain_nodes = nodes.iter().filter(|n| n.sidechain).count();
         let (rp, orph, longest, branches) = build_session(nodes);

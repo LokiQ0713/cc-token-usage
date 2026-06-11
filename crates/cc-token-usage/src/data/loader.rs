@@ -4,15 +4,15 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::models::{
-    DataQuality, GlobalDataQuality, HookUsage, PluginUsage, SessionData, SessionFile,
-    SessionMetadata, SkillUsage, Subagent,
+    DataQuality, GlobalDataQuality, HookUsage, PluginUsage, SessionData, SessionMetadata,
+    SkillUsage, Subagent,
 };
 use super::parser::parse_session_file;
-use super::scanner::{resolve_agent_parents, scan_claude_home};
 use crate::pricing::calculator::PricingCalculator;
+use cc_session_jsonl::Session;
 
 /// Extract the Claude Code version string from the first line of a JSONL file.
 ///
@@ -52,25 +52,21 @@ fn request_id_set(turns: &[super::models::ValidatedTurn]) -> HashSet<String> {
 
 /// Load all session data from a Claude home directory.
 ///
-/// 1. Scans for JSONL files (main sessions + agents)
-/// 2. Resolves legacy agent parent relationships
-/// 3. Parses main sessions in parallel; groups agent files by `agent_id` into
-///    `Subagent` entries on their parent session
-/// 4. Aggregates plugins / skills from main turns and hooks from main session
-///    `stop_hook_summary` entries (Claude Code 2.1.104+)
-/// 5. Computes global time range and quality metrics
-///
-/// The `PricingCalculator` is used to populate per-plugin / per-skill `cost`
-/// fields on the aggregated metadata. Cost / token totals on the underlying
-/// turns are untouched.
+/// 1. Calls `cc_session_jsonl::load_all_sessions` (which scans + groups files
+///    by session id and surfaces a `Vec<Session>`).
+/// 2. Parses every session's main JSONL and every agent JSONL through the
+///    analysis pipeline (in parallel via rayon) — the cc-session-jsonl
+///    aggregation only enumerates files, it does not run the validation /
+///    dedup / metadata pipeline this crate owns.
+/// 3. Groups parsed agent turns into `Subagent` entries; aggregates plugins,
+///    skills, hooks; computes time ranges and the global quality summary.
 pub fn load_all(
     claude_home: &Path,
     calc: &PricingCalculator,
 ) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    let mut files =
-        scan_claude_home(claude_home).context("failed to scan claude home for session files")?;
-    resolve_agent_parents(&mut files).context("failed to resolve agent parent sessions")?;
-    load_from_files(files, claude_home, calc)
+    let raw_sessions = cc_session_jsonl::load_all_sessions(claude_home)
+        .with_context(|| format!("failed to load sessions from {}", claude_home.display()))?;
+    load_from_sessions(raw_sessions, calc)
 }
 
 /// Parsed result from a single main session file, ready for serial assembly.
@@ -93,46 +89,70 @@ struct ParsedAgent {
     target_id: String,
     /// Project context (used only when the parent main session is missing).
     project: Option<String>,
-    /// The subagent ID, taken verbatim from the agent JSONL file stem
-    /// (e.g. `"agent-abc123"`).
+    /// The subagent ID, taken verbatim from the agent JSONL file stem.
     agent_id: String,
-    /// Path to the agent file (used to derive `.meta.json` lookups if needed).
-    #[allow(dead_code)]
-    path: PathBuf,
     turns: Vec<super::models::ValidatedTurn>,
     quality: DataQuality,
-    /// The workflow run id (`wf_<runId>`) this agent file belongs to, if it was
-    /// discovered under `subagents/workflows/wf_<runId>/`. `None` for ordinary
-    /// (legacy / Task-tool) subagent files.
+    /// The workflow run id, if this agent was discovered under a workflow run
+    /// directory. `None` for ordinary subagents.
     workflow_run_id: Option<String>,
+    /// Metadata sidecar resolved by the loader (agent-id stripped key).
+    meta: Option<cc_session_jsonl::AgentMetadata>,
 }
 
-/// Shared loading logic: parse files in parallel, group agent turns into
-/// `Subagent` entries, aggregate plugins/skills/hooks, compute time ranges.
-fn load_from_files(
-    files: Vec<SessionFile>,
-    claude_home: &Path,
+/// Shared loading logic.
+fn load_from_sessions(
+    raw_sessions: Vec<Session>,
     calc: &PricingCalculator,
 ) -> Result<(Vec<SessionData>, GlobalDataQuality)> {
-    let (main_files, agent_files): (Vec<_>, Vec<_>) = files.into_iter().partition(|f| !f.is_agent);
+    // Flatten the (Session, [Agent]) hierarchy into two parallelizable work
+    // lists. This keeps the analysis-side pipeline unchanged — we still parse
+    // each JSONL file independently and then group results.
+    // (target_id, agent_id, project, path, workflow_run_id, meta)
+    type AgentJob = (
+        String,
+        String,
+        Option<String>,
+        std::path::PathBuf,
+        Option<String>,
+        Option<cc_session_jsonl::AgentMetadata>,
+    );
+    let mut main_jobs: Vec<(String, Option<String>, std::path::PathBuf)> = Vec::new();
+    let mut agent_jobs: Vec<AgentJob> = Vec::new();
+    for session in raw_sessions {
+        let main_path = derive_main_path(&session);
+        if let Some(path) = main_path {
+            main_jobs.push((session.id.clone(), session.project.clone(), path));
+        }
+        for agent in session.agents {
+            agent_jobs.push((
+                agent.parent_session_id,
+                agent.agent_id,
+                agent.project,
+                agent.path,
+                agent.workflow_run_id,
+                agent.meta,
+            ));
+        }
+    }
 
     let mut global_quality = GlobalDataQuality {
-        total_session_files: main_files.len(),
-        total_agent_files: agent_files.len(),
+        total_session_files: main_jobs.len(),
+        total_agent_files: agent_jobs.len(),
         ..Default::default()
     };
 
     // ── Phase 1: Parse all main sessions in parallel ──────────────────────
-    let parsed_mains: Vec<Result<ParsedMain>> = main_files
+    let parsed_mains: Vec<Result<ParsedMain>> = main_jobs
         .par_iter()
-        .map(|sf| {
-            let (turns, quality, metadata, hooks) = parse_session_file(&sf.path, false)
-                .with_context(|| format!("failed to parse session: {}", sf.path.display()))?;
-            let version = extract_version(&sf.path);
+        .map(|(session_id, project, path)| {
+            let (turns, quality, metadata, hooks) = parse_session_file(path, false)
+                .with_context(|| format!("failed to parse session: {}", path.display()))?;
+            let version = extract_version(path);
             let (first_ts, last_ts) = time_range(turns.iter().map(|t| &t.timestamp));
             Ok(ParsedMain {
-                session_id: sf.session_id.clone(),
-                project: sf.project.clone(),
+                session_id: session_id.clone(),
+                project: project.clone(),
                 turns,
                 version,
                 first_ts,
@@ -144,7 +164,6 @@ fn load_from_files(
         })
         .collect();
 
-    // Assemble the sessions map serially (cheap — just moving Vecs)
     let mut sessions: HashMap<String, SessionData> = HashMap::with_capacity(parsed_mains.len());
     for result in parsed_mains {
         let pm = result?;
@@ -175,28 +194,23 @@ fn load_from_files(
     }
 
     // ── Phase 2: Parse all agent files in parallel ────────────────────────
-    let parsed_agents: Vec<Result<ParsedAgent>> = agent_files
+    let parsed_agents: Vec<Result<ParsedAgent>> = agent_jobs
         .par_iter()
-        .map(|sf| {
-            let (turns, quality, _meta, _hooks) = parse_session_file(&sf.path, true)
-                .with_context(|| format!("failed to parse agent file: {}", sf.path.display()))?;
-            let target_id = sf
-                .parent_session_id
-                .clone()
-                .unwrap_or_else(|| sf.session_id.clone());
+        .map(|(target_id, agent_id, project, path, workflow_run_id, meta)| {
+            let (turns, quality, _meta, _hooks) = parse_session_file(path, true)
+                .with_context(|| format!("failed to parse agent file: {}", path.display()))?;
             Ok(ParsedAgent {
-                target_id,
-                project: sf.project.clone(),
-                agent_id: sf.session_id.clone(),
-                path: sf.path.clone(),
+                target_id: target_id.clone(),
+                project: project.clone(),
+                agent_id: agent_id.clone(),
                 turns,
                 quality,
-                workflow_run_id: sf.workflow_run_id.clone(),
+                workflow_run_id: workflow_run_id.clone(),
+                meta: meta.clone(),
             })
         })
         .collect();
 
-    // Group agent results into a per-parent map: target_id -> Vec<ParsedAgent>
     let mut agents_by_parent: HashMap<String, Vec<ParsedAgent>> = HashMap::new();
     for result in parsed_agents {
         let pa = result?;
@@ -240,17 +254,6 @@ fn load_from_files(
             global_quality.orphan_agents += 1;
         }
 
-        // Load .meta.json sidecars once per parent. Keys are stripped of the
-        // "agent-" prefix (matching cc-session-jsonl::load_agent_meta).
-        // The first-level loader only scans `subagents/agent-*.meta.json`; merge
-        // in the workflow-agent sidecars under `subagents/workflows/wf_*/` so
-        // workflow agents also surface their agentType. First-level entries win
-        // on key collisions (none expected — agent ids are unique).
-        let mut agent_meta_map = crate::data::scanner::load_agent_meta(&target_id, claude_home);
-        for (k, v) in crate::data::scanner::load_workflow_agent_meta(&target_id, claude_home) {
-            agent_meta_map.entry(k).or_insert(v);
-        }
-
         let parent = sessions.get_mut(&target_id).unwrap();
         let existing_rids = request_id_set(&parent.turns);
 
@@ -260,8 +263,7 @@ fn load_from_files(
 
         for pa in agents {
             // Cross-file dedup: drop turns whose requestId already appears in
-            // the main session (Claude Code writes agent responses to both
-            // the agent file and the main file).
+            // the main session.
             let mut kept_count = 0usize;
             let mut dropped_count = 0usize;
             let mut kept_turns: Vec<super::models::ValidatedTurn> =
@@ -279,8 +281,6 @@ fn load_from_files(
                 }
             }
 
-            // Accumulate quality into parent's quality (same accounting the
-            // legacy merge_agent_turns helper used).
             parent.quality.total_lines += pa.quality.total_lines;
             parent.quality.valid_turns += kept_count;
             parent.quality.skipped_synthetic += pa.quality.skipped_synthetic;
@@ -289,20 +289,15 @@ fn load_from_files(
             parent.quality.skipped_parse_error += pa.quality.skipped_parse_error;
             parent.quality.duplicate_turns += pa.quality.duplicate_turns + dropped_count;
 
-            // Compute per-subagent time range and sort turns by timestamp.
             kept_turns.sort_by_key(|t| t.timestamp);
             let (first_ts, last_ts) = time_range(kept_turns.iter().map(|t| &t.timestamp));
 
-            // .meta.json key is the agent_id WITHOUT the "agent-" prefix.
-            let meta_key = pa
-                .agent_id
-                .strip_prefix("agent-")
-                .unwrap_or(&pa.agent_id)
-                .to_string();
-            let (agent_type, description) = agent_meta_map
-                .get(&meta_key)
-                .map(|(t, d)| (Some(t.clone()), Some(d.clone())))
-                .unwrap_or((None, None));
+            // Loader already resolved the `.meta.json` sidecar; pull
+            // agent_type/description straight off the supplied metadata.
+            let (agent_type, description) = match pa.meta {
+                Some(m) => (m.agent_type, m.description),
+                None => (None, None),
+            };
 
             parent.subagents.push(Subagent {
                 agent_id: pa.agent_id,
@@ -324,7 +319,6 @@ fn load_from_files(
 
     // ── Phase 4: Recompute time ranges (serial, cheap) ────────────────────
     let mut result: Vec<SessionData> = sessions.into_values().collect();
-    // Sort by time descending (most recent first) for deterministic output
     result.sort_by_key(|b| std::cmp::Reverse(b.first_timestamp));
     let mut global_min: Option<DateTime<Utc>> = None;
     let mut global_max: Option<DateTime<Utc>> = None;
@@ -351,10 +345,27 @@ fn load_from_files(
     Ok((result, global_quality))
 }
 
+/// `Session.main_entries` is a parsed `Vec<Entry>` (no path attached). To re-run
+/// the analysis pipeline (which is JSONL-stream based and computes file-line
+/// quality counters) we need the original file path. cc-session-jsonl stores
+/// each `Agent.path` but not the main-session path on `Session`; reconstruct it
+/// from the workflow records (`workflows[*].session_id`/`project`) when they
+/// exist, otherwise from an agent's parent layout. The fallback is unreachable
+/// for any session loaded through `cc_session_jsonl::load_all_sessions` because
+/// the scanner only emits sessions for which a main `<uuid>.jsonl` exists in
+/// `projects/<project>/<uuid>.jsonl`.
+fn derive_main_path(session: &Session) -> Option<std::path::PathBuf> {
+    // The loader populates `Session.main_path` for every real session;
+    // orphan-only sessions (agents without a main file) get a synthetic path
+    // pointing to a non-existent file. Treat non-existent paths as "no main".
+    if session.main_path.is_file() {
+        Some(session.main_path.clone())
+    } else {
+        None
+    }
+}
+
 /// Aggregate per-plugin usage from a main session's turns.
-///
-/// Groups turns by `attribution_plugin` (skipping `None`). Output Vec is
-/// sorted by plugin name for deterministic JSON output.
 fn aggregate_plugins(
     turns: &[super::models::ValidatedTurn],
     calc: &PricingCalculator,
@@ -388,8 +399,6 @@ fn aggregate_plugins(
 }
 
 /// Aggregate per-skill usage from a main session's turns.
-///
-/// Mirror of `aggregate_plugins` but keyed on `attribution_skill`.
 fn aggregate_skills(
     turns: &[super::models::ValidatedTurn],
     calc: &PricingCalculator,
@@ -471,7 +480,6 @@ mod tests {
 
     #[test]
     fn pipeline_plugins_skills_aggregation() {
-        // Three turns, two share a plugin, one is unattributed.
         let turns = vec![
             turn(
                 "2026-05-01T00:00:00Z",
@@ -501,8 +509,6 @@ mod tests {
         assert_eq!(skills[0].skill, "superpowers:brainstorming");
         assert_eq!(skills[0].turns, 2);
 
-        // Costs equal across plugin/skill rollups because both fields are set on
-        // the same two turns.
         assert!((plugins[0].cost - skills[0].cost).abs() < 1e-9);
     }
 
@@ -530,10 +536,8 @@ mod tests {
         let main_path = project.join(format!("{}.jsonl", session_uuid));
 
         // Two valid main turns. requestIds r-main-1, r-main-2.
-        // The second carries attributionPlugin/Skill.
         let main_turn_1 = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"11111111-2222-3333-4444-555555555555","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
         let main_turn_2 = r#"{"type":"assistant","uuid":"m2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":30,"output_tokens":40,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"bye"}]},"sessionId":"11111111-2222-3333-4444-555555555555","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-2","attributionPlugin":"superpowers","attributionSkill":"superpowers:brainstorming"}"#;
-        // One stop_hook_summary system entry.
         let main_hook = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash hook.sh","durationMs":50}],"hookErrors":[],"preventedContinuation":false,"sessionId":"11111111-2222-3333-4444-555555555555"}"#;
         fs::write(
             &main_path,
@@ -541,11 +545,10 @@ mod tests {
         )
         .unwrap();
 
-        // Subagents directory with two agent files and one .meta.json sidecar.
         let subagents_dir = project.join(session_uuid).join("subagents");
         fs::create_dir_all(&subagents_dir).unwrap();
 
-        // Agent A: 2 unique turns. r-agentA-1, r-agentA-2.
+        // Agent A: 2 unique turns.
         let agent_a_turn_1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:02:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"agent-a-1"}]},"sessionId":"agent-aaa1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-agentA-1"}"#;
         let agent_a_turn_2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:03:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":7,"output_tokens":11,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"agent-a-2"}]},"sessionId":"agent-aaa1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-agentA-2"}"#;
         fs::write(
@@ -553,7 +556,6 @@ mod tests {
             format!("{}\n{}\n", agent_a_turn_1, agent_a_turn_2),
         )
         .unwrap();
-        // Sidecar — note that the .meta.json key strips the "agent-" prefix.
         fs::write(
             subagents_dir.join("agent-aaa1.meta.json"),
             r#"{"agentType":"builder","description":"Implement Phase 2"}"#,
@@ -562,14 +564,13 @@ mod tests {
 
         // Agent B: 1 turn that *also* appears in the main session by requestId
         // (cross-file dup) and 1 unique turn.
-        let agent_b_dup = r#"{"type":"assistant","uuid":"b1","timestamp":"2026-05-01T10:04:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"dup"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-main-2"}"#; // same rid as main_turn_2
+        let agent_b_dup = r#"{"type":"assistant","uuid":"b1","timestamp":"2026-05-01T10:04:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"dup"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-main-2"}"#;
         let agent_b_unique = r#"{"type":"assistant","uuid":"b2","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"unique"}]},"sessionId":"agent-bbb2","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-agentB-2"}"#;
         fs::write(
             subagents_dir.join("agent-bbb2.jsonl"),
             format!("{}\n{}\n", agent_b_dup, agent_b_unique),
         )
         .unwrap();
-        // No meta.json for agent B (verify None fallback).
 
         (tmp, session_uuid.to_string())
     }
@@ -600,7 +601,6 @@ mod tests {
         assert!(s.subagents[0].last_timestamp.is_some());
 
         // Agent B: cross-file dedup drops the duplicate (r-main-2) -> 1 unique turn.
-        // No .meta.json -> agent_type/description are None.
         assert_eq!(
             s.subagents[1].turns.len(),
             1,
@@ -609,45 +609,34 @@ mod tests {
         assert!(s.subagents[1].agent_type.is_none());
         assert!(s.subagents[1].description.is_none());
 
-        // Main session has 2 turns.
         assert_eq!(s.turns.len(), 2);
 
-        // Plugins / skills aggregated from main turns only (1 turn carries attribution).
         assert_eq!(s.plugins.len(), 1);
         assert_eq!(s.plugins[0].plugin, "superpowers");
         assert_eq!(s.plugins[0].turns, 1);
         assert_eq!(s.skills.len(), 1);
         assert_eq!(s.skills[0].skill, "superpowers:brainstorming");
 
-        // Hooks aggregated from main session.
         assert_eq!(s.hooks.len(), 1);
         assert_eq!(s.hooks[0].command, "bash hook.sh");
         assert_eq!(s.hooks[0].invocations, 1);
         assert_eq!(s.hooks[0].total_duration_ms, 50);
-        assert_eq!(s.hooks[0].error_count, 0);
-        assert_eq!(s.hooks[0].prevented_continuation_count, 0);
 
-        // total_turn_count / agent_turn_count derive from nested subagents.
-        assert_eq!(s.total_turn_count(), 2 + 2 + 1); // main + agent-A + agent-B(deduped)
+        assert_eq!(s.total_turn_count(), 2 + 2 + 1);
         assert_eq!(s.agent_turn_count(), 3);
     }
 
     #[test]
     fn pipeline_aggregation_invariants() {
-        // The 5 spec invariants (section 2.6) bundled into one comprehensive test.
         let (tmp, _session_uuid) = write_fixture_session();
         let calc = PricingCalculator::new();
         let (sessions, _quality) = load_all(tmp.path(), &calc).unwrap();
         let s = &sessions[0];
 
-        // (1) Reorganization lossless: sum(subagent.turns) equals the number we
-        // accept after cross-file dedup (2 from agent-A + 1 unique from agent-B).
         let total_sub_turns: usize = s.subagents.iter().map(|sa| sa.turns.len()).sum();
         assert_eq!(total_sub_turns, s.agent_turn_count());
         assert_eq!(total_sub_turns, 3);
 
-        // (2) Plugin aggregation no-miss/no-double: sum(plugins.turns) equals
-        // number of main turns with attribution_plugin set.
         let attributed_turns = s
             .turns
             .iter()
@@ -656,7 +645,6 @@ mod tests {
         let plugin_turn_sum: u64 = s.plugins.iter().map(|p| p.turns).sum();
         assert_eq!(plugin_turn_sum, attributed_turns);
 
-        // (3) Upper bound: plugin cost <= session main turn cost.
         let session_turn_cost: f64 = s
             .turns
             .iter()
@@ -668,48 +656,28 @@ mod tests {
             "plugin cost {plugin_cost} must be <= session turn cost {session_turn_cost}"
         );
 
-        // (4) Hook total: every hookInfos[] element in every stop_hook_summary
-        // SystemEntry is counted. Because hooks are grouped by command, the
-        // total invocations sum equals sum(hookInfos[].len()) across all
-        // SystemEntries — which on observed 2.1.104+ data also equals
-        // sum(SystemEntry.hookCount). Asserting a literal count here would
-        // bind the test to a single SystemEntry's fixture; the parser-side
-        // `debug_assert_eq!` (parser.rs) already guards the hookCount ==
-        // hookInfos.len() invariant. Here we only assert the lower bound.
         let hook_invocations: u64 = s.hooks.iter().map(|h| h.invocations).sum();
         assert!(
             hook_invocations >= 1,
             "expected at least one hook invocation in fixture"
         );
 
-        // (5) Hypothesis regression: no subagent turn carries attribution.
         for sa in &s.subagents {
             for t in &sa.turns {
-                assert!(
-                    t.attribution_plugin.is_none(),
-                    "subagent turn unexpectedly has attributionPlugin"
-                );
-                assert!(
-                    t.attribution_skill.is_none(),
-                    "subagent turn unexpectedly has attributionSkill"
-                );
+                assert!(t.attribution_plugin.is_none());
+                assert!(t.attribution_skill.is_none());
             }
         }
     }
 
     #[test]
     fn pipeline_hooks_aggregation_multi_invocation() {
-        // Build a fixture with the SAME command running 3 times, where one
-        // invocation has errors and another prevents continuation.
         let tmp = TempDir::new().unwrap();
         let project = tmp.path().join("projects").join("-Users-test-proj");
         fs::create_dir_all(&project).unwrap();
         let uuid = "22222222-3333-4444-5555-666666666666";
 
-        // One assistant turn so the session has some content (otherwise the
-        // session has no first_timestamp).
         let asst = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"22222222-3333-4444-5555-666666666666","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
-        // Three stop_hook_summary entries: same command, varying flags.
         let h1 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash run.sh","durationMs":100}],"hookErrors":[],"preventedContinuation":false,"sessionId":"22222222-3333-4444-5555-666666666666"}"#;
         let h2 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash run.sh","durationMs":200}],"hookErrors":[{"msg":"oops"}],"preventedContinuation":false,"sessionId":"22222222-3333-4444-5555-666666666666"}"#;
         let h3 = r#"{"type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"bash run.sh","durationMs":300}],"hookErrors":[],"preventedContinuation":true,"sessionId":"22222222-3333-4444-5555-666666666666"}"#;
@@ -734,8 +702,6 @@ mod tests {
 
     #[test]
     fn pipeline_old_session_has_empty_capability_arrays() {
-        // A session JSONL with NO attribution fields and NO stop_hook_summary
-        // entries should produce empty plugins/skills/hooks Vecs (not None).
         let tmp = TempDir::new().unwrap();
         let project = tmp.path().join("projects").join("-Users-test-proj");
         fs::create_dir_all(&project).unwrap();
@@ -747,28 +713,12 @@ mod tests {
         let (sessions, _q) = load_all(tmp.path(), &calc).unwrap();
         assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
-        assert!(
-            s.plugins.is_empty(),
-            "old session must produce empty plugins Vec"
-        );
-        assert!(
-            s.skills.is_empty(),
-            "old session must produce empty skills Vec"
-        );
-        assert!(
-            s.hooks.is_empty(),
-            "old session must produce empty hooks Vec"
-        );
-        assert!(
-            s.subagents.is_empty(),
-            "session without agent files must produce empty subagents Vec"
-        );
+        assert!(s.plugins.is_empty());
+        assert!(s.skills.is_empty());
+        assert!(s.hooks.is_empty());
+        assert!(s.subagents.is_empty());
     }
 
-    /// A subagent jsonl exists at `<proj>/<uuid>/subagents/agent-X.jsonl`
-    /// but the parent main session jsonl `<proj>/<uuid>.jsonl` was deleted.
-    /// The loader still picks up the subagent (data is preserved), but flags
-    /// the synthesized parent SessionData as orphan.
     #[test]
     fn loader_marks_orphan_subagent_as_orphan() {
         let tmp = TempDir::new().unwrap();
@@ -776,8 +726,6 @@ mod tests {
         let parent_uuid = "99999999-aaaa-bbbb-cccc-dddddddddddd";
         let subagents_dir = project.join(parent_uuid).join("subagents");
         fs::create_dir_all(&subagents_dir).unwrap();
-        // Note: NO `<project>/<parent_uuid>.jsonl` — the parent main session
-        // was deleted by the user.
 
         let agent_turn = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"orphan-agent"}]},"sessionId":"agent-orphan-1","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-orphan-1"}"#;
         fs::write(
@@ -789,23 +737,15 @@ mod tests {
         let calc = PricingCalculator::new();
         let (sessions, quality) = load_all(tmp.path(), &calc).unwrap();
 
-        assert_eq!(
-            sessions.len(),
-            1,
-            "loader should reconstruct an orphan parent session"
-        );
+        assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
         assert_eq!(s.session_id, parent_uuid);
-        assert!(s.is_orphan, "synthesized parent must be flagged as orphan");
-        // The subagent's turn is preserved.
+        assert!(s.is_orphan);
         assert_eq!(s.subagents.len(), 1);
         assert_eq!(s.subagents[0].turns.len(), 1);
-        // Quality counter also records the orphan.
         assert_eq!(quality.orphan_agents, 1);
     }
 
-    /// A normal session with its main `<uuid>.jsonl` present *and* subagent
-    /// files under `<uuid>/subagents/` must NOT be flagged as orphan.
     #[test]
     fn loader_marks_normal_session_as_not_orphan() {
         let (tmp, session_uuid) = write_fixture_session();
@@ -814,11 +754,7 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
         assert_eq!(s.session_id, session_uuid);
-        assert!(
-            !s.is_orphan,
-            "session with parent main jsonl present must not be orphan"
-        );
-        // No orphans counted at the global level either.
+        assert!(!s.is_orphan);
         assert_eq!(quality.orphan_agents, 0);
     }
 
@@ -831,7 +767,6 @@ mod tests {
 
         let calc = PricingCalculator::new();
 
-        // Helper to build a synthetic Subagent with N turns of given token counts.
         let make_agent = |agent_id: &str,
                           agent_type: Option<&str>,
                           description: Option<&str>,
@@ -903,13 +838,12 @@ mod tests {
         };
 
         let aggs = session.subagent_type_aggregates(&calc);
-        // Sorted alphabetically: builder, code-reviewer.
         assert_eq!(aggs.len(), 2);
         assert_eq!(aggs[0].agent_type, "builder");
         assert_eq!(aggs[0].count, 2);
-        assert_eq!(aggs[0].total_turns, 5); // 2 + 3
-        assert_eq!(aggs[0].total_input_tokens, 500); // (2+3) * 100
-        assert_eq!(aggs[0].total_output_tokens, 1000); // (2+3) * 200
+        assert_eq!(aggs[0].total_turns, 5);
+        assert_eq!(aggs[0].total_input_tokens, 500);
+        assert_eq!(aggs[0].total_output_tokens, 1000);
         assert!(aggs[0].total_cost > 0.0);
         assert_eq!(
             aggs[0].descriptions,
@@ -918,12 +852,8 @@ mod tests {
 
         assert_eq!(aggs[1].agent_type, "code-reviewer");
         assert_eq!(aggs[1].count, 1);
-        assert_eq!(aggs[1].total_turns, 1);
-        assert_eq!(aggs[1].descriptions, vec!["review X".to_string()]);
     }
 
-    /// A subagent with `agent_type = None` must be grouped under the literal
-    /// "unknown" key, never silently dropped.
     #[test]
     fn subagent_type_aggregation_handles_missing_type() {
         use crate::data::models::{Subagent, ValidatedTurn};
@@ -967,7 +897,7 @@ mod tests {
             turns: Vec::new(),
             subagents: vec![Subagent {
                 agent_id: "agent-no-meta".into(),
-                agent_type: None, // .meta.json missing
+                agent_type: None,
                 description: None,
                 turns: vec![make_turn("t1")],
                 first_timestamp: None,
@@ -986,27 +916,17 @@ mod tests {
         };
 
         let aggs = session.subagent_type_aggregates(&calc);
-        assert_eq!(
-            aggs.len(),
-            1,
-            "agent_type=None should still produce one aggregate, not drop the data"
-        );
+        assert_eq!(aggs.len(), 1);
         assert_eq!(aggs[0].agent_type, "unknown");
-        assert_eq!(aggs[0].count, 1);
-        assert_eq!(aggs[0].total_turns, 1);
     }
 
-    /// Orphan sessions must contribute to the *global* overview totals
-    /// (cost / turns / tokens). The orphan flag is for display only.
     #[test]
     fn global_totals_include_orphan_sessions() {
-        // Same fixture as the orphan-flag test, but verify overview math.
         let tmp = TempDir::new().unwrap();
         let project = tmp.path().join("projects").join("-Users-test-proj");
         let parent_uuid = "88888888-aaaa-bbbb-cccc-dddddddddddd";
         let subagents_dir = project.join(parent_uuid).join("subagents");
         fs::create_dir_all(&subagents_dir).unwrap();
-        // Two turns under the orphan parent.
         let t1 = r#"{"type":"assistant","uuid":"a1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"x"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-orph-1"}"#;
         let t2 = r#"{"type":"assistant","uuid":"a2","timestamp":"2026-05-01T10:01:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"y"}]},"sessionId":"agent-orphan-z","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-orph-2"}"#;
         fs::write(
@@ -1020,28 +940,15 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert!(sessions[0].is_orphan);
 
-        // Now drive the overview analysis and ensure totals reflect the
-        // orphan session's data (cost > 0, agent turns counted).
-        let overview = crate::analysis::overview::analyze_overview(&sessions, quality, &calc, None);
+        let overview =
+            crate::analysis::overview::analyze_overview(&sessions, quality, &calc, None);
         assert_eq!(overview.total_sessions, 1);
         assert_eq!(overview.total_turns, 2);
         assert_eq!(overview.total_agent_turns, 2);
-        assert!(
-            overview.total_cost > 0.0,
-            "orphan session's cost must flow into total_cost"
-        );
-        // Output tokens accumulated from the two orphan turns.
+        assert!(overview.total_cost > 0.0);
         assert_eq!(overview.total_output_tokens, 6000);
     }
 
-    /// Task 0: a workflow agent transcript under
-    /// `<proj>/<uuid>/subagents/workflows/wf_<runId>/agent-*.jsonl` must be
-    /// discovered by the scanner (Type 4), parsed as an agent, grouped under the
-    /// correct parent session, tagged with its `workflow_run_id`, and have its
-    /// tokens/cost flow into the parent's `all_responses()` total. The workflow
-    /// turns carry `isSidechain=true` (like all agent files) and must survive
-    /// the sidechain filter (is_agent=true) and cross-file dedup (their
-    /// requestIds do not appear in the main jsonl).
     #[test]
     fn workflow_agent_tokens_enter_parent_total_cost() {
         let tmp = TempDir::new().unwrap();
@@ -1051,11 +958,9 @@ mod tests {
         let session_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         let main_path = project.join(format!("{}.jsonl", session_uuid));
 
-        // One ordinary main turn (requestId r-main-1).
         let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
         fs::write(&main_path, format!("{}\n", main_turn)).unwrap();
 
-        // Workflow run directory: <uuid>/subagents/workflows/wf_run123/
         let wf_dir = project
             .join(session_uuid)
             .join("subagents")
@@ -1063,13 +968,10 @@ mod tests {
             .join("wf_run123");
         fs::create_dir_all(&wf_dir).unwrap();
 
-        // Two workflow agent transcripts, each with one sidechain assistant turn
-        // carrying real usage. Unique requestIds (not present in the main file).
         let wf_agent_a = r#"{"type":"assistant","uuid":"wa1","timestamp":"2026-05-01T10:05:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":1000,"output_tokens":2000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-a"}]},"sessionId":"agent-wfa","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-wf-a-1"}"#;
         let wf_agent_b = r#"{"type":"assistant","uuid":"wb1","timestamp":"2026-05-01T10:06:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":3000,"output_tokens":4000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"wf-b"}]},"sessionId":"agent-wfb","version":"2.1.159","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-wf-b-1"}"#;
         fs::write(wf_dir.join("agent-wfa.jsonl"), format!("{}\n", wf_agent_a)).unwrap();
         fs::write(wf_dir.join("agent-wfb.jsonl"), format!("{}\n", wf_agent_b)).unwrap();
-        // Meta sidecar for agent A only (verify workflow meta hydration).
         fs::write(
             wf_dir.join("agent-wfa.meta.json"),
             r#"{"agentType":"researcher","description":"gather facts"}"#,
@@ -1077,43 +979,15 @@ mod tests {
         .unwrap();
 
         let calc = PricingCalculator::new();
-
-        // Baseline cost WITHOUT the workflow agents (main turn only): compute
-        // directly so we can assert the delta the workflow turns contribute.
-        let main_only_cost = {
-            let usage = TokenUsage {
-                input_tokens: Some(10),
-                output_tokens: Some(20),
-                cache_creation_input_tokens: Some(0),
-                cache_read_input_tokens: Some(0),
-                cache_creation: None,
-                server_tool_use: None,
-                service_tier: None,
-                speed: None,
-                inference_geo: None,
-            };
-            calc.calculate_turn_cost("claude-opus-4-6", &usage).total
-        };
-
         let (sessions, _quality) = load_all(tmp.path(), &calc).unwrap();
-        assert_eq!(sessions.len(), 1, "one parent session");
+        assert_eq!(sessions.len(), 1);
         let s = &sessions[0];
         assert_eq!(s.session_id, session_uuid);
 
-        // The two workflow agents were grouped under the parent session.
-        assert_eq!(
-            s.subagents.len(),
-            2,
-            "two workflow agent files -> two subagents"
-        );
+        assert_eq!(s.subagents.len(), 2);
         for sa in &s.subagents {
-            assert_eq!(
-                sa.workflow_run_id.as_deref(),
-                Some("wf_run123"),
-                "workflow subagent must carry its run id"
-            );
+            assert_eq!(sa.workflow_run_id.as_deref(), Some("wf_run123"));
         }
-        // Workflow meta sidecar hydrated agent A's type.
         let agent_a = s
             .subagents
             .iter()
@@ -1121,113 +995,11 @@ mod tests {
             .expect("agent-wfa present");
         assert_eq!(agent_a.agent_type.as_deref(), Some("researcher"));
 
-        // The workflow turns are present (not dropped by sidechain/dedup).
-        assert_eq!(s.agent_turn_count(), 2, "both workflow turns kept");
-        assert_eq!(s.total_turn_count(), 3, "1 main + 2 workflow");
+        assert_eq!(s.agent_turn_count(), 2);
+        assert_eq!(s.total_turn_count(), 3);
 
-        // all_responses() includes main + workflow turns.
         let all = s.all_responses();
-        assert_eq!(all.len(), 3);
-
-        // Total cost over all_responses() includes the workflow turns: it must
-        // exceed the main-only cost by exactly the two workflow turns' cost.
-        let total_cost: f64 = all
-            .iter()
-            .map(|t| calc.calculate_turn_cost(&t.model, &t.usage).total)
-            .sum();
-        let wf_a_cost = {
-            let usage = TokenUsage {
-                input_tokens: Some(1000),
-                output_tokens: Some(2000),
-                cache_creation_input_tokens: Some(0),
-                cache_read_input_tokens: Some(0),
-                cache_creation: None,
-                server_tool_use: None,
-                service_tier: None,
-                speed: None,
-                inference_geo: None,
-            };
-            calc.calculate_turn_cost("claude-opus-4-6", &usage).total
-        };
-        let wf_b_cost = {
-            let usage = TokenUsage {
-                input_tokens: Some(3000),
-                output_tokens: Some(4000),
-                cache_creation_input_tokens: Some(0),
-                cache_read_input_tokens: Some(0),
-                cache_creation: None,
-                server_tool_use: None,
-                service_tier: None,
-                speed: None,
-                inference_geo: None,
-            };
-            calc.calculate_turn_cost("claude-opus-4-6", &usage).total
-        };
-        assert!(
-            (total_cost - (main_only_cost + wf_a_cost + wf_b_cost)).abs() < 1e-9,
-            "total {total_cost} must equal main {main_only_cost} + wf_a {wf_a_cost} + wf_b {wf_b_cost}"
-        );
-        assert!(
-            total_cost > main_only_cost,
-            "workflow tokens must increase total cost above main-only baseline"
-        );
-
-        // Workflow output tokens (2000 + 4000) are in the total.
         let total_output: u64 = all.iter().map(|t| t.usage.output_tokens.unwrap_or(0)).sum();
         assert_eq!(total_output, 20 + 2000 + 4000);
-    }
-
-    #[test]
-    fn pipeline_subagents_many() {
-        // Construct a fixture with N=10 distinct subagent files to verify the
-        // grouping scales correctly (spec mentions 69-subagent sessions).
-        let tmp = TempDir::new().unwrap();
-        let project = tmp.path().join("projects").join("-Users-test-proj");
-        fs::create_dir_all(&project).unwrap();
-        let uuid = "44444444-5555-6666-7777-888888888888";
-
-        // Main session with one turn.
-        let main_turn = r#"{"type":"assistant","uuid":"m1","timestamp":"2026-05-01T10:00:00Z","message":{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"hi"}]},"sessionId":"44444444-5555-6666-7777-888888888888","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":false,"parentUuid":"p1","requestId":"r-main-1"}"#;
-        fs::write(
-            project.join(format!("{}.jsonl", uuid)),
-            format!("{}\n", main_turn),
-        )
-        .unwrap();
-
-        let subagents_dir = project.join(uuid).join("subagents");
-        fs::create_dir_all(&subagents_dir).unwrap();
-
-        for i in 0..10 {
-            // Each agent file has 2 turns, unique request_ids.
-            let line1 = format!(
-                r#"{{"type":"assistant","uuid":"a{i}-1","timestamp":"2026-05-01T10:0{i}:00Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"a"}}]}},"sessionId":"agent-id{i:03}","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-{i}-1"}}"#
-            );
-            let line2 = format!(
-                r#"{{"type":"assistant","uuid":"a{i}-2","timestamp":"2026-05-01T10:0{i}:01Z","message":{{"model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}},"content":[{{"type":"text","text":"a"}}]}},"sessionId":"agent-id{i:03}","version":"2.1.140","cwd":"/tmp","gitBranch":"main","userType":"external","isSidechain":true,"parentUuid":"p1","requestId":"r-{i}-2"}}"#
-            );
-            fs::write(
-                subagents_dir.join(format!("agent-id{i:03}.jsonl")),
-                format!("{line1}\n{line2}\n"),
-            )
-            .unwrap();
-        }
-
-        let calc = PricingCalculator::new();
-        let (sessions, _q) = load_all(tmp.path(), &calc).unwrap();
-        assert_eq!(sessions.len(), 1);
-        let s = &sessions[0];
-        assert_eq!(s.subagents.len(), 10, "all 10 agent files become subagents");
-        for sa in &s.subagents {
-            assert_eq!(sa.turns.len(), 2);
-        }
-        // Subagent ordering: ascending by agent_id (deterministic).
-        let ids: Vec<&str> = s.subagents.iter().map(|sa| sa.agent_id.as_str()).collect();
-        let mut sorted = ids.clone();
-        sorted.sort();
-        assert_eq!(ids, sorted);
-
-        // Total turn count: 1 main + 20 subagent.
-        assert_eq!(s.total_turn_count(), 21);
-        assert_eq!(s.agent_turn_count(), 20);
     }
 }

@@ -1,6 +1,10 @@
 //! File discovery for Claude Code session JSONL files.
 //!
 //! Scans `~/.claude/projects/` for session files and resolves agent parentage.
+//!
+//! This module is `pub(crate)` — the public surface is the [`crate::loader`]
+//! module which wraps these primitives behind [`crate::Session`] /
+//! [`crate::Agent`] / [`crate::Workflow`].
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,7 +16,7 @@ use crate::types::WorkflowRunSnapshot;
 
 /// Metadata about a session JSONL file on disk.
 #[derive(Debug, Clone)]
-pub struct SessionFile {
+pub(crate) struct SessionFile {
     /// The session identifier (UUID for main sessions, `agent-<id>` for agents).
     pub session_id: String,
     /// The project directory name (e.g., `-Users-loki-myproject`).
@@ -32,7 +36,7 @@ pub struct SessionFile {
 /// Metadata about a sub-agent, loaded from `.meta.json` sidecar files.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentMeta {
+pub(crate) struct AgentMeta {
     /// The type of agent (e.g., "code", "research").
     pub agent_type: Option<String>,
     /// A human-readable description of the agent's task.
@@ -43,12 +47,14 @@ pub struct AgentMeta {
 
 /// A single agent transcript belonging to a workflow run.
 ///
-/// The transcript itself (`path`) is a plain session JSONL file and should be
-/// parsed via the regular [`crate::parser::SessionReader`] / [`crate::types::Entry`]
-/// path. `agent_id` carries no `agent-` prefix (it is stripped from the file stem,
-/// matching the rest of the scanner).
+/// Note: `path` and `meta_path` are populated by `build_workflow_run` for
+/// completeness and historical compatibility, but the loader never reads them
+/// — workflow agent files reach the loader through the unified
+/// `SessionFile` channel (`is_agent=true` with `workflow_run_id=Some`), so the
+/// agent file paths are already in the main scan output.
 #[derive(Debug, Clone)]
-pub struct WorkflowAgentFile {
+#[allow(dead_code)]
+pub(crate) struct WorkflowAgentFile {
     /// The agent id, with the `agent-` prefix stripped (e.g. `a4df3aac3c00e0e09`).
     pub agent_id: String,
     /// Full path to the agent's `.jsonl` transcript.
@@ -58,13 +64,8 @@ pub struct WorkflowAgentFile {
 }
 
 /// A discovered workflow run, located under a session directory.
-///
-/// Combines the run snapshot (`workflows/wf_<runId>.json`), script source files
-/// (`workflows/scripts/*-wf_<runId>.js`), the per-agent transcripts
-/// (`subagents/workflows/wf_<runId>/agent-*.jsonl`) and the journal
-/// (`subagents/workflows/wf_<runId>/journal.jsonl`).
 #[derive(Debug, Clone)]
-pub struct WorkflowRun {
+pub(crate) struct WorkflowRun {
     /// The workflow run id, e.g. `wf_7c0e6255-566`.
     pub run_id: String,
     /// The owning session UUID.
@@ -77,7 +78,12 @@ pub struct WorkflowRun {
     pub snapshot_path: Option<PathBuf>,
     /// Paths to the workflow's script source files (`workflows/scripts/*-wf_<runId>.js`).
     pub script_paths: Vec<PathBuf>,
-    /// The agent transcripts produced by this run.
+    /// The agent transcripts produced by this run. The loader does not read
+    /// this — workflow agent files come back through the main scan via
+    /// `SessionFile.workflow_run_id` — but `build_workflow_run` still
+    /// populates the list so the run discovery oracle (snapshot OR agents
+    /// present) can short-circuit empty runs to `None`.
+    #[allow(dead_code)]
     pub agent_files: Vec<WorkflowAgentFile>,
     /// Path to the run's `journal.jsonl`, if present.
     pub journal_path: Option<PathBuf>,
@@ -98,11 +104,12 @@ fn is_uuid(s: &str) -> bool {
 
 /// Scan `~/.claude/projects/` for all session JSONL files and return metadata.
 ///
-/// Finds three kinds of files:
+/// Finds four kinds of files:
 /// 1. Main sessions: `<project>/<uuid>.jsonl`
 /// 2. Legacy agents: `<project>/agent-<id>.jsonl`
 /// 3. New-style agents: `<project>/<uuid>/subagents/agent-<id>.jsonl`
-pub fn scan_sessions(claude_home: &Path) -> io::Result<Vec<SessionFile>> {
+/// 4. Workflow agents: `<project>/<uuid>/subagents/workflows/wf_<runId>/agent-<id>.jsonl`
+pub(crate) fn scan_sessions(claude_home: &Path) -> io::Result<Vec<SessionFile>> {
     let projects_dir = claude_home.join("projects");
     if !projects_dir.is_dir() {
         return Ok(Vec::new());
@@ -267,7 +274,7 @@ fn collect_workflow_agent_files(
 
 /// For legacy agent files that have no `parent_session_id` yet, read the first
 /// JSON line and extract the `sessionId` field to use as `parent_session_id`.
-pub fn resolve_agent_parents(files: &mut [SessionFile]) -> io::Result<()> {
+pub(crate) fn resolve_agent_parents(files: &mut [SessionFile]) -> io::Result<()> {
     for file in files.iter_mut() {
         if !file.is_agent || file.parent_session_id.is_some() {
             continue;
@@ -290,8 +297,8 @@ pub fn resolve_agent_parents(files: &mut [SessionFile]) -> io::Result<()> {
 
 /// Load agent metadata from `.meta.json` sidecar files for a given session.
 ///
-/// Returns a map of agent ID (the full `agent-<id>` stem) to `AgentMeta`.
-pub fn load_agent_meta(session_id: &str, claude_home: &Path) -> HashMap<String, AgentMeta> {
+/// Returns a map of agent id (the `agent-` prefix stripped) to `AgentMeta`.
+pub(crate) fn load_agent_meta(session_id: &str, claude_home: &Path) -> HashMap<String, AgentMeta> {
     let mut result = HashMap::new();
     let projects_dir = claude_home.join("projects");
     if !projects_dir.exists() {
@@ -461,11 +468,7 @@ fn discover_run_ids(session_dir: &Path) -> Vec<String> {
 }
 
 /// Discover all workflow runs belonging to a single session.
-///
-/// Searches every project directory for `<session_id>/` and resolves the
-/// workflow snapshots (`workflows/wf_*.json`), script sources, agent transcripts
-/// and journals beneath it. Returns one [`WorkflowRun`] per discovered run id.
-pub fn scan_session_workflows(
+pub(crate) fn scan_session_workflows(
     session_id: &str,
     claude_home: &Path,
 ) -> io::Result<Vec<WorkflowRun>> {
@@ -499,10 +502,8 @@ pub fn scan_session_workflows(
 }
 
 /// Discover all workflow runs across every session in a Claude home directory.
-///
-/// Scans `<claude_home>/projects/<project>/<uuid>/` directories, resolving each
-/// session's workflow runs the same way as [`scan_session_workflows`].
-pub fn scan_workflows(claude_home: &Path) -> io::Result<Vec<WorkflowRun>> {
+#[allow(dead_code)]
+pub(crate) fn scan_workflows(claude_home: &Path) -> io::Result<Vec<WorkflowRun>> {
     let projects_dir = claude_home.join("projects");
     if !projects_dir.is_dir() {
         return Ok(Vec::new());
@@ -541,11 +542,7 @@ pub fn scan_workflows(claude_home: &Path) -> io::Result<Vec<WorkflowRun>> {
 
 /// Load agent metadata for a session's workflow agents from their `.meta.json`
 /// sidecars under `<session_id>/subagents/workflows/wf_*/agent-*.meta.json`.
-///
-/// Returns a map of agent id (the `agent-` prefix stripped) to [`AgentMeta`].
-/// This complements [`load_agent_meta`], which only reads the non-workflow
-/// `subagents/agent-*.meta.json` sidecars.
-pub fn load_workflow_agent_meta(
+pub(crate) fn load_workflow_agent_meta(
     session_id: &str,
     claude_home: &Path,
 ) -> HashMap<String, AgentMeta> {

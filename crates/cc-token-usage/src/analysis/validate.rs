@@ -3,11 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::data::models::{GlobalDataQuality, SessionData, SessionFile};
-use crate::data::scanner::{resolve_agent_parents, scan_claude_home};
+use crate::data::models::{GlobalDataQuality, SessionData};
 use crate::pricing::calculator::PricingCalculator;
+use cc_session_jsonl::{load_all_sessions, Session};
 
 // ─── Result Types ──────────────────────────────────────────────────────────
 
@@ -288,6 +288,41 @@ fn collect_valid_request_ids(path: &Path, skip_sidechain: bool) -> Result<HashSe
 
 // ─── Validation Engine ─────────────────────────────────────────────────────
 
+/// Lightweight file descriptor used internally by `validate_all`. Built from
+/// `cc_session_jsonl::Session`/`Agent` rather than re-importing the (private)
+/// scanner types — this keeps `validate.rs` independent of the parsing
+/// pipeline's typed entries and lets the raw `serde_json::Value` counter walk
+/// the same files unchanged.
+struct MainFileInfo<'a> {
+    session_id: &'a str,
+    project: Option<&'a str>,
+    path: PathBuf,
+}
+
+struct AgentFileInfo<'a> {
+    parent_session_id: &'a str,
+    path: &'a Path,
+}
+
+/// Reconstruct the main session JSONL path for a `Session`.
+///
+/// The new public API only carries `Session.agents[i].path` (per-agent paths)
+/// and `Session.id` / `Session.project`; the main `<sid>.jsonl` path is
+/// implicit in the scanner's file-layout contract. Re-derive it here so the
+/// raw `serde_json::Value` re-count can walk the same file the parsing
+/// pipeline did.
+///
+/// Returns the main session file path if it exists on disk.
+/// Orphan-only sessions (agents without a main file) have a synthetic
+/// `main_path` that points nowhere — return `None` for those.
+fn derive_main_path(session: &Session) -> Option<PathBuf> {
+    if session.main_path.is_file() {
+        Some(session.main_path.clone())
+    } else {
+        None
+    }
+}
+
 /// Run full validation across all sessions.
 pub fn validate_all(
     sessions: &[&SessionData],
@@ -295,12 +330,28 @@ pub fn validate_all(
     claude_home: &Path,
     calc: &PricingCalculator,
 ) -> Result<ValidationReport> {
-    // Re-scan files independently for structure validation
-    let mut files = scan_claude_home(claude_home)?;
-    resolve_agent_parents(&mut files)?;
+    // Re-load the on-disk layout independently of the analysis pipeline so the
+    // raw JSON counter has a fresh view of every file. cc-session-jsonl already
+    // groups by session id; we just need the file paths.
+    let raw_sessions = load_all_sessions(claude_home)?;
 
-    let (main_files, agent_files): (Vec<&SessionFile>, Vec<&SessionFile>) =
-        files.iter().partition(|f| !f.is_agent);
+    let mut main_files: Vec<MainFileInfo<'_>> = Vec::new();
+    let mut agent_files: Vec<AgentFileInfo<'_>> = Vec::new();
+    for s in &raw_sessions {
+        if let Some(path) = derive_main_path(s) {
+            main_files.push(MainFileInfo {
+                session_id: s.id.as_str(),
+                project: s.project.as_deref(),
+                path,
+            });
+        }
+        for a in &s.agents {
+            agent_files.push(AgentFileInfo {
+                parent_session_id: a.parent_session_id.as_str(),
+                path: a.path.as_path(),
+            });
+        }
+    }
 
     let mut structure_checks = Vec::new();
     let mut session_results = Vec::new();
@@ -322,14 +373,10 @@ pub fn validate_all(
     ));
 
     // Check 3: Orphan agent count (agents without a matching main session file)
-    let main_session_ids: HashSet<&str> =
-        main_files.iter().map(|f| f.session_id.as_str()).collect();
+    let main_session_ids: HashSet<&str> = main_files.iter().map(|f| f.session_id).collect();
     let orphan_count = agent_files
         .iter()
-        .filter(|f| {
-            let parent = f.parent_session_id.as_deref().unwrap_or(&f.session_id);
-            !main_session_ids.contains(parent)
-        })
+        .filter(|f| !main_session_ids.contains(f.parent_session_id))
         .count();
     structure_checks.push(Check::pass(
         format!("orphan_agents (no main session file): {}", orphan_count),
@@ -337,7 +384,7 @@ pub fn validate_all(
     ));
 
     // Check 4: Report duplicate session IDs in main files (pipeline deduplicates by HashMap)
-    let unique_main_ids: HashSet<&str> = main_files.iter().map(|f| f.session_id.as_str()).collect();
+    let unique_main_ids: HashSet<&str> = main_files.iter().map(|f| f.session_id).collect();
     let dup_count = main_files.len() - unique_main_ids.len();
     structure_checks.push(Check::pass(
         format!(
@@ -352,14 +399,12 @@ pub fn validate_all(
     // Check 5: Cross-file dedup — agent turns in main session should not be double-counted
     let mut cross_file_overlap = 0usize;
     for agent in &agent_files {
-        let parent_id = agent
-            .parent_session_id
-            .as_deref()
-            .unwrap_or(&agent.session_id);
-        let parent_file = main_files.iter().find(|f| f.session_id == parent_id);
+        let parent_file = main_files
+            .iter()
+            .find(|f| f.session_id == agent.parent_session_id);
         if let Some(pf) = parent_file {
             let parent_rids = collect_valid_request_ids(&pf.path, true).unwrap_or_default();
-            let agent_rids = collect_valid_request_ids(&agent.path, false).unwrap_or_default();
+            let agent_rids = collect_valid_request_ids(agent.path, false).unwrap_or_default();
             cross_file_overlap += parent_rids.intersection(&agent_rids).count();
         }
     }
@@ -373,18 +418,24 @@ pub fn validate_all(
 
     // ── Per-Session Validation ──────────────────────────────────────────
 
-    // Build lookup: session_id -> Vec<agent SessionFile>
-    let mut agents_by_parent: HashMap<&str, Vec<&SessionFile>> = HashMap::new();
+    // Build lookup: session_id -> Vec<agent file info>
+    let mut agents_by_parent: HashMap<&str, Vec<&AgentFileInfo<'_>>> = HashMap::new();
     for af in &agent_files {
-        let parent_id = af.parent_session_id.as_deref().unwrap_or(&af.session_id);
-        agents_by_parent.entry(parent_id).or_default().push(af);
+        agents_by_parent
+            .entry(af.parent_session_id)
+            .or_default()
+            .push(af);
     }
 
-    // Build lookup: session_id -> main SessionFile
-    let main_file_map: HashMap<&str, &SessionFile> = main_files
+    // Build lookup: session_id -> main file info
+    let main_file_map: HashMap<&str, &MainFileInfo<'_>> = main_files
         .iter()
-        .map(|f| (f.session_id.as_str(), *f))
+        .map(|f| (f.session_id, f))
         .collect();
+
+    // session_id -> &Session, used to walk workflow runs without re-scanning.
+    let raw_by_id: HashMap<&str, &Session> =
+        raw_sessions.iter().map(|s| (s.id.as_str(), s)).collect();
 
     for session in sessions {
         let mut token_checks = Vec::new();
@@ -473,15 +524,15 @@ pub fn validate_all(
                 let mut raw_agent_output: u64 = 0;
 
                 for af in afs {
-                    let raw = count_raw_tokens(&af.path, false).unwrap_or_default();
-                    let file_rids = collect_valid_request_ids(&af.path, false).unwrap_or_default();
+                    let raw = count_raw_tokens(af.path, false).unwrap_or_default();
+                    let file_rids = collect_valid_request_ids(af.path, false).unwrap_or_default();
                     let file_overlap = file_rids.intersection(&main_rids).count();
                     let unique_turns = raw.turn_count.saturating_sub(file_overlap);
                     expected_unique_agent_turns += unique_turns;
 
                     // Precise: count output tokens only for non-overlapping requestIds
                     let (per_rid, no_rid_output) =
-                        count_tokens_by_request_id(&af.path, false).unwrap_or_default();
+                        count_tokens_by_request_id(af.path, false).unwrap_or_default();
                     for (rid, output) in &per_rid {
                         if !main_rids.contains(rid) {
                             raw_agent_output += output;
@@ -578,10 +629,11 @@ pub fn validate_all(
         // input+output+cache_read), so asserting equality would always fail. We
         // report both so a human can eyeball drift without flagging a false
         // failure.
-        let workflow_runs =
-            cc_session_jsonl::scanner::scan_session_workflows(&session.session_id, claude_home)
-                .unwrap_or_default();
-        for run in &workflow_runs {
+        let workflow_runs: &[cc_session_jsonl::Workflow] = raw_by_id
+            .get(session.session_id.as_str())
+            .map(|s| s.workflows.as_slice())
+            .unwrap_or(&[]);
+        for run in workflow_runs {
             // Parsed totals for this run, summed across matching subagents.
             let mut parsed_input: u64 = 0;
             let mut parsed_output: u64 = 0;
@@ -690,7 +742,7 @@ pub fn validate_all(
         if let Some(mf) = main_file_map.get(session.session_id.as_str()) {
             token_checks.push(Check::compare(
                 "project_association",
-                mf.project.as_deref().unwrap_or("(none)"),
+                mf.project.unwrap_or("(none)"),
                 session.project.as_deref().unwrap_or("(none)"),
             ));
         }

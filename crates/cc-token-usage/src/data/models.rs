@@ -1,14 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// ─── Re-exports from cc-session-jsonl ───────────────────────────────────────
-
-/// Re-export the session file metadata type from cc-session-jsonl.
-///
-/// Note: field name is `path` (not `file_path`). All call-sites have been
-/// updated accordingly.
-pub use cc_session_jsonl::scanner::SessionFile;
-
 // ─── Local Token/Usage Types (kept to avoid changing analysis/pricing/output) ─
 
 /// Token usage statistics for a single API call.

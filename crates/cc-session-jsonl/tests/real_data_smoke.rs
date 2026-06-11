@@ -25,7 +25,7 @@ fn find_all_jsonl_files() -> Vec<PathBuf> {
     let home = std::env::var("HOME")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| dirs_from_env());
+        .or_else(dirs_from_env);
 
     let Some(home) = home else {
         return Vec::new();

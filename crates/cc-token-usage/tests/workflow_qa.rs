@@ -108,6 +108,7 @@ fn make_claude_home() -> TempDir {
 }
 
 /// Write a valid assistant turn JSONL line for a given session.
+#[allow(clippy::too_many_arguments)]
 fn assistant_line(
     uuid: &str,
     ts: &str,
@@ -1623,7 +1624,7 @@ fn json_output_workflow_section_structured_assertions() {
 /// The run is still discoverable via the agent files.
 #[test]
 fn malformed_snapshot_json_yields_none_snapshot_no_panic() {
-    use cc_session_jsonl::scanner::scan_session_workflows;
+    use cc_session_jsonl::{load_all_sessions, load_workflows_for_session};
 
     let tmp = make_claude_home();
     let session_uuid = "aaaa1111-bbbb-cccc-dddd-eeeeffff0001";
@@ -1655,7 +1656,7 @@ fn malformed_snapshot_json_yields_none_snapshot_no_panic() {
     .unwrap();
 
     // Must not panic
-    let runs = scan_session_workflows(session_uuid, tmp.path()).unwrap();
+    let runs = load_workflows_for_session(tmp.path(), session_uuid);
     assert_eq!(
         runs.len(),
         1,
@@ -1673,14 +1674,27 @@ fn malformed_snapshot_json_yields_none_snapshot_no_panic() {
         runs[0].snapshot_path.is_some(),
         "snapshot_path must be Some (file exists, even if unparseable)"
     );
-    assert_eq!(runs[0].agent_files.len(), 1);
+    // Workflow agent files are surfaced through `Session.agents` (with
+    // `workflow_run_id` set) rather than on the `Workflow` struct itself;
+    // verify the same data via the public session-loading surface.
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    let s = sessions
+        .iter()
+        .find(|s| s.id == session_uuid)
+        .expect("session must be present");
+    let wf_agents = s
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.as_deref() == Some("wf_badsnap"))
+        .count();
+    assert_eq!(wf_agents, 1);
 }
 
-/// Malformed `.meta.json` sidecar must not cause load_workflow_agent_meta to
+/// Malformed `.meta.json` sidecar must not cause `load_agent_metadata` to
 /// panic — it is silently skipped.
 #[test]
 fn malformed_meta_json_is_skipped_no_panic() {
-    use cc_session_jsonl::scanner::load_workflow_agent_meta;
+    use cc_session_jsonl::load_agent_metadata;
 
     let tmp = make_claude_home();
     let session_uuid = "aaaa2222-bbbb-cccc-dddd-eeeeffff0002";
@@ -1718,12 +1732,13 @@ fn malformed_meta_json_is_skipped_no_panic() {
     )
     .unwrap();
 
-    // Must not panic
-    let meta_map = load_workflow_agent_meta(session_uuid, tmp.path());
+    // Must not panic — `load_agent_metadata` merges ordinary and workflow
+    // sidecars under one map (workflow `wf_*` sidecars contribute here).
+    let meta_map = load_agent_metadata(tmp.path(), session_uuid);
 
     // broken agent's meta is skipped → not in the map
     assert!(
-        meta_map.get("broken").is_none(),
+        !meta_map.contains_key("broken"),
         "malformed meta must be skipped — not in map"
     );
 
@@ -1912,12 +1927,13 @@ fn text_output_no_workflow_section_when_no_workflows() {
 
 // ─── P1: deepen scan_workflows_global ────────────────────────────────────────
 
-/// Extends the existing `scan_workflows_global_finds_all_across_projects` test
-/// with deeper assertions: snapshot presence, agent_files count, and project
-/// attribution for each discovered run.
+/// Extends the existing `load_all_sessions_finds_workflows_across_projects`
+/// test with deeper assertions: snapshot presence, workflow-agent count
+/// (derived from `Session.agents.workflow_run_id`), and project attribution
+/// for each discovered run.
 #[test]
 fn scan_workflows_global_deep_assertions() {
-    use cc_session_jsonl::scanner::scan_workflows;
+    use cc_session_jsonl::load_all_sessions;
 
     let tmp = make_claude_home();
     let uuid_a = "dddd1111-aaaa-bbbb-cccc-000000000010";
@@ -1964,24 +1980,36 @@ fn scan_workflows_global_deep_assertions() {
         fs::write(wf_run.join("agent-db1.jsonl"), r#"{"type":"user"}"#).unwrap();
     }
 
-    let runs = scan_workflows(tmp.path()).unwrap();
-    assert_eq!(runs.len(), 2);
+    // The scanner-level `scan_workflows` was internalised; the public oracle is
+    // `Session.workflows`, which is populated for every session that has
+    // discoverable runs. Pull both sessions and walk their workflows.
+    let sessions = load_all_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 2, "two main sessions, one workflow each");
 
-    let run_a = runs
+    let session_a = sessions
         .iter()
-        .find(|r| r.run_id == "wf_deep_a")
-        .expect("wf_deep_a must be found");
-    let run_b = runs
+        .find(|s| s.id == uuid_a)
+        .expect("session uuid_a must be found");
+    let session_b = sessions
         .iter()
-        .find(|r| r.run_id == "wf_deep_b")
-        .expect("wf_deep_b must be found");
+        .find(|s| s.id == uuid_b)
+        .expect("session uuid_b must be found");
 
-    // run_a: 2 agents, snapshot Some, project = "-Users-qa-deep-x"
-    assert_eq!(
-        run_a.agent_files.len(),
-        2,
-        "wf_deep_a must have 2 agent files"
-    );
+    assert_eq!(session_a.workflows.len(), 1, "session_a has 1 workflow run");
+    assert_eq!(session_b.workflows.len(), 1, "session_b has 1 workflow run");
+    let run_a = &session_a.workflows[0];
+    let run_b = &session_b.workflows[0];
+    assert_eq!(run_a.run_id, "wf_deep_a");
+    assert_eq!(run_b.run_id, "wf_deep_b");
+
+    // run_a: 2 workflow agents (counted via Session.agents.workflow_run_id),
+    // snapshot Some, project = "-Users-qa-deep-x".
+    let run_a_agents = session_a
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.as_deref() == Some("wf_deep_a"))
+        .count();
+    assert_eq!(run_a_agents, 2, "wf_deep_a must have 2 agent files");
     assert!(
         run_a.snapshot.is_some(),
         "wf_deep_a must have a parsed snapshot"
@@ -1996,12 +2024,13 @@ fn scan_workflows_global_deep_assertions() {
         Some("deep-a")
     );
 
-    // run_b: 1 agent, snapshot Some, project = "-Users-qa-deep-y"
-    assert_eq!(
-        run_b.agent_files.len(),
-        1,
-        "wf_deep_b must have 1 agent file"
-    );
+    // run_b: 1 workflow agent, snapshot Some, project = "-Users-qa-deep-y".
+    let run_b_agents = session_b
+        .agents
+        .iter()
+        .filter(|a| a.workflow_run_id.as_deref() == Some("wf_deep_b"))
+        .count();
+    assert_eq!(run_b_agents, 1, "wf_deep_b must have 1 agent file");
     assert!(
         run_b.snapshot.is_some(),
         "wf_deep_b must have a parsed snapshot"

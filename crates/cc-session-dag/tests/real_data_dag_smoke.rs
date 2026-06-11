@@ -2,7 +2,8 @@
 //!
 //! Three independent oracles, all must PASS on the local ~/.claude/projects:
 //!
-//!   1. **Scanner boundary**: scanner returns paths strictly under projects/.
+//!   1. **Scanner boundary**: every file path the loader exposes lies strictly
+//!      under `projects/`.
 //!   2. **Leak detection** (no missing DagNode impls): every entry whose raw
 //!      JSON carries `uuid` (+ `parentUuid` or is a `summary`) must be
 //!      classified into a variant that implements `DagNode`. Both main-chain
@@ -20,12 +21,12 @@
 //! In CI: silently skipped (no data). With `REQUIRE_REAL_DATA=1`: panic if no
 //! data found (mirrors scripts/run-real-e2e.sh).
 
+use cc_session_jsonl::load_all_sessions;
 use cc_session_jsonl::parser::SessionReader;
-use cc_session_jsonl::scanner;
 use cc_session_jsonl::types::{DagNode, Entry};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn claude_home() -> PathBuf {
     std::env::var("CLAUDE_HOME")
@@ -79,6 +80,92 @@ struct Node {
     parent: Option<String>,
 }
 
+/// Walk one JSONL file: typed pass to collect DAG nodes by session id, raw
+/// pass to detect leaks and unknown types.
+#[allow(clippy::too_many_arguments)]
+fn process_file(
+    path: &Path,
+    struct_drift_total: &mut usize,
+    io_err_total: &mut usize,
+    nodes_by_session: &mut HashMap<String, Vec<Node>>,
+    leaks_main: &mut HashMap<&'static str, usize>,
+    leaks_side: &mut HashMap<&'static str, usize>,
+    unknown_types: &mut HashMap<String, usize>,
+    total_entries_typed: &mut usize,
+    total_dag_nodes: &mut usize,
+) {
+    // ── typed pass ──
+    let reader = SessionReader::open(path).expect("open failed");
+    let mut iter = reader.lenient();
+    for entry in iter.by_ref() {
+        *total_entries_typed += 1;
+        if let Some(d) = as_dag(&entry) {
+            *total_dag_nodes += 1;
+            if let (Some(uuid), Some(sid)) = (d.uuid(), d.session_id()) {
+                nodes_by_session
+                    .entry(sid.to_string())
+                    .or_default()
+                    .push(Node {
+                        uuid: uuid.to_string(),
+                        parent: d.parent_uuid().map(|s| s.to_string()),
+                    });
+            }
+        }
+    }
+    *struct_drift_total += iter.struct_drift_count();
+    *io_err_total += iter.errors_skipped();
+
+    // ── raw pass: oracle 2 ──
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        let has_uuid = v
+            .get("uuid")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| !s.is_empty());
+        let has_parent = v
+            .get("parentUuid")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| !s.is_empty());
+        if !has_uuid {
+            continue;
+        }
+        if DECLARED_DAG_TYPES.contains(&ty) {
+            continue;
+        }
+        if DECLARED_METADATA_TYPES.contains(&ty) {
+            if has_parent || ty == "summary" {
+                let key: &'static str = DECLARED_METADATA_TYPES
+                    .iter()
+                    .copied()
+                    .find(|t| *t == ty)
+                    .unwrap_or("?");
+                let is_side = v
+                    .get("isSidechain")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false);
+                if is_side {
+                    *leaks_side.entry(key).or_insert(0) += 1;
+                } else {
+                    *leaks_main.entry(key).or_insert(0) += 1;
+                }
+            }
+        } else if !ty.starts_with("__") {
+            // 既不在 DAG types 也不在 metadata types,且不是内部 sentinel
+            *unknown_types.entry(ty.to_string()).or_insert(0) += 1;
+        }
+    }
+}
+
 #[test]
 #[ignore]
 fn real_data_dag_smoke() {
@@ -102,25 +189,45 @@ fn real_data_dag_smoke() {
         return;
     }
 
-    let files = scanner::scan_sessions(&home).expect("scan_sessions failed");
-    if files.is_empty() {
-        if require {
-            panic!("REQUIRE_REAL_DATA=1 but scanner found 0 session files");
+    let sessions = load_all_sessions(&home).expect("load_all_sessions failed");
+
+    // Enumerate every JSONL file the loader exposes (main + agents). Workflow
+    // agent files reach us through `Session.agents[*].path` (the scanner
+    // records them with `workflow_run_id = Some(...)`).
+    let mut all_paths: Vec<PathBuf> = Vec::new();
+    for s in &sessions {
+        if let Some(project) = &s.project {
+            let main_path = home
+                .join("projects")
+                .join(project)
+                .join(format!("{}.jsonl", s.id));
+            if main_path.is_file() {
+                all_paths.push(main_path);
+            }
         }
-        eprintln!("[real_data_dag_smoke] scanner found 0 files — skipping");
+        for a in &s.agents {
+            all_paths.push(a.path.clone());
+        }
+    }
+
+    if all_paths.is_empty() {
+        if require {
+            panic!("REQUIRE_REAL_DATA=1 but loader found 0 session files");
+        }
+        eprintln!("[real_data_dag_smoke] loader found 0 files — skipping");
         return;
     }
 
     // ── Oracle 1: scanner boundary ──
-    let off_boundary: Vec<_> = files
+    let off_boundary: Vec<_> = all_paths
         .iter()
-        .filter(|sf| !sf.path.starts_with(&projects_root))
-        .map(|sf| sf.path.display().to_string())
+        .filter(|p| !p.starts_with(&projects_root))
+        .map(|p| p.display().to_string())
         .collect();
     assert_eq!(
         off_boundary.len(),
         0,
-        "scanner returned paths outside ~/.claude/projects/: {:?}",
+        "loader returned paths outside ~/.claude/projects/: {:?}",
         off_boundary
     );
 
@@ -134,77 +241,18 @@ fn real_data_dag_smoke() {
     let mut total_entries_typed = 0usize;
     let mut total_dag_nodes = 0usize;
 
-    for sf in &files {
-        // ── typed pass ──
-        let reader = SessionReader::open(&sf.path).expect("open failed");
-        let mut iter = reader.lenient();
-        for entry in iter.by_ref() {
-            total_entries_typed += 1;
-            if let Some(d) = as_dag(&entry) {
-                total_dag_nodes += 1;
-                if let (Some(uuid), Some(sid)) = (d.uuid(), d.session_id()) {
-                    nodes_by_session
-                        .entry(sid.to_string())
-                        .or_default()
-                        .push(Node {
-                            uuid: uuid.to_string(),
-                            parent: d.parent_uuid().map(|s| s.to_string()),
-                        });
-                }
-            }
-        }
-        struct_drift_total += iter.struct_drift_count();
-        io_err_total += iter.errors_skipped();
-
-        // ── raw pass: oracle 2 ──
-        let Ok(text) = std::fs::read_to_string(&sf.path) else {
-            continue;
-        };
-        for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-            let has_uuid = v
-                .get("uuid")
-                .and_then(|x| x.as_str())
-                .is_some_and(|s| !s.is_empty());
-            let has_parent = v
-                .get("parentUuid")
-                .and_then(|x| x.as_str())
-                .is_some_and(|s| !s.is_empty());
-            if !has_uuid {
-                continue;
-            }
-            if DECLARED_DAG_TYPES.contains(&ty) {
-                continue;
-            }
-            if DECLARED_METADATA_TYPES.contains(&ty) {
-                if has_parent || ty == "summary" {
-                    let key: &'static str = DECLARED_METADATA_TYPES
-                        .iter()
-                        .copied()
-                        .find(|t| *t == ty)
-                        .unwrap_or("?");
-                    let is_side = v
-                        .get("isSidechain")
-                        .and_then(|x| x.as_bool())
-                        .unwrap_or(false);
-                    if is_side {
-                        *leaks_side.entry(key).or_insert(0) += 1;
-                    } else {
-                        *leaks_main.entry(key).or_insert(0) += 1;
-                    }
-                }
-            } else if !ty.starts_with("__") {
-                // 既不在 DAG types 也不在 metadata types,且不是内部 sentinel
-                *unknown_types.entry(ty.to_string()).or_insert(0) += 1;
-            }
-        }
+    for path in &all_paths {
+        process_file(
+            path,
+            &mut struct_drift_total,
+            &mut io_err_total,
+            &mut nodes_by_session,
+            &mut leaks_main,
+            &mut leaks_side,
+            &mut unknown_types,
+            &mut total_entries_typed,
+            &mut total_dag_nodes,
+        );
     }
 
     // ── Assertions ──
@@ -283,7 +331,7 @@ fn real_data_dag_smoke() {
 
     eprintln!(
         "[real_data_dag_smoke] PASS  files={}  entries={}  dag_nodes={}  sessions={}  roots={}",
-        files.len(),
+        all_paths.len(),
         total_entries_typed,
         total_dag_nodes,
         nodes_by_session.len(),

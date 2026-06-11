@@ -1,22 +1,19 @@
 pub mod parser;
 pub mod types;
 
-#[cfg(feature = "scanner")]
-pub mod scanner;
+// Loader is the only public entry point for session aggregation.
+// Scanner is an implementation detail — held private so the loader owns the
+// file-layout contract.
+mod loader;
+pub(crate) mod scanner;
 
-#[cfg(feature = "scanner")]
-pub mod session;
-
-// Re-exports
+// Re-exports — parser & types unchanged.
 pub use parser::{parse_entry, LenientReader, ParseError, SessionReader};
 pub use types::Entry;
 pub use types::{WorkflowJournalEntry, WorkflowPhase, WorkflowProgress, WorkflowRunSnapshot};
 
-#[cfg(feature = "scanner")]
-pub use scanner::{
-    load_workflow_agent_meta, scan_session_workflows, scan_sessions, scan_workflows, AgentMeta,
-    SessionFile, WorkflowAgentFile, WorkflowRun,
+// Loader public surface.
+pub use loader::{
+    load_agent_metadata, load_all_sessions, load_session, load_workflows_for_session, Agent,
+    AgentMetadata, Session, Workflow,
 };
-
-#[cfg(feature = "scanner")]
-pub use session::{load_all_sessions, load_session, AgentFile, RawSession};
